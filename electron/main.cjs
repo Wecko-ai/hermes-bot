@@ -1,0 +1,130 @@
+const { app, BrowserWindow, shell, dialog, safeStorage } = require('electron')
+const { spawn } = require('node:child_process')
+const path = require('node:path')
+const http = require('node:http')
+const { pathToFileURL } = require('node:url')
+const fs = require('node:fs')
+
+const ORIGIN = 'http://127.0.0.1:4330'
+// Réglages facultatifs : variables d’environnement, sinon config.json dans le dossier de données de l’app.
+const config = readConfig()
+const HERMES_ORIGIN = process.env.HERMES_ORIGIN || config.gatewayOrigin || 'http://127.0.0.1:9120'
+const HERMES_BROWSER_ORIGIN = process.env.HERMES_BROWSER_ORIGIN || config.browserOrigin || ''
+const SSH_HOST = process.env.HERMES_SSH_HOST || config.sshHost || ''
+let hermesTunnelProcess
+let mainWindow
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+async function startServer() {
+  process.env.NODE_ENV = 'production'
+  process.env.PORT = '4330'
+  process.env.HERMES_ORIGIN = HERMES_ORIGIN
+  if (HERMES_BROWSER_ORIGIN) process.env.HERMES_BROWSER_ORIGIN = HERMES_BROWSER_ORIGIN
+  configureSessionPersistence()
+  const { listening } = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.mjs')).href)
+  try {
+    await listening
+  } catch (error) {
+    if (error.code === 'EADDRINUSE') throw new Error('Le port 4330 est déjà pris. Quitte l’autre copie de HermesBot, puis relance.')
+    throw error
+  }
+}
+
+function configureSessionPersistence() {
+  if (!safeStorage.isEncryptionAvailable()) return
+  const directory = app.getPath('userData')
+  const store = path.join(directory, 'hermes-sessions.bin')
+  const temporary = `${store}.tmp`
+  fs.mkdirSync(directory, { recursive: true })
+  globalThis.__hermesBotSessionPersistence = {
+    load: () => {
+      try { return safeStorage.decryptString(fs.readFileSync(store)) } catch { return '' }
+    },
+    save: (json) => {
+      fs.writeFileSync(temporary, safeStorage.encryptString(json), { mode: 0o600 })
+      fs.renameSync(temporary, store)
+    },
+  }
+}
+
+function hermesReady() {
+  return new Promise((resolve) => {
+    const request = http.get(`${HERMES_ORIGIN}/api/auth/providers`, { timeout: 1500 }, (response) => {
+      response.resume()
+      resolve(response.statusCode < 500)
+    })
+    request.on('error', () => resolve(false))
+    request.on('timeout', () => { request.destroy(); resolve(false) })
+  })
+}
+
+async function ensureHermes() {
+  if (await hermesReady()) return
+  if (!SSH_HOST) throw new Error(`Hermes ne répond pas sur ${HERMES_ORIGIN}. Lance la gateway, ou renseigne sshHost pour ouvrir un tunnel SSH.`)
+  const port = new URL(HERMES_ORIGIN).port || '9120'
+  const tunnelCwd = app.getPath('userData')
+  fs.mkdirSync(tunnelCwd, { recursive: true })
+  let tunnelError = null
+  hermesTunnelProcess = spawn('/usr/bin/ssh', [
+    '-N', '-L', `${port}:127.0.0.1:${port}`,
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ExitOnForwardFailure=yes',
+    '-o', 'ServerAliveInterval=30', '--', SSH_HOST,
+  ], { cwd: tunnelCwd, stdio: 'ignore' })
+  hermesTunnelProcess.once('error', (error) => { tunnelError = error })
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (tunnelError) throw new Error(`Tunnel SSH ${SSH_HOST}: ${tunnelError.message}`)
+    if (await hermesReady()) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`Hermes est absent. Le tunnel SSH ${SSH_HOST} ne répond pas.`)
+}
+
+async function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 860,
+    minHeight: 600,
+    title: 'HermesBot',
+    backgroundColor: '#e9efec',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 16 },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  })
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  await mainWindow.loadURL(ORIGIN)
+  mainWindow.on('closed', () => { mainWindow = null })
+}
+
+app.whenReady().then(async () => {
+  await ensureHermes()
+  await startServer()
+  await createWindow()
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+}).catch((error) => {
+  console.error(error.message)
+  dialog.showErrorBox('HermesBot', error.message)
+  app.quit()
+})
+
+app.on('window-all-closed', () => app.quit())
+app.on('before-quit', () => {
+  if (hermesTunnelProcess && !hermesTunnelProcess.killed) hermesTunnelProcess.kill('SIGTERM')
+})

@@ -1,0 +1,45 @@
+{
+  "name": "hermes-bot",
+  "productName": "HermesBot",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Application de bureau pour piloter ses bots Hermes Agent.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "NODE_ENV=development node server/index.mjs",
+    "build": "tsc -b --noEmit && vite build",
+    "start": "NODE_ENV=production node server/index.mjs",
+    "desktop": "npm run build && NODE_ENV=production electron .",
+    "pack": "npm run build && electron-builder --dir --publish never --config electron-builder.config.cjs",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e.mjs",
+    "check": "npm run typecheck && npm run test"
+  },
+  "overrides": {
+    "minimatch": "11.0.1"
+  },
+  "dependencies": {
+    "lucide-react": "0.577.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/ws": "8.18.2",
+    "@vitejs/plugin-react": "6.0.3",
+    "electron": "44.9.3",
+    "electron-builder": "26.18.0",
+    "playwright-core": "1.64.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vitest": "4.1.12"
+  },
+  "license": "MIT"
+}

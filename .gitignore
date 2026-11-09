@@ -1,0 +1,19 @@
+# Dépendances (sans barre finale : couvre aussi un lien symbolique)
+node_modules
+
+# Builds
+dist/
+release/
+*.tsbuildinfo
+
+# Tests
+coverage/
+tests/screenshots/
+
+# Secrets et réglages locaux
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
