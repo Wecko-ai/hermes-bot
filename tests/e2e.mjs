@@ -1,7 +1,7 @@
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { WebSocketServer } from 'ws'
@@ -10,6 +10,8 @@ import { chromium } from 'playwright-core'
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Fichier de session de test (cookies factices), dans le dossier temporaire.
 const SESSION_FILE = process.env.HERMESBOT_TEST_SESSION_FILE || path.join(os.tmpdir(), 'hermesbot-e2e-session.json')
+const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
+rmSync(SAVED_LOGIN_FILE, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
 
 // Fichiers que la fausse gateway sert pour les balises MEDIA: de orion.
@@ -22,6 +24,12 @@ const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).
 const mediaRequests = []
 // Statut imposé à /api/auth/me : 503 pour une gateway injoignable, 401 pour une session expirée.
 let forcedAuthStatus = 0
+// Chaque connexion reçoit un cookie numéroté ; expirer les sessions, c’est refuser les numéros passés.
+let cookieCounter = 0
+let expiredBefore = 0
+let loginCalls = 0
+let loginRefused = false
+let logoutCalls = 0
 let sessionResumeCalls = 0
 // Demandes de la gateway vers l’app (coffre, accords) et réponses reçues.
 const clientResponses = new Map()
@@ -65,10 +73,17 @@ function serveMediaFixture(request, response, url, route) {
 const mock = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1:9121')
   response.setHeader('Content-Type', 'application/json')
-  const authenticated = String(request.headers.cookie || '').includes('hermes_session=test')
+  const authenticated = Number(/hermes_session=test-(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || 0) > expiredBefore
   if (url.pathname === '/auth/password-login') {
-    response.setHeader('Set-Cookie', 'hermes_session=test; Path=/; HttpOnly; SameSite=Lax')
+    loginCalls += 1
+    if (loginRefused) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'invalid_login' })) }
+    cookieCounter += 1
+    response.setHeader('Set-Cookie', `hermes_session=test-${cookieCounter}; Path=/; HttpOnly; SameSite=Lax`)
     return response.end(JSON.stringify({ ok: true, next: '/' }))
+  }
+  if (url.pathname === '/auth/logout') {
+    logoutCalls += 1
+    return response.end(JSON.stringify({ ok: true }))
   }
   if (url.pathname === '/api/auth/me') {
     if (forcedAuthStatus) { response.statusCode = forcedAuthStatus; return response.end(JSON.stringify({ error: 'forced' })) }
@@ -447,7 +462,7 @@ try {
   await card.getByRole('button', { name: 'Envoyer' }).click()
   for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeMail; attempt += 1) await delay(50)
   if (promptCalls !== promptsBeforeMail + 1) throw new Error('Un clic sur Envoyer doit lancer un seul tour.')
-  const digest = createHash('sha256').update('autre@exemple.test\n\nRe: Votre demande\nBonjour,\n\nTexte corrigé.').digest('hex')
+  const digest = createHash('sha256').update('Bot <bot@exemple.test>\n77\nautre@exemple.test\n\nRe: Votre demande\nBonjour,\n\nTexte corrigé.').digest('hex')
   for (const expected of ['````hermes-mail-approved', 'Id: m1', 'Draft-Id: 77', 'To: autre@exemple.test', 'Texte corrigé.', `Approved-Digest: ${digest}`]) {
     if (!lastPromptText.includes(expected)) throw new Error(`Mail approuvé sans « ${expected} ».`)
   }
@@ -625,12 +640,33 @@ try {
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
   if (await page.locator('.toast').count()) throw new Error('Le message d’erreur reste affiché après reconnexion.')
 
-  // Session expirée : retour à l’écran de connexion, puis reprise du même bot.
-  forcedAuthStatus = 401
+  // Identifiants gardés côté serveur, jamais dans le navigateur.
+  if (JSON.parse(readFileSync(SAVED_LOGIN_FILE, 'utf8')).username !== 'test') throw new Error('Identifiants non enregistrés.')
+  if (await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage, cookie: document.cookie }).includes('"password"'))) throw new Error('Mot de passe présent dans le navigateur.')
+
+  // Un autre processus local, même avec le bon Origin, n’obtient rien sans cookie de session.
+  const loginsBeforeForged = loginCalls
+  const forged = await fetch('http://127.0.0.1:4332/api/auth/restore', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332' } })
+  await forged.arrayBuffer()
+  if (forged.status !== 404 || forged.headers.get('set-cookie') || loginCalls !== loginsBeforeForged) throw new Error(`Restauration sans cookie acceptée : HTTP ${forged.status}.`)
+
+  // Session Hermes expirée : reconnexion silencieuse avec les identifiants gardés.
+  const loginsBeforeExpiry = loginCalls
+  expiredBefore = cookieCounter
+  await refresh.click()
+  await delay(300)
+  await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
+  if (loginCalls !== loginsBeforeExpiry + 1) throw new Error(`Reconnexion silencieuse : ${loginCalls - loginsBeforeExpiry} connexions au lieu de 1.`)
+  if (await page.locator('.login-card').count()) throw new Error('Écran de connexion affiché malgré les identifiants gardés.')
+
+  // Mot de passe changé : identifiants oubliés, retour à l’écran, puis reprise du même bot.
+  expiredBefore = cookieCounter
+  loginRefused = true
   await refresh.click()
   await page.locator('.login-card').waitFor({ timeout: 5_000 })
-  await page.getByText('Session Hermes expirée').waitFor({ timeout: 2_000 })
-  forcedAuthStatus = 0
+  await page.getByText('Identifiants enregistrés refusés').waitFor({ timeout: 2_000 })
+  if (existsSync(SAVED_LOGIN_FILE)) throw new Error('Des identifiants refusés doivent être oubliés.')
+  loginRefused = false
   await page.getByLabel('Identifiant Hermes').fill('test')
   await page.getByLabel('Mot de passe').fill('test')
   await page.getByRole('button', { name: 'Ouvrir mes bots' }).click()
@@ -669,6 +705,24 @@ try {
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await page.locator('.login-card').count()) throw new Error('La session n’a pas été restaurée après redémarrage.')
 
+  // Lancement avec une session Hermes expirée : pas d’écran de connexion.
+  expiredBefore = cookieCounter
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
+  if (await page.locator('.login-card').count()) throw new Error('Écran de connexion au lancement malgré les identifiants gardés.')
+
+  // Se déconnecter oublie les identifiants ; une connexion sans la case n’enregistre rien.
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Se déconnecter' }).click()
+  await page.locator('.login-card').waitFor({ timeout: 10_000 })
+  if (existsSync(SAVED_LOGIN_FILE) || logoutCalls !== 1) throw new Error('La déconnexion doit oublier les identifiants.')
+  await page.getByLabel('Rester connecté sur ce Mac').uncheck()
+  await page.getByLabel('Identifiant Hermes').fill('test')
+  await page.getByLabel('Mot de passe').fill('test')
+  await page.getByRole('button', { name: 'Ouvrir mes bots' }).click()
+  await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
+  if (existsSync(SAVED_LOGIN_FILE)) throw new Error('Case décochée : rien ne doit être enregistré.')
+
   // Mode démo : plusieurs états à la fois (travail, terminé, attente), captures claire et sombre.
   await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
   await page.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
@@ -688,7 +742,7 @@ try {
   await page.getByRole('button', { name: 'Passer au thème clair' }).click()
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre et accords, carte de mail.')
+  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre et accords, carte de mail, identifiants gardés.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

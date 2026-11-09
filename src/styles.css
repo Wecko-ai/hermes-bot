@@ -595,6 +595,10 @@ body::before {
 .bot-row.status-blocked { background: linear-gradient(100deg, color-mix(in srgb, var(--danger) 11%, transparent), transparent 75%); }
 /* Changement de thème : révélation circulaire, pilotée par App.tsx. */
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+.login-card label.login-remember { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
+.login-card .login-remember input { width: 15px; height: 15px; flex: none; padding: 0; background: none; box-shadow: none; accent-color: var(--accent); }
+.user-menu { display: inline-flex; border-radius: 50%; }
+.user-menu:hover { opacity: .8; }
 /* Carte de mail à valider, dans le fil. */
 .message-assistant:has(.mail-card) { width: min(84%, 640px, calc(100% - 64px)); }
 .mail-card { display: flex; flex-direction: column; margin: 8px 0; padding: 14px 16px 12px; border-radius: 14px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border-strong); }

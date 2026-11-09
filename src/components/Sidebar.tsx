@@ -15,6 +15,7 @@ interface SidebarProps {
   connected: boolean
   reconnecting: boolean
   onReconnect: () => void
+  onLogout: () => void
   workSummaries: Record<string, WorkSummary>
   dark: boolean
   mobileOpen: boolean
@@ -24,7 +25,7 @@ interface SidebarProps {
   onToggleTheme: (origin?: { x: number; y: number }) => void
 }
 
-export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme }: SidebarProps) {
+export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme }: SidebarProps) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [unreadOnly, setUnreadOnly] = useState(false)
@@ -187,7 +188,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
           <div className="footer-actions">
             {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? 'Masquer les bots cachés' : 'Afficher les bots cachés'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
             <button className="plain-icon" aria-label={dark ? 'Passer au thème clair' : 'Passer au thème sombre'} onClick={(event) => onToggleTheme({ x: event.clientX, y: event.clientY })}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
-            <span className="user-avatar" aria-hidden="true"><User size={14} /></span>
+            <button className="user-menu" aria-label="Se déconnecter" title="Se déconnecter" onClick={onLogout}><span className="user-avatar" aria-hidden="true"><User size={14} /></span></button>
           </div>
         </div>
       </aside>

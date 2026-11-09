@@ -11,6 +11,7 @@ import unicodedata
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
+from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 
 
@@ -32,14 +33,9 @@ def parse_approved(text: str) -> tuple[dict[str, str], str]:
 
 
 def digest(headers: dict[str, str], body: str) -> str:
-    canonical = "\n".join([headers.get("to", ""), headers.get("cc", ""), headers.get("subject", ""), body])
+    fields = [headers.get(name, "") for name in ("from", "draft-id", "to", "cc", "subject")]
+    canonical = "\n".join([*fields, body])
     return hashlib.sha256(unicodedata.normalize("NFC", canonical).encode("utf-8")).hexdigest()
-
-
-def replace_header(message: EmailMessage, name: str, value: str) -> None:
-    del message[name]
-    if value:
-        message[name] = value
 
 
 def main() -> None:
@@ -60,16 +56,30 @@ def main() -> None:
     if not headers.get("to"):
         fail("aucun destinataire")
 
-    if args.draft:
-        message = BytesParser(policy=policy.SMTP).parsebytes(args.draft.read_bytes())
-    else:
-        message = EmailMessage(policy=policy.SMTP)
-        message["From"] = headers.get("from", "")
-    if not message["From"]:
+    sender = headers.get("from", "")
+    address = parseaddr(sender)[1]
+    if not address:
         fail("aucun expéditeur")
-    replace_header(message, "To", headers["to"])
-    replace_header(message, "Cc", headers.get("cc", ""))
-    replace_header(message, "Subject", headers.get("subject", ""))
+    if headers.get("draft-id") and not args.draft:
+        fail("ce mail porte un Draft-Id : --draft est obligatoire")
+
+    # Liste blanche : seuls les champs affichés et approuvés partent, plus le fil de discussion.
+    # Un Bcc, un Reply-To ou un Resent-* glissé dans le brouillon ne passe donc jamais.
+    message = EmailMessage(policy=policy.SMTP)
+    message["From"] = sender
+    message["To"] = headers["to"]
+    if headers.get("cc"):
+        message["Cc"] = headers["cc"]
+    message["Subject"] = headers.get("subject", "")
+    message["Date"] = formatdate(usegmt=True)
+    message["Message-ID"] = make_msgid(domain=address.rpartition("@")[2])
+    if args.draft:
+        draft = BytesParser(policy=policy.SMTP).parsebytes(args.draft.read_bytes())
+        if parseaddr(str(draft["From"] or ""))[1].lower() != address.lower():
+            fail("le brouillon ne vient pas de l'expéditeur approuvé")
+        for name in ("In-Reply-To", "References"):
+            if draft[name]:
+                message[name] = str(draft[name])
     message.set_content(body + "\n", charset="utf-8")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

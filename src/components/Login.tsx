@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowRight, LockKeyhole } from 'lucide-react'
 
 export function Logo() {
@@ -11,14 +11,20 @@ export function Logo() {
   )
 }
 
-export function Login({ onLogin, error }: { onLogin: (username: string, password: string) => Promise<void>; error: string }) {
+export function Login({ onLogin, error }: { onLogin: (username: string, password: string, remember: boolean) => Promise<void>; error: string }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  const [remember, setRemember] = useState(true)
+  // Seule l’app de bureau a le Trousseau : sans lui, rien n’est gardé et la case n’apparaît pas.
+  const [canRemember, setCanRemember] = useState(false)
+  useEffect(() => {
+    fetch('/api/auth/options', { credentials: 'same-origin' }).then((response) => response.json()).then((options) => setCanRemember(options.remember === true)).catch(() => { /* case masquée */ })
+  }, [])
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setBusy(true)
-    try { await onLogin(username, password) } finally { setBusy(false) }
+    try { await onLogin(username, password, canRemember && remember) } finally { setBusy(false) }
   }
   return (
     <main className="login-page">
@@ -30,10 +36,11 @@ export function Login({ onLogin, error }: { onLogin: (username: string, password
         <form onSubmit={submit}>
           <label>Identifiant Hermes<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required autoFocus /></label>
           <label>Mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+          {canRemember && <label className="login-remember"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />Rester connecté sur ce Mac</label>}
           {error && <p className="login-error" role="alert">{error}</p>}
           <button className="login-submit" type="submit" disabled={busy}>{busy ? 'Connexion…' : 'Ouvrir mes bots'}{!busy && <ArrowRight size={17} />}</button>
         </form>
-        <p className="login-security"><LockKeyhole size={13} />Connexion locale à 127.0.0.1. Le mot de passe va uniquement à ta gateway Hermes.</p>
+        <p className="login-security"><LockKeyhole size={13} />Connexion locale à 127.0.0.1. Le mot de passe va uniquement à ta gateway Hermes.{canRemember && remember && ' Il reste chiffré par le Trousseau de ce Mac.'}</p>
       </section>
     </main>
   )

@@ -1,6 +1,6 @@
 ---
 name: mail-approval
-description: "Use whenever a mail must NOT go out on your own authority and needs the user's approval: a draft left for them, a reply you are not allowed or not sure to send, or a mail they asked to review. Shows an editable mail card in HermesBot. Also use when you receive a block hermes-mail-approved."
+description: "Live conversation with the user only, never in a scheduled job or cron run. Use when, in a chat with the user, a mail needs their approval before it goes out, or they ask to review one. Shows an editable mail card in HermesBot. Also use when you receive a block hermes-mail-approved."
 version: 1.0.0
 metadata:
   hermes:
@@ -10,6 +10,8 @@ metadata:
 # Mail à faire approuver
 
 Ne change rien à ce que tu as le droit d'envoyer seul : tes consignes décident. Cette skill sert seulement quand un mail attend l'accord de l'utilisateur.
+
+Jamais dans une tâche planifiée : un cron reste automatique et suit ses propres consignes, sans carte.
 
 ## Proposer un brouillon
 

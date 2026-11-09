@@ -340,7 +340,12 @@ export default function App() {
     if (DEMO || initializedRef.current) return
     initializedRef.current = true
     fetch('/api/auth/me', { credentials: 'same-origin' }).then(async (response) => {
-      if (response.status === 401) setAuth('login')
+      if (response.status === 401) {
+        if (await restoreSession()) {
+          setAuth('ready')
+          await initialize()
+        } else setAuth('login')
+      }
       else if (!response.ok) throw new Error('Gateway Hermes indisponible.')
       else {
         setAuth('ready')
@@ -352,13 +357,26 @@ export default function App() {
     })
   }, [])
 
-  const login = async (username: string, password: string) => {
+  /** Session Hermes expirée : nouvelle connexion avec les identifiants gardés dans le Trousseau. */
+  const restoreSession = async () => {
+    const response = await fetch('/api/auth/restore', { method: 'POST', credentials: 'same-origin' })
+    if (response.status === 401) setNotice('Identifiants enregistrés refusés : reconnecte-toi.')
+    return response.ok
+  }
+
+  const logout = async () => {
+    if (DEMO || !window.confirm('Te déconnecter et oublier les identifiants enregistrés sur ce Mac ?')) return
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined)
+    location.reload()
+  }
+
+  const login = async (username: string, password: string, remember: boolean) => {
     setAuthError('')
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: 'basic', username, password }),
+      body: JSON.stringify({ provider: 'basic', username, password, remember }),
     })
     if (!response.ok) {
       setAuthError(response.status === 401 ? 'Identifiant ou mot de passe incorrect.' : 'La gateway refuse la connexion.')
@@ -412,15 +430,16 @@ export default function App() {
     setReconnecting(true)
     setNotice('')
     try {
+      await window.hermesBot?.restartTunnel()
       const session = await fetch('/api/auth/me', { credentials: 'same-origin' })
-      if (session.status === 401) {
+      if (session.status === 401 && !(await restoreSession())) {
         client.close()
         setConnected(false)
-        setNotice('Session Hermes expirée : reconnecte-toi.')
+        setNotice((current) => current || 'Session Hermes expirée : reconnecte-toi.')
         setAuth('login')
         return
       }
-      if (!session.ok) throw new Error('gateway_indisponible')
+      if (session.status !== 401 && !session.ok) throw new Error('gateway_indisponible')
       client.close()
       if (botsRef.current.length === 0) {
         await initialize()
@@ -437,7 +456,7 @@ export default function App() {
     } catch {
       client.close()
       setConnected(false)
-      setNotice('Hermes ne répond pas. Si le tunnel SSH est tombé, relance l’app.')
+      setNotice('Hermes ne répond pas. Vérifie le réseau, puis réessaie avec ↻.')
     } finally {
       reconnectingRef.current = false
       setReconnecting(false)
@@ -650,6 +669,7 @@ export default function App() {
         connected={connected}
         reconnecting={reconnecting}
         onReconnect={reconnect}
+        onLogout={logout}
         workSummaries={workSummaries}
         dark={dark}
         mobileOpen={mobileOpen}

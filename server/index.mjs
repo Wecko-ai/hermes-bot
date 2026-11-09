@@ -52,6 +52,7 @@ const SESSION_COOKIE = 'hermesbot_session'
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60
 const sessions = new Map()
 const persistence = globalThis.__hermesBotSessionPersistence
+const credentialStore = globalThis.__hermesBotCredentialStore
 
 function restoreSessions() {
   if (!persistence) return
@@ -157,6 +158,16 @@ async function proxyJson(response, upstream) {
   response.end(text)
 }
 
+const sessionCookie = (session) => `${SESSION_COOKIE}=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}`
+
+function passwordLogin(request, { provider, username, password }) {
+  return hermesFetch(request, '/auth/password-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, username, password, next: '/' }),
+  })
+}
+
 async function handleLogin(request, response) {
   const body = await bodyJson(request)
   const provider = String(body.provider || 'basic').slice(0, 128)
@@ -165,20 +176,64 @@ async function handleLogin(request, response) {
   if (!username || !password || password.length > 4096) {
     return json(response, 400, { error: 'invalid_login' })
   }
-  const upstream = await hermesFetch(request, '/auth/password-login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, username, password, next: '/' }),
-  })
+  const upstream = await passwordLogin(request, { provider, username, password })
   if (!upstream.ok) return proxyJson(response, upstream)
+  // Coché : chiffré par le Trousseau, jamais renvoyé à l’interface. Décoché : on oublie ce qui était gardé.
+  if (credentialStore) {
+    if (body.remember === true) credentialStore.save(JSON.stringify({ provider, username, password }))
+    else credentialStore.clear()
+  }
   const session = createSession(upstream.headers.getSetCookie?.() || [])
   const text = await upstream.text()
   response.writeHead(upstream.status, {
     'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Set-Cookie': `${SESSION_COOKIE}=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}`,
+    'Set-Cookie': sessionCookie(session),
   })
   response.end(text)
+}
+
+function savedCredentials() {
+  if (!credentialStore) return null
+  try {
+    const saved = JSON.parse(credentialStore.load() || 'null')
+    return typeof saved?.username === 'string' && typeof saved?.password === 'string' ? saved : null
+  } catch {
+    return null
+  }
+}
+
+/** La session Hermes a expiré : nouvelle connexion avec les identifiants gardés, sans écran. */
+async function handleRestore(request, response) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  // L’Origin s’imite : sans cookie local, un autre processus de la machine obtiendrait une session.
+  const session = browserSession(request)
+  if (!session) return json(response, 404, { error: 'no_local_session' })
+  const saved = savedCredentials()
+  if (!saved) return json(response, 404, { error: 'no_saved_credentials' })
+  // hermesFetch range les nouveaux cookies Hermes dans cette session.
+  const upstream = await passwordLogin(request, saved)
+  await upstream.body?.cancel().catch(() => {})
+  if (upstream.status === 401) {
+    credentialStore.clear() // mot de passe changé : ne pas insister contre la gateway
+    return json(response, 401, { error: 'saved_credentials_refused' })
+  }
+  if (!upstream.ok) return json(response, 502, { error: 'hermes_unavailable' })
+  session.expiresAt = Date.now() + SESSION_MAX_AGE * 1000
+  persistSessions()
+  return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(session) })
+}
+
+async function handleLogout(request, response) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  credentialStore?.clear()
+  await hermesFetch(request, '/auth/logout', { method: 'POST' }).then((upstream) => upstream.body?.cancel()).catch(() => {})
+  const session = browserSession(request)
+  if (session) {
+    sessions.delete(session.id)
+    persistSessions()
+  }
+  return json(response, 200, { ok: true }, { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0` })
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions'])
@@ -382,6 +437,15 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
       return await handleLogin(request, response)
+    }
+    if (url.pathname === '/api/auth/options' && request.method === 'GET') {
+      return json(response, 200, { remember: Boolean(credentialStore) })
+    }
+    if (url.pathname === '/api/auth/restore' && request.method === 'POST') {
+      return await handleRestore(request, response)
+    }
+    if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
+      return await handleLogout(request, response)
     }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)

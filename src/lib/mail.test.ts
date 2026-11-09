@@ -26,10 +26,12 @@ describe('brouillon de mail', () => {
   })
 
   it('calcule une empreinte stable sur ce qui est validé', async () => {
-    const expected = createHash('sha256').update('a@exemple.test\n\nRe: Bonjour\nLigne 1\n\nLigne 2').digest('hex')
+    const expected = createHash('sha256').update('Bot <bot@exemple.test>\n42\na@exemple.test\n\nRe: Bonjour\nLigne 1\n\nLigne 2').digest('hex')
     expect(await mailDigest(draft)).toBe(expected)
     expect(await mailDigest({ ...draft, body: 'Ligne 1\r\n\r\nLigne 2\n\n' })).toBe(expected)
     expect(await mailDigest({ ...draft, to: 'b@exemple.test' })).not.toBe(expected)
+    expect(await mailDigest({ ...draft, from: 'Autre <autre@exemple.test>' })).not.toBe(expected)
+    expect(await mailDigest({ ...draft, draftId: '43' })).not.toBe(expected)
   })
 
   it('empêche une injection d’en-tête et allonge la clôture si le corps en contient une', async () => {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, safeStorage } = require('electron')
+const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
@@ -12,6 +12,7 @@ const HERMES_ORIGIN = process.env.HERMES_ORIGIN || config.gatewayOrigin || 'http
 const HERMES_BROWSER_ORIGIN = process.env.HERMES_BROWSER_ORIGIN || config.browserOrigin || ''
 const SSH_HOST = process.env.HERMES_SSH_HOST || config.sshHost || ''
 let hermesTunnelProcess
+let hermesTunnelRestart
 let mainWindow
 
 function readConfig() {
@@ -52,6 +53,17 @@ function configureSessionPersistence() {
       fs.renameSync(temporary, store)
     },
   }
+  const credentials = path.join(directory, 'hermes-credentials.bin')
+  globalThis.__hermesBotCredentialStore = {
+    load: () => {
+      try { return safeStorage.decryptString(fs.readFileSync(credentials)) } catch { return '' }
+    },
+    save: (json) => {
+      fs.writeFileSync(`${credentials}.tmp`, safeStorage.encryptString(json), { mode: 0o600 })
+      fs.renameSync(`${credentials}.tmp`, credentials)
+    },
+    clear: () => fs.rmSync(credentials, { force: true }),
+  }
 }
 
 function hermesReady() {
@@ -65,25 +77,58 @@ function hermesReady() {
   })
 }
 
-async function ensureHermes() {
-  if (await hermesReady()) return
+function tunnelHasExited(tunnel) {
+  return tunnel.exitCode !== null || tunnel.signalCode !== null
+}
+
+async function openHermesTunnel() {
   if (!SSH_HOST) throw new Error(`Hermes ne répond pas sur ${HERMES_ORIGIN}. Lance la gateway, ou renseigne sshHost pour ouvrir un tunnel SSH.`)
   const port = new URL(HERMES_ORIGIN).port || '9120'
   const tunnelCwd = app.getPath('userData')
   fs.mkdirSync(tunnelCwd, { recursive: true })
   let tunnelError = null
-  hermesTunnelProcess = spawn('/usr/bin/ssh', [
+  const tunnel = spawn('/usr/bin/ssh', [
     '-N', '-L', `${port}:127.0.0.1:${port}`,
     '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ServerAliveInterval=30', '--', SSH_HOST,
   ], { cwd: tunnelCwd, stdio: 'ignore' })
-  hermesTunnelProcess.once('error', (error) => { tunnelError = error })
+  hermesTunnelProcess = tunnel
+  tunnel.once('error', (error) => { tunnelError = error })
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (tunnelError) throw new Error(`Tunnel SSH ${SSH_HOST}: ${tunnelError.message}`)
     if (await hermesReady()) return
+    if (tunnelHasExited(tunnel)) break
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error(`Hermes est absent. Le tunnel SSH ${SSH_HOST} ne répond pas.`)
+}
+
+async function ensureHermes() {
+  if (!(await hermesReady())) await openHermesTunnel()
+}
+
+function stopHermesTunnel() {
+  const tunnel = hermesTunnelProcess
+  if (!tunnel || tunnelHasExited(tunnel)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const force = setTimeout(() => tunnel.kill('SIGKILL'), 2000)
+    tunnel.once('exit', () => { clearTimeout(force); resolve() })
+    tunnel.kill('SIGTERM')
+  })
+}
+
+/**
+ * Bouton ↻ : après une veille, le ssh lancé au démarrage peut être mort, ou vivant mais muet
+ * et gardant le port 9120. On l'arrête donc avant d'en ouvrir un autre. Sans tunnel au
+ * démarrage (gateway locale), il n'y a rien à relancer.
+ */
+function restartHermesTunnel() {
+  hermesTunnelRestart ??= (async () => {
+    if (!hermesTunnelProcess || await hermesReady()) return
+    await stopHermesTunnel()
+    await openHermesTunnel()
+  })().finally(() => { hermesTunnelRestart = null })
+  return hermesTunnelRestart
 }
 
 async function createWindow() {
@@ -110,6 +155,11 @@ async function createWindow() {
   await mainWindow.loadURL(ORIGIN)
   mainWindow.on('closed', () => { mainWindow = null })
 }
+
+ipcMain.handle('hermes-bot:restart-tunnel', (event) => {
+  if (!event.senderFrame?.url.startsWith(`${ORIGIN}/`)) throw new Error('Origine refusée.')
+  return restartHermesTunnel()
+})
 
 app.whenReady().then(async () => {
   await ensureHermes()

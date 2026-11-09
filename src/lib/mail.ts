@@ -39,11 +39,11 @@ export function parseMailBlock(source: string): MailDraft | null {
 const ADDRESS = /(^|<)[^\s@<>,]+@[^\s@<>,]+\.[^\s@<>,]+>?$/
 const addresses = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean)
 export const validAddresses = (value: string) => addresses(value).every((item) => ADDRESS.test(item))
-export const canSendMail = (draft: MailDraft) => addresses(draft.to).length > 0 && validAddresses(draft.to) && validAddresses(draft.cc) && Boolean(draft.body.trim())
+export const canSendMail = (draft: MailDraft) => Boolean(draft.from) && addresses(draft.to).length > 0 && validAddresses(draft.to) && validAddresses(draft.cc) && Boolean(draft.body.trim())
 
 /** Empreinte de ce que l’utilisateur a validé : le script d’envoi refuse un mail qui n’y correspond plus. */
 export async function mailDigest(draft: MailDraft) {
-  const canonical = [oneLine(draft.to), oneLine(draft.cc), oneLine(draft.subject), normalizedBody(draft.body)].join('\n').normalize('NFC')
+  const canonical = [draft.from, draft.draftId, draft.to, draft.cc, draft.subject].map(oneLine).concat(normalizedBody(draft.body)).join('\n').normalize('NFC')
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
