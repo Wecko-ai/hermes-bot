@@ -1,9 +1,9 @@
 ---
 name: coffre-chrome
-description: Use when a site in the shared bots Chrome (CDP 127.0.0.1:9222) asks you to log in, or asks for a verification code. Never type or read a password yourself.
+description: Use when a site in your team's bots Chrome (CDP address from `browser-turn cdp --owner <you>`) asks you to log in, or asks for a verification code. Never type or read a password yourself.
 ---
 
-# Se connecter dans le Chrome partagé avec le coffre HermesBot
+# Se connecter dans le Chrome de ton équipe avec le coffre HermesBot
 
 Le coffre HermesBot garde les identifiants dans le trousseau de session macOS de la machine des bots. Il tape lui-même le mot de passe dans TON onglet : tu ne vois jamais le mot de passe, il ne passe ni par le chat, ni par tes outils, ni par les journaux.
 
@@ -17,10 +17,10 @@ node ~/projects/hermes-bot/scripts/browser-vault.mjs <list|save|fill|code> --bot
 
 ## Règles
 
-- Prendre le tour du Chrome avant, comme pour tout accès à 9222 (`browser-turn prendre`), et le rendre après.
+- Chaque équipe de bots a son Chrome. Prendre son tour avant, comme pour tout accès à ce Chrome (`browser-turn prendre --owner <ton profil>`, qui donne aussi son adresse CDP ; `browser-turn cdp --owner <ton profil>` la redonne), et le rendre après.
 - Ne jamais taper, lire, copier ni afficher un mot de passe : pas de `eval` sur un champ `password`, pas de `.value`, pas de capture d’un formulaire rempli envoyée dans un message.
 - Ne jamais demander un mot de passe à l’utilisateur dans le chat : le coffre lui ouvre une fenêtre sécurisée dans HermesBot.
-- Dans le Chrome partagé, utiliser ce coffre, pas l’outil `browser_vault` de Hermes : celui-ci range les mots de passe ailleurs.
+- Dans le Chrome de ton équipe, utiliser ce coffre, pas l’outil `browser_vault` de Hermes : celui-ci range les mots de passe ailleurs.
 - Seulement les quatre commandes ci-dessus. Ne jamais appeler l’API `/admin` du coffre, lire son jeton, ni chercher un mot de passe dans le trousseau (`security`) : c’est réservé à l’utilisateur et à l’app HermesBot.
 - En tâche planifiée (cron) : jamais `save` ni `code`, personne n’est là pour répondre. Si `fill` ne suffit pas, s’arrêter et le signaler.
 

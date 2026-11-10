@@ -1,3 +1,4 @@
+import http from 'node:http'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { normalizeOrigin } from './store.mjs'
 import { attributeValue, botAllowed, KeychainStore, parseDump, passwordValue, runSecurity, validBots } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
+import { createBrowserVault } from './service.mjs'
 
 const darwin = process.platform === 'darwin' && existsSync('/usr/bin/security')
 
@@ -105,6 +107,47 @@ describe('coffre navigateur — demandes', () => {
       requests.close()
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('coffre navigateur — un Chrome par équipe', () => {
+  it('envoie chaque bot vers le CDP de son équipe', async () => {
+    const hits = { a: 0, b: 0 }
+    const fakeCdp = (key) => http.createServer((request, response) => {
+      if (request.url === '/json/list') hits[key] += 1
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end('[]')
+    })
+    const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
+    const cdpA = fakeCdp('a')
+    const cdpB = fakeCdp('b')
+    const portA = await listen(cdpA)
+    const portB = await listen(cdpB)
+    const probe = http.createServer()
+    const vaultPort = await listen(probe)
+    await new Promise((resolve) => probe.close(resolve))
+    const store = { available: true, list: async () => [], find: async () => null }
+    const vault = createBrowserVault({
+      port: vaultPort,
+      adminToken: 'x',
+      verifyUser: async () => true,
+      store,
+      cdpOriginFor: (bot) => `http://127.0.0.1:${bot === 'orion' ? portA : portB}`,
+    })
+    await vault.listen()
+    const call = (bot) => fetch(`http://127.0.0.1:${vaultPort}/v1/fill`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot, target: 'onglet' }),
+    }).then((response) => response.json())
+    try {
+      expect(await call('orion')).toEqual({ error: 'target_not_found' })
+      expect(hits).toEqual({ a: 1, b: 0 })
+      expect(await call('iris')).toEqual({ error: 'target_not_found' })
+      expect(hits).toEqual({ a: 1, b: 1 })
+    } finally {
+      await vault.close()
+      await new Promise((resolve) => cdpA.close(resolve))
+      await new Promise((resolve) => cdpB.close(resolve))
     }
   })
 })

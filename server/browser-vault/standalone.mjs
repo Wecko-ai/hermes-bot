@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createBrowserVault } from './service.mjs'
+import { cdpOriginForBot, loadChromeTeams } from '../chrome-teams.mjs'
 
 const auditFile = process.env.HERMESBOT_VAULT_AUDIT
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/browser-vault-audit.jsonl')
@@ -38,11 +39,16 @@ async function verifyUser(cookie) {
   return response.status === 200
 }
 
+// Origine CDP : BROWSER_VAULT_CDP_ORIGIN force un seul Chrome ; sinon le fichier des équipes ; sinon 9222.
+const chromeTeams = process.env.BROWSER_VAULT_CDP_ORIGIN ? null
+  : loadChromeTeams(process.env.HERMESBOT_CHROME_TEAMS || path.join(os.homedir(), '.config/chrome-teams.json'))
+
 const vault = createBrowserVault({
   adminToken: adminToken(),
   verifyUser,
   port: Number(process.env.BROWSER_VAULT_PORT || 4331),
   cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || undefined,
+  cdpOriginFor: chromeTeams ? (bot) => cdpOriginForBot(chromeTeams, bot) : undefined,
   audit: { append: (line) => fs.appendFileSync(auditFile, `${line}\n`, { mode: 0o600 }) },
 })
 

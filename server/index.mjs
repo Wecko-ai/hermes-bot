@@ -7,7 +7,7 @@ import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
 import { randomBytes } from 'node:crypto'
-import { readBrowserOwner } from './browser-turn.mjs'
+import { readBrowserOwners } from './browser-turn.mjs'
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.PORT || 4330)
@@ -655,7 +655,8 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
       if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-      return json(response, 200, { owner: await readBrowserOwner() })
+      const owners = await readBrowserOwners()
+      return json(response, 200, { owner: owners[0] || '', owners })
     }
     if (url.pathname === '/api/health') {
       return json(response, 200, { ok: true, service: 'hermes-bot' })

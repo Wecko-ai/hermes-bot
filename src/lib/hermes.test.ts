@@ -111,6 +111,18 @@ describe('statut réel du roster', () => {
     const other = await loadRoster(client, async () => 'vega')
     expect(other.bots[0].status).toBe('idle')
   })
+
+  it('marque au travail chaque bot qui détient un Chrome d’équipe', async () => {
+    const two = [{ ...profile, name: 'orion' }, { ...profile, name: 'iris' }, { ...profile, name: 'nova' }]
+    const request = vi.fn(async (method: string) => method === 'profiles.list'
+      ? { profiles: two }
+      : { sessions: [{ id: 'vivant', session_key: 'chat', status: 'idle' }] })
+    const roster = await loadRoster({ request } as unknown as HermesClient, async () => ['orion', 'nova'])
+    const bySlug = Object.fromEntries(roster.bots.map((bot) => [bot.slug, bot]))
+    expect(bySlug.orion.workTitle).toBe('Pilote le Chrome partagé')
+    expect(bySlug.nova.status).toBe('working')
+    expect(bySlug.iris.status).toBe('idle')
+  })
 })
 
 describe('modèles du forfait', () => {

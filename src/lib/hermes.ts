@@ -389,12 +389,14 @@ export async function loadSessionEvents(client: HermesClient, profile: string, s
   return { events: (Array.isArray(result?.events) ? result.events : []) as RpcEvent[], latestSeq: asNumber(result?.latest_seq, lastSeen) }
 }
 
-export async function loadBrowserOwner(): Promise<string> {
+/** Propriétaires des Chrome (un par équipe). Un serveur plus ancien ne renvoie que `owner`. */
+export async function loadBrowserOwner(): Promise<string[]> {
   try {
-    const result = await fetchJson<{ owner?: unknown }>('/api/browser-turn')
-    return typeof result.owner === 'string' ? result.owner : ''
+    const result = await fetchJson<{ owner?: unknown; owners?: unknown }>('/api/browser-turn')
+    if (Array.isArray(result.owners)) return result.owners.filter((owner): owner is string => typeof owner === 'string' && owner !== '')
+    return typeof result.owner === 'string' && result.owner ? [result.owner] : []
   } catch {
-    return ''
+    return []
   }
 }
 
@@ -406,8 +408,9 @@ function isRosterProfile(profile: Json): boolean {
   return Boolean(slug) && !profile.is_default && !SYSTEM_PROFILES.has(slug)
 }
 
-export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string> = loadBrowserOwner): Promise<RosterResponse> {
-  const [result, chromeOwner] = await Promise.all([client.request('profiles.list', { include_sessions: true }), browserOwner()])
+export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string | string[]> = loadBrowserOwner): Promise<RosterResponse> {
+  const [result, chromeOwnerValue] = await Promise.all([client.request('profiles.list', { include_sessions: true }), browserOwner()])
+  const chromeOwners = Array.isArray(chromeOwnerValue) ? chromeOwnerValue : chromeOwnerValue ? [chromeOwnerValue] : []
   const profiles = Array.isArray(result?.profiles) ? result.profiles : []
   // Un profil sans fiche `hermes-bots` (bot créé hors de l’app, sans section) reste visible, dans « Non classés ».
   // Seuls `default` et les profils techniques sans chat (SYSTEM_PROFILES) restent hors du roster.
@@ -423,7 +426,7 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
     const workerActive = asNumber(worker.last_active) * 1000 > Date.now() - WORKER_ACTIVE_MS
     const liveStatus = liveTurnStatus(live.get(asString(canonical.resolved_id)) ?? live.get(asString(canonical.id)))
     const turnRunning = canonical.running === true || liveStatus === 'working'
-    const browserWorking = chromeOwner === slug
+    const browserWorking = chromeOwners.includes(slug)
     const status: BotStatus = browserWorking || turnRunning || workerActive ? 'working' : liveStatus
     return [{
       slug,

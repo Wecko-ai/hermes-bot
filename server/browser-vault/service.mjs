@@ -65,7 +65,17 @@ export function createBrowserVault(options = {}) {
   }
   const store = options.store ?? new KeychainStore()
   const requests = new BrowserVaultRequests()
-  const cdp = new BrowserVaultCdp(options.cdpOrigin)
+  // Un Chrome par équipe de bots : un client CDP par origine, choisi selon le bot qui fait la demande.
+  const cdpClients = new Map()
+  function cdpFor(bot) {
+    const origin = (typeof options.cdpOriginFor === 'function' ? options.cdpOriginFor(bot) : '') || options.cdpOrigin || ''
+    let client = cdpClients.get(origin)
+    if (!client) {
+      client = new BrowserVaultCdp(origin || undefined)
+      cdpClients.set(origin, client)
+    }
+    return client
+  }
   const saveTimeout = options.saveTimeout ?? 300_000
   const codeTimeout = options.codeTimeout ?? 120_000
 
@@ -99,14 +109,14 @@ export function createBrowserVault(options = {}) {
     let origin = ''
     try {
       if (action === 'save' && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
-      origin = await cdp.activeOrigin(targetId)
+      origin = await cdpFor(bot).activeOrigin(targetId)
       if (action === 'fill') {
         const known = await store.find(origin)
         if (!known) throw new BrowserVaultError('origin_not_found', 404)
         // Chaque identifiant est réservé aux bots choisis par l’utilisateur.
         if (!botAllowed(known, bot)) throw new BrowserVaultError('bot_not_allowed', 403)
         const entry = await store.get(origin)
-        const fields = await cdp.fillCredentials(entry, targetId)
+        const fields = await cdpFor(bot).fillCredentials(entry, targetId)
         audit(action, bot, origin, 'filled')
         return { status: 'filled', origin, fields }
       }
@@ -141,7 +151,7 @@ export function createBrowserVault(options = {}) {
         requests.complete(id, { status: 'saved', origin: request.origin })
       } else {
         if (body.action !== 'code') throw new BrowserVaultError('invalid_action', 400)
-        const fields = await cdp.fillCode(request.origin, request.targetId, body.code)
+        const fields = await cdpFor(request.bot).fillCode(request.origin, request.targetId, body.code)
         requests.complete(id, { status: 'filled', origin: request.origin, fields })
       }
       return { ok: true }
