@@ -10,11 +10,12 @@
 <p align="center">
   <a href="#try-it-without-hermes">Try the demo</a> ·
   <a href="#connect-it-to-hermes">Connect it to Hermes</a> ·
-  <a href="docs/readme/hermesbot-film.mp4">Watch the film</a>
+  <a href="https://x.com/i/status/2120164337008709910">Watch the film</a>
 </p>
 
 <p align="center">
-  <a href="docs/readme/hermesbot-film.mp4"><img src="docs/readme/film-poster.png" alt="Watch the film, 60 seconds: one window, your whole team" width="100%" /></a>
+  <a href="https://x.com/i/status/2120164337008709910"><img src="docs/readme/film-poster.png" alt="Watch the film, 60 seconds: one window, your whole team" width="100%" /></a><br />
+  <sub>The film plays on X. The file is also in the repository: <a href="docs/readme/hermesbot-film.mp4">hermesbot-film.mp4</a>.</sub>
 </p>
 
 HermesBot is a desktop app for macOS. You see who is working, what each bot is doing and who is waiting for you, and you talk to each bot in its own chat. It is a client: your bots, their tools and their memory stay in Hermes, on your machine.
