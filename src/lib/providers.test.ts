@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { LOCAL_GROUP, providerBrand } from './providers'
 
 describe('logos des fournisseurs', () => {
-  // Troisième colonne : le titre embarqué dans le SVG, car Vite livre les petits logos en data: (« upsate » : faute du pack).
+  // Third column: the title embedded in the SVG, since Vite ships small logos as data: URLs (“upsate”: a typo in the pack).
   it.each([
     ['anthropic', 'Anthropic', 'anthropic'],
     ['openrouter', 'OpenRouter', 'openrouter'],

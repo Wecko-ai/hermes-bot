@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { describe, expect, it } from 'vitest'
 import { findMediaTags, isServablePath, mediaIndex, mediaPreviewText, mediaRef, mediaUrl, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaSink, conversationMedia } from './media'
 
-/** Rendu Markdown réel (react-markdown + GFM + plugin) : HTML produit et médias reconnus. */
+/** Real Markdown rendering (react-markdown + GFM + plugin): HTML produced and media recognized. */
 function render(text: string) {
   const sink: MediaSink = { media: [] }
   const html = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm, [remarkMedia, sink]] }, text))
@@ -36,7 +36,7 @@ describe('médias de la conversation', () => {
 })
 
 describe('fichiers cités sans MEDIA:', () => {
-  // Calqué sur un vrai rendu de bot : chemins en code, noms seuls, série abrégée, deux dossiers.
+  // Modeled on a real bot reply: paths in code, bare names, abbreviated series, two folders.
   const delivery = [
     'Orion, la v2 est prête. Je n’ai rien publié.',
     '',
@@ -111,7 +111,7 @@ describe('médias MEDIA:', () => {
 
   it('accepte les guillemets autour du chemin ou de toute la balise', () => {
     expect(findMediaTags('MEDIA:"/a/b c.mp4"')[0].ref).toMatchObject({ path: '/a/b c.mp4', kind: 'video' })
-    // Toute la balise, guillemets compris (16 caractères).
+    // The whole tag, quotes included (16 characters).
     expect(findMediaTags("'MEDIA:/a/b.png'")[0]).toMatchObject({ start: 0, end: 16, ref: { path: '/a/b.png' } })
     expect(render('`MEDIA:/tmp/a.png`').media.map((item) => item.path)).toEqual(['/tmp/a.png'])
   })

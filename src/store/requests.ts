@@ -2,22 +2,22 @@ import { create } from 'zustand'
 import type { PendingPrompt, ServerRequest } from '../lib/hermes'
 import type { BrowserVaultRequest } from '../lib/browser-vault'
 
-/** Ajoute la question si son `promptId` n’est pas déjà là. */
+/** Adds the question if its `promptId` is not already there. */
 export function addPrompt(items: PendingPrompt[], prompt: PendingPrompt) {
   return items.some((item) => item.promptId === prompt.promptId) ? items : [...items, prompt]
 }
 
-/** Retire une question réglée : c’est le couple session + `promptId` qui l’identifie. */
+/** Removes a settled question: it is identified by the session + `promptId` pair. */
 export function settlePrompt(items: PendingPrompt[], sessionId: string, promptId: string) {
   return items.filter((item) => !(item.sessionId === sessionId && item.promptId === promptId))
 }
 
-/** Un tour fini n’attend plus rien : retire toutes les questions de la session (même liste si aucune). */
+/** A finished turn waits for nothing: removes all the session's questions (same list if none). */
 export function clearSessionPrompts(items: PendingPrompt[], sessionId: string) {
   return items.some((item) => item.sessionId === sessionId) ? items.filter((item) => item.sessionId !== sessionId) : items
 }
 
-/** Remplace les questions d’une session par celles que la gateway vient de renvoyer. */
+/** Replaces a session's questions with those the gateway has just returned. */
 export function replaceSessionPrompts(items: PendingPrompt[], sessionId: string, fresh: PendingPrompt[]) {
   return [...items.filter((item) => item.sessionId !== sessionId), ...fresh]
 }
@@ -27,14 +27,14 @@ export function addServerRequest(items: ServerRequest[], request: ServerRequest)
 }
 
 export interface RequestsState {
-  /** Questions et accords ouverts des sessions suivies sur ce socket (`clarify.request`, `approval.request`). */
+  /** Open questions and approvals of the sessions followed on this socket (`clarify.request`, `approval.request`). */
   prompts: PendingPrompt[]
   serverRequests: ServerRequest[]
   browserVaultRequests: BrowserVaultRequest[]
 
   addPrompt: (prompt: PendingPrompt) => void
   settlePrompt: (sessionId: string, promptId: string) => void
-  /** Réponse donnée d’ici : retrait par `promptId` seul. */
+  /** Answer given from here: removal by `promptId` alone. */
   removePrompt: (promptId: string) => void
   clearSessionPrompts: (sessionId: string) => void
   replaceSessionPrompts: (sessionId: string, fresh: PendingPrompt[]) => void

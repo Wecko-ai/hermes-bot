@@ -20,9 +20,9 @@ export interface AppSettings {
   sendKey: SendKey
   activitySort: boolean
   showHidden: boolean
-  /** Liste de masquage, pas d’autorisation : un modèle qui vient de sortir reste proposé. */
+  /** Hide list, not an allow list: a newly released model is still offered. */
   hiddenModels: string[]
-  /** Modèle Ollama du chat local. Vide : celui de la configuration, sinon le premier installé. */
+  /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
   localModel: string
 }
 
@@ -32,13 +32,13 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback
   return allowed.includes(value as T) ? value as T : fallback
 }
 
-/** Valide chaque champ. Les anciennes clés ne servent que tant que le réglage n’a jamais été écrit. */
+/** Validates each field. The old keys only count while the setting has never been written. */
 export function parseSettings(saved: string | null, legacy: (key: string) => string | null = () => null): AppSettings {
   let value: Record<string, unknown> = {}
   try {
     const parsed: unknown = JSON.parse(saved || '{}')
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) value = parsed as Record<string, unknown>
-  } catch { /* réglages illisibles : valeurs par défaut */ }
+  } catch { /* unreadable settings: default values */ }
   const flag = (field: unknown, fallback: boolean) => typeof field === 'boolean' ? field : fallback
   return {
     language: oneOf(value.language, LANGUAGES, 'system'),
@@ -69,7 +69,7 @@ export const getSettings = () => current
 
 export function updateSettings(changes: Partial<AppSettings>) {
   current = { ...current, ...changes }
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(current)) } catch { /* storage indisponible */ }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(current)) } catch { /* storage unavailable */ }
   listeners.forEach((listener) => listener())
 }
 
@@ -82,10 +82,10 @@ export const subscribeSettings = subscribe
 
 export const useSettings = () => useSyncExternalStore(subscribe, getSettings)
 
-/** Le même modèle chez deux fournisseurs se règle séparément. */
+/** The same model at two providers is set separately. */
 export const hiddenModelKey = (option: ModelOverride) => `${option.provider}:${option.model}`
 
-/** Le modèle actif et celui du profil restent proposés : le sélecteur doit toujours pouvoir les montrer. */
+/** The active model and the profile's stay offered: the picker must always be able to show them. */
 export function selectableModels(options: ModelOption[], hidden: string[], keep: string[]) {
   const masked = new Set(hidden)
   return options.filter((option) => !masked.has(hiddenModelKey(option)) || keep.includes(option.model))

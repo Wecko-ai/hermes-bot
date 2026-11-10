@@ -345,7 +345,7 @@ a { color: inherit; }
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
-/* Modèle, contexte et débit */
+/* Model, context and throughput */
 .composer-wrap { position: relative; }
 .composer-hint { align-items: center; }
 .composer-status { display: flex; align-items: center; gap: 3px; min-width: 0; margin-left: auto; }
@@ -367,7 +367,7 @@ a { color: inherit; }
 .model-group-chevron { flex: none; color: var(--text-tertiary); transition: transform 240ms var(--spring); }
 .model-group.is-open .model-group-chevron { transform: rotate(90deg); }
 .model-group-tile { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 650; background: linear-gradient(145deg, hsl(var(--tile-hue) 72% 58%), hsl(calc(var(--tile-hue) + 24) 70% 44%)); box-shadow: inset 0 .5px 0 rgb(255 255 255 / 40%), 0 2px 6px -2px hsl(var(--tile-hue) 70% 40% / 60%); }
-/* Fond blanc dans les deux thèmes : les logos officiels sont dessinés pour lui. */
+/* White background in both themes: the official logos are drawn for it. */
 .model-group-tile.has-logo { background: #fff; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / 14%), 0 2px 6px -2px rgb(0 0 0 / 35%); }
 .model-group-tile.has-logo img { display: block; width: 16px; height: 16px; }
 .model-group-tile.is-local { --tile-hue: 168; }
@@ -410,7 +410,7 @@ a { color: inherit; }
 @media (max-width: 640px) { .model-picker-keys { display: none; } }
 @media (max-width: 800px) { .composer-hint-keys { display: none; } }
 
-/* Médias MEDIA: des bots */
+/* Bot MEDIA: items */
 .message-assistant:has(.media-item, .media-card), .message-user:has(.media-item, .media-card) { width: min(84%, 640px, calc(100% - 64px)); }
 .media-group { display: grid; gap: 6px; margin: 6px 0 11px; }
 .media-group.is-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
@@ -435,7 +435,7 @@ a { color: inherit; }
 .media-card-text strong { overflow: hidden; color: var(--text); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .media-card-text small { color: var(--text-tertiary); font-size: 10px; }
 .message-user .media-card { color: inherit; }
-/* Fichiers cités par chemin, sans MEDIA: : lisibles sous le texte pour valider sans quitter le chat. */
+/* Files cited by path, without MEDIA:: readable under the text so they can be checked without leaving the chat. */
 .cited-files { margin-top: 10px; padding-top: 9px; border-top: .5px solid var(--border); }
 .cited-files-label { margin-bottom: 6px; color: var(--text-tertiary); font-size: 10px; font-weight: 560; letter-spacing: .02em; text-transform: uppercase; }
 .cited-files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
@@ -463,8 +463,8 @@ a { color: inherit; }
 }
 
 /* ───────────────────────── Liquid Glass ─────────────────────────
-   Verre flottant, fond d’ambiance, statut vivant.
-   Elle surcharge les règles au-dessus ; la retirer rend l’ancien rendu. */
+   Floating glass, ambient background, live status.
+   It overrides the rules above; removing it restores the old look. */
 :root {
   --bg: #e9efec;
   --glass: rgb(255 255 255 / 56%);
@@ -494,8 +494,8 @@ a { color: inherit; }
   --selected: rgb(255 255 255 / 11%);
 }
 
-/* Fond d’ambiance : le verre a besoin de quelque chose derrière lui. Statique : s’il bougeait,
-   chaque panneau de verre referait son flou à chaque image, toute la journée. */
+/* Ambient background: the glass needs something behind it. Static: if it moved,
+   every glass panel would redo its blur on every frame, all day long. */
 body::before {
   content: ''; position: fixed; inset: -15%; z-index: -1; pointer-events: none;
   background:
@@ -509,13 +509,13 @@ body::before {
 :root[data-theme='dark'] body::before { opacity: .7; }
 .app-shell, .chat-panel, .login-page, .app-loading { background: transparent; }
 
-/* Flou seulement sur ce qui passe au-dessus du contenu. Derrière les panneaux fixes, il n’y a que le
-   fond d’ambiance, déjà flou : un backdrop-filter y referait le flou à chaque image animée. */
+/* Blur only on what passes over the content. Behind the fixed panels there is only the
+   ambient background, already blurred: a backdrop-filter there would redo the blur on every animated frame. */
 .model-picker, .toast, .jump-latest {
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
 }
 
-/* Barre latérale et détails : panneaux de verre flottants, coins concentriques. */
+/* Sidebar and details: floating glass panels, concentric corners. */
 .sidebar { height: calc(100% - 16px); margin: 8px 0 8px 8px; border-right: 0; border-radius: 16px; background: var(--glass); box-shadow: var(--glass-highlight), var(--glass-shadow); }
 .details-panel { height: calc(100% - 16px); margin: 8px 8px 8px 0; border-left: 0; border-radius: 16px; overflow: hidden; background: var(--glass); box-shadow: var(--glass-highlight), var(--glass-shadow); }
 .details-topbar, .sidebar-footer { border-color: var(--glass-line); }
@@ -525,7 +525,7 @@ body::before {
 .round-icon-button:active, .plain-icon:active { transform: scale(.9); }
 .section-heading { color: var(--text-tertiary); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 
-/* Bandeau « au travail » : l’état de l’équipe d’un coup d’œil, et un filtre au clic. */
+/* “At work” banner: the team's state at a glance, and a filter on click. */
 .working-strip { width: calc(100% - 24px); height: 36px; flex: none; display: flex; align-items: center; gap: 8px; margin: 2px 12px 6px; padding: 0 11px; border-radius: 10px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); color: var(--text-tertiary); font-size: 12px; text-align: left; transition: background 220ms var(--ease-out), box-shadow 220ms, transform 180ms var(--spring); }
 .working-strip:disabled { opacity: 1; }
 .working-strip-pulse { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
@@ -540,12 +540,12 @@ body::before {
 .working-strip .live-avatar-halo, .working-strip .live-avatar::after { display: none; }
 .working-strip-text { min-width: 0; overflow: hidden; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .working-strip-action { margin-left: auto; color: var(--accent); font-size: 11px; font-weight: 560; }
-/* Pulsation en transform et opacité : rien n’est repeint à chaque image. */
+/* Pulse on transform and opacity: nothing is repainted on every frame. */
 .working-strip-pulse, .chat-status-dot { position: relative; }
 .working-strip.has-work .working-strip-pulse::after, .chat-identity.is-working .chat-status-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: ping 1.6s var(--ease-out) infinite; }
 @keyframes ping { from { transform: scale(1); opacity: .55; } to { transform: scale(2.8); opacity: 0; } }
 
-/* Lignes du roster : verre au survol, ligne vivante quand le bot travaille. */
+/* Roster rows: glass on hover, live row when the bot is working. */
 .bot-row { overflow: hidden; isolation: isolate; transition: background 180ms var(--ease-out), box-shadow 180ms var(--ease-out), transform 180ms var(--spring); }
 .bot-row:hover { background: var(--hover); }
 .bot-row:active { transform: scale(.985); }
@@ -565,7 +565,7 @@ body::before {
 @keyframes status-pop { from { opacity: 0; transform: translateY(3px) scale(.96); } }
 .unread-badge, .filter-count { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent)); box-shadow: 0 2px 6px -2px color-mix(in srgb, var(--accent) 70%, transparent); }
 
-/* Avatar vivant : animation facultative au travail, halo et anneau à la couleur du bot. */
+/* Live avatar: optional animation at work, halo and ring in the bot's color. */
 .live-avatar { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; }
 .live-avatar > .bot-avatar, .live-avatar-motion { position: relative; z-index: 1; }
 .live-avatar-motion { display: block; width: 122%; height: 122%; max-width: none; margin: -11%; object-fit: contain; pointer-events: none; user-select: none; }
@@ -577,7 +577,7 @@ body::before {
 @keyframes ring-spin { to { transform: rotate(360deg); } }
 @keyframes avatar-pop { 0% { transform: scale(.88); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
 
-/* En-tête du chat : nom du bot aligné à gauche, avec le statut vivant. */
+/* Chat header: bot name left-aligned, with the live status. */
 .chat-header { border-bottom: 0; }
 .chat-identity { gap: 10px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .chat-identity h1 { font-size: 15px; line-height: 18px; font-weight: 650; }
@@ -590,7 +590,7 @@ body::before {
 .chat-identity.is-waiting .chat-status { color: var(--warning); font-weight: 560; }
 .chat-identity.is-waiting .chat-status-dot { background: var(--warning); }
 
-/* Fil : bulles de verre, entrée en douceur, bulle de streaming lumineuse. */
+/* Thread: glass bubbles, soft entrance, glowing streaming bubble. */
 .day-separator { width: fit-content; margin: 20px auto 16px; padding: 2px 10px; border-radius: 999px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); }
 .message-assistant { background: var(--glass-strong); box-shadow: var(--glass-highlight), 0 1px 2px rgb(15 45 52 / 5%), 0 8px 22px -18px rgb(15 45 52 / 35%); }
 .message-user .message-content { background: linear-gradient(180deg, #14727f, #0d5563); box-shadow: inset 0 1px 0 rgb(255 255 255 / 13%), 0 8px 18px -12px rgb(0 0 0 / 55%); }
@@ -606,7 +606,7 @@ body::before {
 .message-content pre { background: #12222a; box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%); }
 .media-thumb, .media-card { background: var(--glass-strong); box-shadow: var(--glass-highlight), 0 1px 2px rgb(15 45 52 / 6%); }
 
-/* Composer : capsule de verre, halo d’accent au focus, bouton d’envoi qui rebondit. */
+/* Composer: glass capsule, accent halo on focus, send button that bounces. */
 .composer { border: 0; border-radius: 14px; background: var(--glass-strong); box-shadow: var(--glass-highlight), var(--glass-shadow); transition: box-shadow 220ms var(--ease-out); }
 .composer:focus-within { border: 0; box-shadow: var(--glass-highlight), 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent), var(--glass-shadow); }
 .composer-send { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, white), var(--accent)); color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 5px 12px -5px color-mix(in srgb, var(--accent) 80%, transparent); transition: transform 180ms var(--spring), box-shadow 180ms, filter 180ms; }
@@ -617,7 +617,7 @@ body::before {
 .composer-plus, .composer-mic { background: color-mix(in srgb, var(--text) 6%, transparent); transition: transform 160ms var(--spring), background 160ms; }
 .composer-plus:active, .composer-mic:active { transform: scale(.9); }
 
-/* Détails, sélecteur de modèle, notices, connexion : même matière. */
+/* Details, model picker, notices, sign-in: same material. */
 .details-tabs { border-color: var(--glass-line); }
 .details-tabs button { transition: background 160ms var(--ease-out), color 160ms; }
 .details-tabs button.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); }
@@ -647,13 +647,13 @@ body::before {
 .bot-row-status .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
 .bot-row.status-waiting { background: linear-gradient(100deg, color-mix(in srgb, var(--warning) 11%, transparent), transparent 75%); }
 .bot-row.status-blocked { background: linear-gradient(100deg, color-mix(in srgb, var(--danger) 11%, transparent), transparent 75%); }
-/* Changement de thème : révélation circulaire, pilotée par App.tsx. */
+/* Theme change: circular reveal, driven by App.tsx. */
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 .login-card label.login-remember { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
 .login-card .login-remember input { width: 15px; height: 15px; flex: none; padding: 0; background: none; box-shadow: none; accent-color: var(--accent); }
 .user-menu { display: inline-flex; border-radius: 50%; }
 .user-menu:hover { opacity: .8; }
-/* Carte de mail à valider, dans le fil. */
+/* Email card to approve, in the thread. */
 .message-assistant:has(.mail-card) { width: min(84%, 640px, calc(100% - 64px)); }
 .mail-card { display: flex; flex-direction: column; margin: 8px 0; padding: 14px 16px 12px; border-radius: 14px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border-strong); }
 .mail-card-title { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
@@ -675,7 +675,7 @@ body::before {
 .mail-note { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; }
 .mail-note.is-muted { color: var(--text-tertiary); }
 .mail-note button { margin-left: 6px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }
-/* Demandes de la gateway : coffre d’identifiants et accords. */
+/* Gateway requests: credential vault and approvals. */
 .request-scrim { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 24px; background: rgb(8 8 10 / 38%); }
 .request-sheet { width: min(420px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 22px; border-radius: 18px; background: var(--surface-raised); box-shadow: var(--shadow), var(--glass-shadow); animation: sheet-in 240ms var(--spring) both; }
 .request-icon { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
@@ -694,7 +694,7 @@ body::before {
 .request-actions button { height: 34px; padding: 0 14px; border-radius: 9px; background: var(--hover); color: var(--text); font-size: 13px; font-weight: 520; box-shadow: inset 0 0 0 .5px var(--border); }
 .request-actions button.is-primary { background: var(--accent); color: #fff; box-shadow: none; }
 
-/* Question ou accord d’un bot en plein tour, posé au-dessus du champ de saisie. */
+/* Question or approval from a bot mid-turn, placed above the input field. */
 .prompt-dock { width: min(100%, 880px); flex: none; margin: 0 auto; padding: 0 16px 8px; }
 .prompt-card { display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; padding: 14px 16px; border-radius: 16px; background: var(--surface-raised); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent), 0 10px 28px -16px color-mix(in srgb, var(--warning) 70%, transparent); }
 .prompt-card-title { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; }
@@ -714,13 +714,13 @@ body::before {
 .prompt-card-other button { width: 28px; height: 28px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 8px; background: var(--accent); color: #fff; }
 .prompt-card button:disabled { opacity: .45; cursor: default; }
 @media (max-width: 640px) { .prompt-dock { padding: 0 10px 6px; } }
-/* Résumé du travail en cours, dans le panneau du bot. */
+/* Summary of the work in progress, in the bot's panel. */
 .work-card { margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--glass-strong)); box-shadow: var(--glass-highlight); }
 .work-card h3 { margin: 0 0 4px; color: var(--accent); font-size: 11px; font-weight: 600; }
 .work-card p { margin: 0; color: var(--text); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
 .work-card p + p { margin-top: 4px; color: var(--text-secondary); font-size: 11.5px; }
 
-/* Panneau de droite : « Le bot » et les documents ouverts, en onglets. */
+/* Right panel: “The bot” and the open documents, in tabs. */
 .details-panel { transition: width 260ms var(--ease-out), flex-basis 260ms var(--ease-out); }
 .details-panel.has-document { width: clamp(440px, 46vw, 900px); flex-basis: clamp(440px, 46vw, 900px); }
 @media (max-width: 1180px) { .details-panel.has-document { width: min(760px, 94vw); flex-basis: auto; } }
@@ -738,7 +738,7 @@ body::before {
 .details-tabs { flex-wrap: wrap; gap: 2px; }
 .details-tabs button { padding: 5px 6px; }
 
-/* Documents du bot, à côté du chat. */
+/* Bot documents, beside the chat. */
 .document-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .document-view[hidden] { display: none; }
 .document-toolbar { height: 34px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 8px 0 14px; border-bottom: .5px solid var(--glass-line); color: var(--text-tertiary); font-size: 10.5px; }
@@ -750,7 +750,7 @@ body::before {
 .media-document { cursor: pointer; text-align: left; }
 .media-document:hover { background: var(--hover); }
 
-/* Pièces jointes. */
+/* Attachments. */
 .composer-images { padding: 5px 5px 8px; }
 .composer-file { height: 48px; max-width: 220px; flex: none; position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 11px; border-radius: 10px; background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text-secondary); }
 .composer-file > svg { flex: none; }
@@ -763,7 +763,7 @@ body::before {
 .drop-overlay strong { font-size: 15px; font-weight: 600; }
 .drop-overlay span { color: var(--text-secondary); font-size: 12px; }
 
-/* Mentions @bot. */
+/* @bot mentions. */
 .mention-menu { position: absolute; left: 16px; bottom: calc(100% + 2px); z-index: 30; width: min(360px, calc(100% - 32px)); max-height: 300px; overflow-y: auto; padding: 5px; border-radius: 16px; background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-highlight), var(--glass-shadow); }
 .mention-menu button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 10px; color: var(--text); font-size: 13px; line-height: 18px; text-align: left; }
 .mention-menu button.is-active { background: var(--selected); }
@@ -772,7 +772,7 @@ body::before {
 .mention-chip { display: inline; padding: 0 5px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: inherit; font-weight: 560; }
 .message-user .mention-chip { background: color-mix(in srgb, currentColor 14%, transparent); color: inherit; }
 
-/* Messages entre bots : une ligne discrète, « messaged » ouvre le texte envoyé. */
+/* Messages between bots: a discreet line, “messaged” opens the sent text. */
 .agent-note { display: flex; flex-direction: column; align-items: center; width: min(100%, 680px); margin: 6px auto 16px; }
 .agent-note-line { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; max-width: 100%; padding: 3px 10px 3px 5px; border-radius: 999px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); color: var(--text-secondary); font-size: 11px; line-height: 18px; }
 .agent-note-name { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px; border-radius: 7px; color: var(--text); font: inherit; font-weight: 580; }
@@ -787,7 +787,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .agent-note-body { width: 100%; margin-top: 8px; padding: 10px 14px; border-radius: 16px; background: var(--glass-strong); box-shadow: var(--glass-highlight), 0 1px 2px rgb(15 45 52 / 5%); font-size: 13px; line-height: 20px; animation: message-in 240ms var(--ease-out) both; }
 .agent-note-empty { color: var(--text-tertiary); }
 
-/* Onglet Usage. */
+/* Usage tab. */
 .usage-section { padding-top: 12px; }
 .usage-context { padding: 11px 12px; border-radius: 12px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); }
 .usage-context > div { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 12px; }
@@ -818,7 +818,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .usage-bars i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--accent); }
 .usage-axis { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-tertiary); font-size: 10px; }
 
-/* Onglet Médias. */
+/* Media tab. */
 .media-library { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .media-library .media-card, .media-library .media-video-frame, .media-library .media-audio-frame { grid-column: 1 / -1; }
 .media-library .media-thumb { display: block; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 10px; }
@@ -826,7 +826,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .media-library .media-video { width: 100%; border-radius: 10px; }
 .details-count svg { vertical-align: -2px; }
 
-/* Palette ⌘K. */
+/* ⌘K palette. */
 .palette-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; background: rgb(12 14 24 / 22%); }
 .palette { width: min(520px, calc(100vw - 32px)); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden; border-radius: 18px; background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-highlight), var(--glass-shadow); }
 .palette-search { flex: none; display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: .5px solid var(--glass-line); color: var(--text-tertiary); }
@@ -838,14 +838,14 @@ button.agent-note-name:hover { background: var(--hover); }
 .palette-results strong { overflow: hidden; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .palette-results span { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 11.5px; }
 
-/* Modes BRAIN, PLAN, EXEC. */
+/* BRAIN, PLAN, EXEC modes. */
 .mode-switch { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 22px; padding: 1px; border-radius: 8px; background: color-mix(in srgb, var(--text) 5%, transparent); }
 .mode-switch button { height: 20px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 7px; color: var(--text-tertiary); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; transition: background 160ms var(--ease-out), color 160ms; }
 .mode-switch button:hover { color: var(--text); }
 .mode-switch button.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text); }
 .mode-switch i { width: 6px; height: 6px; border-radius: 50%; background: var(--mode); opacity: .45; }
 .mode-switch .is-active i { opacity: 1; }
-/* Envoi pendant le travail : Attendre (brouillon), File, Prio. */
+/* Sending while a bot works: Wait (draft), Queue, Priority. */
 .delivery-switch { flex: none; margin-left: 8px; display: inline-flex; align-items: center; gap: 1px; height: 22px; padding: 1px; border-radius: 8px; background: color-mix(in srgb, var(--text) 5%, transparent); }
 .delivery-switch button { height: 20px; padding: 0 8px; border-radius: 7px; color: var(--text-tertiary); font-size: 10px; font-weight: 600; transition: background 160ms var(--ease-out), color 160ms; }
 .delivery-switch button:hover { color: var(--text); }
@@ -864,7 +864,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .mode-exec { --mode: var(--success); }
 .composer-hint-keys { min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Chargement de l’app et d’une conversation. */
+/* Loading of the app and of a conversation. */
 .app-loading p { margin: 0; }
 .app-loading .login-mark { animation: loading-float 1.8s ease-in-out infinite; }
 .loading-bar { width: 132px; height: 3px; overflow: hidden; border-radius: 3px; background: color-mix(in srgb, var(--text) 9%, transparent); }
@@ -872,7 +872,7 @@ button.agent-note-name:hover { background: var(--hover); }
 @keyframes loading-float { 50% { transform: rotate(-3deg) translateY(-4px); } }
 @keyframes loading-slide { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
 .chat-loading { width: 100%; margin: auto 0 0; align-items: stretch; gap: 18px; }
-/* Un bot au repos reste immobile : seule la zone de messages indique le chargement. */
+/* An idle bot stays still: only the message area shows the loading. */
 .chat-loading .bot-avatar svg { animation: none; }
 .chat-skeleton { display: flex; flex-direction: column; gap: 12px; }
 .chat-skeleton span { display: block; height: 46px; border-radius: 18px; background: var(--glass-strong); box-shadow: var(--glass-highlight); animation: model-skeleton .9s ease-in-out infinite alternate; }
@@ -892,10 +892,10 @@ button.agent-note-name:hover { background: var(--hover); }
 .details-tabs { gap: 1px; }
 .details-tabs button { padding: 5px 5px; font-size: 10.5px; }
 
-/* Chat local : même présentation, une seule vue à la fois. */
+/* Local chat: same layout, one view at a time. */
 .chat-panel[hidden] { display: none; }
 
-/* Réglages : sous les demandes de la gateway (.request-scrim), qui restent toujours au premier plan. */
+/* Settings: under the gateway requests (.request-scrim), which always stay in the foreground. */
 :root[data-motion='reduce'] *, :root[data-motion='reduce'] *::before, :root[data-motion='reduce'] *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 :root[data-text-size='small'] .message-content, :root[data-text-size='small'] .message-user .message-content { font-size: 13px; line-height: 20px; }
 :root[data-text-size='large'] .message-content, :root[data-text-size='large'] .message-user .message-content { font-size: 16px; line-height: 25px; }
@@ -962,7 +962,7 @@ button.agent-note-name:hover { background: var(--hover); }
   .settings-row { flex-wrap: wrap; }
 }
 
-/* Coffre : identifiants du trousseau de la machine des bots, bots autorisés. */
+/* Vault: credentials from the bots machine's keychain, allowed bots. */
 .settings-error { margin: 0 0 10px; padding: 7px 10px; border-radius: 9px; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-size: 12px; }
 .settings-button.is-primary { background: var(--accent); color: #fff; }
 .settings-button:disabled { opacity: .5; cursor: default; }
@@ -979,7 +979,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .vault-entry .settings-row-copy strong { display: inline-flex; align-items: center; gap: 5px; }
 .vault-entry .settings-row-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Identité HermesBot : formes franches plutôt que capsules. */
+/* HermesBot identity: crisp shapes rather than capsules. */
 .composer-plus, .composer-mic, .composer-send, .round-icon-button { border-radius: 9px; }
 .routine-card { border-radius: 10px; }
 .login-card { border-radius: 16px; }

@@ -10,7 +10,7 @@ globalThis.__hermesBotSessionPersistence = {
   save: (json) => fs.writeFileSync(file, json, { mode: 0o600 }),
 }
 
-// En clair ici seulement : l’app réelle chiffre avec safeStorage (electron/main.cjs).
+// In clear text here only: the real app encrypts with safeStorage (electron/main.cjs).
 globalThis.__hermesBotCredentialStore = {
   load: () => {
     try { return fs.readFileSync(credentials, 'utf8') } catch { return '' }

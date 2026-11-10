@@ -18,7 +18,7 @@ export interface SessionUsage {
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  // Absents de certaines trames : une valeur manquante ne remplace jamais la dernière connue.
+  // Missing from some frames: a missing value never replaces the last known one.
   reasoningTokens?: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
@@ -70,15 +70,15 @@ export interface Bot {
   status: BotStatus
   preview: string
   timestamp: string | null
-  /** Activité la plus récente du profil en ms, toutes sessions confondues (tâches de fond comprises). */
+  /** Most recent activity of the profile in ms, across all sessions (background tasks included). */
   lastActivity?: number
-  /** Dernière date déjà comptée en non-lu : pendant le travail, le non-lu attend la fin. */
+  /** Last date already counted as unread: while the bot works, the unread mark waits for the end. */
   seenAt?: string | null
-  /** Un worker (kanban, outil) du bot bat encore. */
+  /** A worker (kanban, tool) of the bot is still running. */
   workerActive?: boolean
-  /** Titre de ce worker, quand il tourne. */
+  /** Title of this worker, while it runs. */
   workTitle?: string
-  /** Le bot détient le Chrome partagé (arbitre local) : au travail même sans tour Hermes. */
+  /** The bot holds the shared Chrome (local arbiter): at work even without a Hermes turn. */
   browserOwner?: boolean
   unread: number
   hidden: boolean
@@ -97,23 +97,23 @@ export interface ChatMessage {
   pending?: boolean
   failed?: boolean
   technical?: boolean
-  /** Réponse en cours d’écriture : le message final reprend le même identifiant. */
+  /** Reply being written: the final message reuses the same identifier. */
   streaming?: boolean
-  /** Message entre deux bots (`message_agent`) : une ligne « Orion messaged Iris » dans le fil. */
+  /** Message between two bots (`message_agent`): an “Orion messaged Iris” line in the thread. */
   agent?: AgentMessage
-  /** Envoyé pendant un tour : en file d’attente, ou prioritaire (le tour a été interrompu pour lui). */
+  /** Sent during a turn: queued, or priority (the turn was interrupted for it). */
   delivery?: 'queue' | 'priority'
 }
 
 export interface AgentMessage {
-  /** `message` : envoi ; `reply` : réponse renvoyée à l’envoyeur ; `no-reply` : pas de réponse, avec la raison. */
+  /** `message`: sent; `reply`: reply returned to the sender; `no-reply`: no reply, with the reason. */
   kind: 'message' | 'reply' | 'no-reply'
-  /** Profil, nom ou tag tel que Hermes l’écrit : l’interface le résout avec le roster. */
+  /** Profile, name or tag as Hermes writes it: the interface resolves it against the roster. */
   from: string
-  /** Nom affiché par Hermes pour l’envoyeur, si le roster ne le connaît pas. */
+  /** Name shown by Hermes for the sender, if the roster does not know it. */
   fromName?: string
   to: string
-  /** Message, réponse, ou raison donnée par Hermes quand le bot n’a pas répondu. */
+  /** Message, reply, or reason given by Hermes when the bot did not reply. */
   text: string
 }
 

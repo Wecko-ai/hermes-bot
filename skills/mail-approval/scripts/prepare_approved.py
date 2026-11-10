@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Prépare le .eml d'un mail approuvé dans HermesBot. N'envoie rien.
+"""Prepare the .eml of a mail approved in HermesBot. Sends nothing.
 
-Refuse si le contenu ne correspond plus à l'empreinte calculée au moment du clic, ou si ce mail
-a déjà été préparé : le fichier de sortie existant empêche un second envoi.
+Refuses if the content no longer matches the digest computed at the time of the click, or if this
+mail was already prepared: an existing output file prevents a second send.
 """
 import argparse
 import hashlib
@@ -16,14 +16,14 @@ from pathlib import Path
 
 
 def fail(message: str) -> None:
-    print(f"REFUSÉ : {message}. Rien n'a été préparé.", file=sys.stderr)
+    print(f"REFUSED: {message}. Nothing was prepared.", file=sys.stderr)
     sys.exit(2)
 
 
 def parse_approved(text: str) -> tuple[dict[str, str], str]:
     head, separator, body = text.replace("\r\n", "\n").lstrip("\n").partition("\n\n")
     if not separator:
-        fail("bloc approuvé sans corps")
+        fail("approved block without a body")
     headers = {}
     for line in head.split("\n"):
         name, colon, value = line.partition(":")
@@ -46,25 +46,25 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.out.exists():
-        fail(f"{args.out} existe déjà, ce mail a peut-être été envoyé")
+        fail(f"{args.out} already exists, this mail may already have been sent")
     headers, body = parse_approved(args.approved.read_text(encoding="utf-8"))
     expected = headers.get("approved-digest", "")
     if not expected:
-        fail("empreinte Approved-Digest absente")
+        fail("Approved-Digest is missing")
     if digest(headers, body) != expected:
-        fail("le contenu ne correspond pas à ce qui a été approuvé")
+        fail("the content does not match what was approved")
     if not headers.get("to"):
-        fail("aucun destinataire")
+        fail("no recipient")
 
     sender = headers.get("from", "")
     address = parseaddr(sender)[1]
     if not address:
-        fail("aucun expéditeur")
+        fail("no sender")
     if headers.get("draft-id") and not args.draft:
-        fail("ce mail porte un Draft-Id : --draft est obligatoire")
+        fail("this mail carries a Draft-Id: --draft is required")
 
-    # Liste blanche : seuls les champs affichés et approuvés partent, plus le fil de discussion.
-    # Un Bcc, un Reply-To ou un Resent-* glissé dans le brouillon ne passe donc jamais.
+    # Allowlist: only the displayed and approved fields go out, plus the thread headers.
+    # A Bcc, Reply-To or Resent-* slipped into the draft therefore never gets through.
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = sender
     message["To"] = headers["to"]
@@ -76,7 +76,7 @@ def main() -> None:
     if args.draft:
         draft = BytesParser(policy=policy.SMTP).parsebytes(args.draft.read_bytes())
         if parseaddr(str(draft["From"] or ""))[1].lower() != address.lower():
-            fail("le brouillon ne vient pas de l'expéditeur approuvé")
+            fail("the draft does not come from the approved sender")
         for name in ("In-Reply-To", "References"):
             if draft[name]:
                 message[name] = str(draft[name])
@@ -84,7 +84,7 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(message.as_bytes(policy=policy.SMTP))
-    print(f"Prêt : {args.out}")
+    print(f"Ready: {args.out}")
 
 
 if __name__ == "__main__":

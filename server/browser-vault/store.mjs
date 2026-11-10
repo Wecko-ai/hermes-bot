@@ -1,6 +1,6 @@
 import { BrowserVaultError, vaultError } from './errors.mjs'
 
-/** Origine exacte : protocole, hôte IDN normalisé et port effectif. */
+/** Exact origin: protocol, normalized IDN host and effective port. */
 export function normalizeOrigin(value) {
   try {
     const url = new URL(value)

@@ -1,5 +1,5 @@
 interface Window {
-  /** Présent seulement dans l'app Electron, absent en mode navigateur. */
+  /** Only present in the Electron app, absent in browser mode. */
   hermesBot?: {
     platform: 'electron'
     restartTunnel: () => Promise<void>

@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs'
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 
 /**
- * Lit les équipes de Chrome des bots (un Chrome par équipe, chacun sur son port CDP).
- * Retourne `null` si le fichier manque ou est invalide : l’appelant retombe alors sur le Chrome unique.
+ * Reads the bots' Chrome teams (one Chrome per team, each on its own CDP port).
+ * Returns `null` if the file is missing or invalid: the caller then falls back to the single Chrome.
  */
 export function loadChromeTeams(file) {
   try {
@@ -27,7 +27,7 @@ export function loadChromeTeams(file) {
   }
 }
 
-/** Origine CDP du Chrome d’un bot : son équipe, sinon l’équipe par défaut. Vide sans fichier d’équipes. */
+/** CDP origin of a bot's Chrome: its team, otherwise the default team. Empty without a teams file. */
 export function cdpOriginForBot(teams, slug) {
   if (!teams) return ''
   const own = Object.values(teams.teams).find((team) => team.bots.includes(slug))

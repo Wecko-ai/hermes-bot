@@ -37,20 +37,20 @@ async function readJson(request) {
 }
 
 /**
- * Coffre du Chrome partagé. API des bots sur `/v1/<list|fill|save|code>` ; API de l’app HermesBot sur
- * `/admin/v1/…` (demandes en attente, identifiants). Aucune route ne renvoie un mot de passe.
- * Identifiants dans le trousseau de session macOS (`keychain.mjs`).
+ * Shared Chrome vault. Bot API on `/v1/<list|fill|save|code>`; HermesBot app API on
+ * `/admin/v1/…` (pending requests, credentials). No route returns a password.
+ * Credentials live in the macOS session keychain (`keychain.mjs`).
  */
 export function createBrowserVault(options = {}) {
   const port = options.port ?? 4331
   const auditSink = options.audit ?? null
-  // Jeton de l’API d’administration : sans lui, un bot pourrait s’autoriser l’identifiant d’un autre.
+  // Admin API token: without it, a bot could authorize itself to use another bot's credential.
   const adminToken = Buffer.from(`Bearer ${options.adminToken || ''}`)
-  if (!options.adminToken) throw new Error('adminToken requis')
-  // Toute écriture exige en plus la session Hermes de l’utilisateur, vérifiée par la gateway : le jeton est un
-  // fichier, lisible par les bots qui tournent sous le même compte macOS ; cette session, ils ne l’ont pas.
+  if (!options.adminToken) throw new Error('adminToken required')
+  // Every write also requires the user's Hermes session, checked by the gateway: the token is a
+  // file, readable by the bots running under the same macOS account; they do not have this session.
   const verifyUser = options.verifyUser
-  if (typeof verifyUser !== 'function') throw new Error('verifyUser requis')
+  if (typeof verifyUser !== 'function') throw new Error('verifyUser required')
   const verified = new Map()
   async function requireUser(request) {
     const cookie = String(request.headers['x-hermes-cookie'] || '')
@@ -65,7 +65,7 @@ export function createBrowserVault(options = {}) {
   }
   const store = options.store ?? new KeychainStore()
   const requests = new BrowserVaultRequests()
-  // Un Chrome par équipe de bots : un client CDP par origine, choisi selon le bot qui fait la demande.
+  // One Chrome per bot team: one CDP client per origin, chosen by the bot making the request.
   const cdpClients = new Map()
   function cdpFor(bot) {
     const origin = (typeof options.cdpOriginFor === 'function' ? options.cdpOriginFor(bot) : '') || options.cdpOrigin || ''
@@ -81,9 +81,9 @@ export function createBrowserVault(options = {}) {
 
   function audit(action, bot, origin, result) {
     if (!auditSink) return
-    // Champs explicitement énumérés : jamais de corps de requête ni d’erreur CDP brute.
+    // Explicitly listed fields: never a request body or a raw CDP error.
     const line = JSON.stringify({ at: new Date().toISOString(), action, bot, origin: origin || null, result })
-    try { auditSink.append(line) } catch { /* le journal ne doit pas bloquer le coffre */ }
+    try { auditSink.append(line) } catch { /* the log must not block the vault */ }
   }
 
   function validateBot(value) {
@@ -99,7 +99,7 @@ export function createBrowserVault(options = {}) {
   async function command(action, body) {
     const bot = validateBot(body.bot)
     if (action === 'list') {
-      // Un bot ne voit que les identifiants qu’il a le droit d’utiliser.
+      // A bot only sees the credentials it is allowed to use.
       const entries = (await store.list(bot)).map(({ bots: _bots, ...entry }) => entry)
       audit(action, bot, null, 'ok')
       return { status: 'ok', entries }
@@ -113,7 +113,7 @@ export function createBrowserVault(options = {}) {
       if (action === 'fill') {
         const known = await store.find(origin)
         if (!known) throw new BrowserVaultError('origin_not_found', 404)
-        // Chaque identifiant est réservé aux bots choisis par l’utilisateur.
+        // Each credential is reserved for the bots the user chose.
         if (!botAllowed(known, bot)) throw new BrowserVaultError('bot_not_allowed', 403)
         const entry = await store.get(origin)
         const fields = await cdpFor(bot).fillCredentials(entry, targetId)
@@ -143,7 +143,7 @@ export function createBrowserVault(options = {}) {
     try {
       if (request.kind === 'save') {
         if (body.action !== 'save') throw new BrowserVaultError('invalid_action', 400)
-        // Le bot qui demande s’ajoute aux bots déjà autorisés pour ce site.
+        // The requesting bot is added to the bots already authorized for this site.
         const existing = await store.find(request.origin)
         const bots = existing ? [...existing.bots, request.bot] : [request.bot]
         await store.save(request.origin, body.identifier, body.password, bots)
@@ -156,7 +156,7 @@ export function createBrowserVault(options = {}) {
       }
       return { ok: true }
     } catch (error) {
-      // l’utilisateur peut corriger ou annuler ; le bot continue d’attendre.
+      // the user can fix or cancel; the bot keeps waiting.
       const failure = vaultError(error)
       if (requests.pending.has(id)) requests.setBusy(id, false)
       audit(request.kind, request.bot, request.origin, failure.code)
@@ -164,7 +164,7 @@ export function createBrowserVault(options = {}) {
     }
   }
 
-  /** API de l’app : métadonnées, ajout, changement, retrait. Le mot de passe n’en ressort jamais. */
+  /** App API: metadata, add, change, remove. The password never comes back out of it. */
   async function admin(method, pathname, request) {
     const given = Buffer.from(String(request.headers.authorization || ''))
     if (given.length !== adminToken.length || !timingSafeEqual(given, adminToken)) throw new BrowserVaultError('admin_forbidden', 403)

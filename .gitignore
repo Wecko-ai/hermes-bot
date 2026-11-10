@@ -9,14 +9,14 @@ release
 .build/
 *.tsbuildinfo
 
-# Sauvegardes locales
+# Local backups
 *.bak-claude-*
 
-# Tests et captures locales
+# Test output and local screenshots
 coverage/
 tests/screenshots/
 
-# Secrets et réglages locaux
+# Secrets and local settings
 .env
 .env.*
 !.env.example
@@ -28,5 +28,5 @@ tests/screenshots/
 # Local work folder
 .scratch/
 
-# Parties privées de l’installation (dépôt git à part, jamais publié)
+# Private parts of one installation (a separate git repository, never published)
 private/

@@ -67,7 +67,7 @@ class CdpConnection {
   }
 }
 
-// Repère les éléments sans lire leur valeur. Le tableau retourné reste un objet CDP distant.
+// Locates the elements without reading their value. The returned array stays a remote CDP object.
 const LOGIN_FIELDS = `(() => {
   const visible = (element) => element instanceof HTMLInputElement && !element.disabled && !element.readOnly && element.getClientRects().length > 0
   const inputs = [...document.querySelectorAll('input')].filter(visible)
@@ -159,7 +159,7 @@ export class BrowserVaultCdp {
   }
 
   async fill(connection, expectedOrigin, kind, values) {
-    // L’onglet peut avoir changé entre l’appel du bot et la réponse de l’utilisateur.
+    // The tab may have changed between the bot's call and the user's answer.
     const origin = await this.readOrigin(connection)
     if (origin !== expectedOrigin) throw new BrowserVaultError('origin_mismatch', 403)
 
@@ -170,7 +170,7 @@ export class BrowserVaultCdp {
     })
     if (fields.exceptionDetails || !fields.result?.objectId) throw new BrowserVaultError('fields_unavailable', 422)
 
-    // Deuxième contrôle, après la recherche des champs et juste avant l’injection.
+    // Second check, after the field lookup and right before the injection.
     if (await this.readOrigin(connection) !== expectedOrigin) throw new BrowserVaultError('origin_mismatch', 403)
     const result = await connection.call('Runtime.callFunctionOn', {
       objectId: fields.result.objectId,

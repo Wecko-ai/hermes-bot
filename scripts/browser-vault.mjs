@@ -17,7 +17,7 @@ try {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bot, ...(command === 'list' ? {} : { target }) }),
-    // Le serveur borne chaque appel CDP ; 60 s laisse finir les deux connexions d’un fill.
+    // The server caps each CDP call; 60 s lets the two connections of a fill finish.
     signal: AbortSignal.timeout(command === 'save' ? 360_000 : command === 'code' ? 180_000 : 60_000),
   })
   const result = await response.json()

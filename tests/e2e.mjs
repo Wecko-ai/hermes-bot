@@ -10,14 +10,14 @@ import { chromium } from 'playwright-core'
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const execFileAsync = promisify(execFile)
-// Fichier de session de test (cookies factices), dans le dossier temporaire.
+// Test session file (fake cookies), in the temp folder.
 const SESSION_FILE = process.env.HERMESBOT_TEST_SESSION_FILE || path.join(os.tmpdir(), 'hermesbot-e2e-session.json')
 const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
-// Coffre CDP : service à part, sur un trousseau jetable (jamais celui de session).
+// CDP vault: separate service, on a disposable keychain (never the session one).
 const BROWSER_VAULT_KEYCHAIN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}.keychain-db`)
 const BROWSER_VAULT_AUDIT = path.join(os.tmpdir(), 'hermesbot-e2e-browser-vault-audit.jsonl')
 const BROWSER_VAULT_TOKEN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}-vault.token`)
-const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (faux mot de passe du test)
+const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (fake test password)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
 rmSync(BROWSER_VAULT_AUDIT, { force: true })
@@ -32,8 +32,8 @@ try { owner = fs.readFileSync(process.env.BROWSER_TOUR_OWNER_FILE, 'utf8').trim(
 console.log(\`tour : \${owner} 2026-01-05T10:00:00+0000 pid=123 depuis 1 min\\nen file : 0\`)
 `, { mode: 0o700 })
 
-// Réglages de l’installation de test : jamais ceux de private/, bot ouvert au départ, fournisseur masqué,
-// modèle local proposé, et des animations factices (une image WebP de 1×1) pour deux bots.
+// Settings of the test install: never those of private/, bot open at start, hidden provider,
+// suggested local model, and fake animations (a 1×1 WebP image) for two bots.
 const TEST_DATA = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-e2e-'))
 const TEST_CONFIG = path.join(TEST_DATA, 'config.json')
 const TEST_ANIMATIONS = path.join(TEST_DATA, 'animations')
@@ -43,7 +43,7 @@ const TINY_WEBP = Buffer.from('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=='
 for (const slug of ['nova', 'orion']) for (const phase of ['working', 'done']) writeFileSync(path.join(TEST_ANIMATIONS, `${slug}-${phase}.webp`), TINY_WEBP)
 const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS }
 
-// Fichiers que la fausse gateway sert pour les balises MEDIA: de orion.
+// Files the fake gateway serves for orion's MEDIA: tags.
 const MEDIA_FIXTURES = {
   '/Users/test/visuels/slide 01.jpg': ['slide.jpg', 'image/jpeg'],
   '/Users/test/visuels/slide-02.png': ['slide.png', 'image/png'],
@@ -54,30 +54,36 @@ const MEDIA_FIXTURES = {
 }
 const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).length
 const mediaRequests = []
-// Statut imposé à /api/auth/me : 503 pour une gateway injoignable, 401 pour une session expirée.
+// Status forced on /api/auth/me: 503 for an unreachable gateway, 401 for an expired session.
 let forcedAuthStatus = 0
-// Chaque connexion reçoit un cookie numéroté ; expirer les sessions, c’est refuser les numéros passés.
+// Each login gets a numbered cookie; expiring sessions means refusing past numbers.
 let cookieCounter = 0
 let expiredBefore = 0
 let loginCalls = 0
 let loginRefused = false
 let logoutCalls = 0
 let sessionResumeCalls = 0
-// Demandes de la gateway vers l’app (coffre, accords) et réponses reçues.
+// Requests from the gateway to the app (vault, approvals) and replies received.
 const clientResponses = new Map()
 let capabilityCalls = 0
 let openRequests = []
-// Questions (`clarify`) : réponses reçues par la fausse gateway, et questions ouvertes rendues à la reprise.
+// Questions (`clarify`): answers received by the fake gateway, and open questions returned on resume.
 const promptAnswers = []
 const resumePrompts = {}
 let lastPromptText = ''
-// Tours vus par `session.active_list`, profil par profil : sans `profile`, la vraie gateway ne liste que `default`.
+// Turns seen by `session.active_list`, profile by profile: without `profile`, the real gateway only lists `default`.
 const liveStatusByProfile = {}
 const activeListParams = []
 let lastApiText
-// Lenteur simulée de la gateway, pour voir les écrans de chargement, chat local isolé.
-let profilesDelayMs = 0
-let resumeDelayMs = 0
+// Simulated gateway slowness, to see the loading screens, isolated local chat.
+// Held replies: the test keeps the answer to a method back until it has seen the loading state, then releases it.
+// A fixed delay raced with slow machines: the state could come and go while a screenshot was being taken.
+const heldReplies = new Map()
+const holdReplies = (method) => {
+  let release
+  heldReplies.set(method, new Promise((resolve) => { release = resolve }))
+  return () => { heldReplies.delete(method); release() }
+}
 let emptyRoster = false
 const localChatRequests = []
 let localModelMissing = false
@@ -85,7 +91,7 @@ const fileAttachCalls = []
 const steerCalls = []
 const queuedPrompts = []
 const interruptCalls = []
-// Tour « Test pilotage » : il ne finit que sur interruption (message prioritaire).
+// "Test pilotage" turn: it only ends on interruption (priority message).
 let pilotageTurn = null
 let steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
 const imageAttachCalls = []
@@ -105,7 +111,7 @@ function serveMediaFixture(request, response, url, route) {
   const data = readFileSync(new URL(`fixtures/${fixture[0]}`, import.meta.url))
   response.setHeader('Content-Type', fixture[1])
   response.setHeader('Accept-Ranges', 'bytes')
-  // La vraie route de téléchargement répond en pièce jointe : le serveur local doit l’afficher en ligne.
+  // The real download route answers as an attachment: the local server must display it inline.
   if (route === 'download') response.setHeader('Content-Disposition', `attachment; filename="${fixture[0]}"`)
   const match = /^bytes=(\d+)-(\d*)$/.exec(range)
   if (!match) {
@@ -153,7 +159,7 @@ const mock = http.createServer((request, response) => {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'unauthenticated' })) }
     return response.end(JSON.stringify({ ticket: 'test-ticket', ttl_seconds: 30 }))
   }
-  // Ollama simulé : même serveur, aucun modèle réel.
+  // Simulated Ollama: same server, no real model.
   if (url.pathname === '/api/tags' && request.method === 'GET') {
     return response.end(JSON.stringify({ models: localModelMissing ? [{ name: 'autre-local:1b' }] : [{ name: 'modele-local:7b' }, { name: 'autre-local:1b' }] }))
   }
@@ -230,8 +236,8 @@ wss.on('connection', (socket) => {
     const frame = JSON.parse(String(raw))
     if (!frame.id) return
     if (frame.method === undefined) { clientResponses.set(frame.id, frame); return }
-    const delayMs = frame.method === 'profiles.list' ? profilesDelayMs : frame.method === 'session.resume' ? resumeDelayMs : 0
-    const reply = (result) => { if (delayMs) setTimeout(() => send(socket, { jsonrpc: '2.0', id: frame.id, result }), delayMs); else send(socket, { jsonrpc: '2.0', id: frame.id, result }) }
+    const held = heldReplies.get(frame.method)
+    const reply = (result) => { const answer = () => send(socket, { jsonrpc: '2.0', id: frame.id, result }); if (held) void held.then(answer); else answer() }
     if (frame.method === 'client.capabilities') {
       if (frame.params.server_requests === true) capabilityCalls += 1
       return reply({ server_requests: [], declines_not_shown: true })
@@ -291,7 +297,7 @@ wss.on('connection', (socket) => {
             },
             { row_id: 36, role: 'user', content: 'Regarde avec @nova\n\n@file:attachments/ancien.pdf\n\n[@mentions resolved from the Bot Mode roster — the user is referring to: @nova = agent profile "nova" ("Nova"). If they want one of these agents contacted, compose your own message.]', timestamp: Date.now() - 38_000 },
             { row_id: 37, role: 'assistant', content: 'Les documents :\n\nMEDIA:/Users/test/docs/rapport.pdf\n\nMEDIA:/Users/test/docs/page.html\n\nMEDIA:/Users/test/docs/note.md', timestamp: Date.now() - 37_000 },
-            // Rendu cité par chemin, sans MEDIA:, comme le font certains bots.
+            // Output quoted by path, without MEDIA:, as some bots do.
             { row_id: 38, role: 'assistant', content: 'Rendu prêt, rien de publié.\n\n**Fichiers** (dossier `/Users/test/visuels/`)\n- Vidéo : `/Users/test/videos/video.mp4`, 57 s.\n- Planche : `slide-02.png`\n- Manquante : `absente.png`\n\n```\nls /Users/test/videos/exemple-cite.mp4\n```', timestamp: Date.now() - 36_000 },
           ] : []),
         ],
@@ -403,7 +409,7 @@ wss.on('connection', (socket) => {
     if (frame.method === 'session.interrupt') {
       interruptCalls.push(frame.params)
       reply({ execution_state: 'idle', execution_generation: 1 })
-      // Comme Hermes : le tour interrompu finit, puis le message prioritaire mis en file passe.
+      // Like Hermes: the interrupted turn ends, then the queued priority message goes through.
       if (pilotageTurn) {
         const { at } = pilotageTurn
         pilotageTurn = null
@@ -419,7 +425,7 @@ wss.on('connection', (socket) => {
       const sessionId = frame.params.session_id
       const at = (ms, type, payload) => setTimeout(() => send(socket, event(sessionId, type, payload)), ms)
       at(20, frame.method === 'clarify.respond' ? 'clarify.settled' : 'approval.settled', { prompt_id: frame.params.prompt_id, execution_generation: 1 })
-      // Comme la vraie gateway : une question à plusieurs volets arrive volet par volet.
+      // Like the real gateway: a multi-part question arrives part by part.
       if (frame.params.prompt_id === 'q1') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q2', execution_generation: 1, question: 'Que doit montrer l’image ?', choices: ['Personnage', 'Accessoires', 'Décor'], multi_select: true })
       if (frame.params.prompt_id === 'q2') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q3', execution_generation: 1, question: 'Une remarque ?', choices: [], multi_select: false })
       if (frame.params.prompt_id === 'q3') at(80, 'message.complete', { turn_id: 'turn-question', text: 'Images prêtes.', status: 'complete' })
@@ -435,7 +441,7 @@ mock.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (client) => wss.emit('connection', client, request))
 })
 
-// Chrome CDP simulé : aucune navigation réelle et aucun bot payant.
+// Simulated CDP Chrome: no real navigation and no paid bot.
 let cdpUrl = 'https://store.steampowered.com/login/'
 const cdpExpressions = []
 const cdpInjections = []
@@ -495,8 +501,8 @@ try {
   let vaultLog = ''
   vaultService.stdout.on('data', (data) => { vaultLog += data })
   vaultService.stderr.on('data', (data) => { vaultLog += data })
-  for (let attempt = 0; attempt < 50 && !vaultLog.includes('Coffre HermesBot'); attempt += 1) await delay(100)
-  if (!vaultLog.includes('Coffre HermesBot')) throw new Error(`Le coffre ne démarre pas : ${vaultLog}`)
+  for (let attempt = 0; attempt < 50 && !vaultLog.includes('HermesBot vault on'); attempt += 1) await delay(100)
+  if (!vaultLog.includes('HermesBot vault on')) throw new Error(`Le coffre ne démarre pas : ${vaultLog}`)
   child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
@@ -515,7 +521,7 @@ try {
   child.stderr.on('data', (data) => { serverLog += data })
   let ready = false
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) { ready = true; break } } catch { /* serveur pas prêt */ }
+    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) { ready = true; break } } catch { /* server not ready */ }
     await delay(100)
   }
   if (!ready) throw new Error(`Serveur de test indisponible: ${serverLog}`)
@@ -523,11 +529,11 @@ try {
   if ((await fetch('http://127.0.0.1:4332/api/health', { headers: { Origin: 'null' } })).status !== 403) throw new Error('Origin null accepté.')
 
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
-  // Interface en français : les textes cherchés plus bas sont ceux du catalogue français.
+  // French interface: the texts searched below come from the French catalog.
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'fr-FR' })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  // Chromium annonce la requête avant que la CSP la bloque : seul un refus CSP la retire de la liste.
+  // Chromium announces the request before the CSP blocks it: only a CSP refusal removes it from the list.
   page.on('request', (request) => { if (request.url().includes('evil.example')) remoteRequests.push(request.url()) })
   page.on('requestfailed', (request) => {
     if (request.failure()?.errorText === 'csp') remoteRequests.splice(remoteRequests.indexOf(request.url()), 1)
@@ -536,21 +542,21 @@ try {
   await page.locator('.login-card').waitFor({ timeout: 15_000 })
   await page.getByLabel('Identifiant Hermes').fill('test')
   await page.getByLabel('Mot de passe').fill('test')
-  // Gateway lente : écran d’attente, jamais « Aucun bot », puis squelette de la conversation.
-  profilesDelayMs = 900
-  resumeDelayMs = 900
+  // Slow gateway: waiting screen, never "Aucun bot", then the conversation skeleton.
+  const releaseProfiles = holdReplies('profiles.list')
+  const releaseResume = holdReplies('session.resume')
   await page.getByRole('button', { name: 'Ouvrir mes bots' }).click()
-  await page.locator('.app-loading').getByText('Chargement de tes bots…').waitFor({ timeout: 5_000 })
-  await page.locator('.loading-bar i').waitFor({ timeout: 1_000 })
+  await page.locator('.app-loading').getByText('Chargement de tes bots…').waitFor({ timeout: 15_000 })
+  await page.locator('.loading-bar i').waitFor({ timeout: 5_000 })
   if (await page.getByText('Aucun bot à afficher').count()) throw new Error('« Aucun bot » affiché pendant le chargement.')
   await page.screenshot({ path: `${SCREENSHOTS}loading-app.png` })
-  await page.locator('.chat-skeleton span').first().waitFor({ timeout: 5_000 })
-  await page.locator('.chat-loading').getByText('Ouverture de la conversation avec Nova…').waitFor({ timeout: 1_000 })
+  releaseProfiles()
+  await page.locator('.chat-skeleton span').first().waitFor({ timeout: 15_000 })
+  await page.locator('.chat-loading').getByText('Ouverture de la conversation avec Nova…').waitFor({ timeout: 5_000 })
   await page.screenshot({ path: `${SCREENSHOTS}loading-chat.png` })
   if (await page.getByText('Aucun bot à afficher').count()) throw new Error('« Aucun bot » affiché pendant le chargement.')
-  profilesDelayMs = 0
-  resumeDelayMs = 0
-  await page.locator('.chat-loading').waitFor({ state: 'detached', timeout: 5_000 })
+  releaseResume()
+  await page.locator('.chat-loading').waitFor({ state: 'detached', timeout: 15_000 })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await page.locator('.bot-row').count() !== 3) throw new Error('Le roster doit montrer Nova, Orion et le chat local, sans les profils système.')
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
@@ -558,18 +564,18 @@ try {
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
   await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 5_000 })
   await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 2_500 })
-  // Statut visible d’un coup d’œil : bandeau, ligne du roster, en-tête du chat.
+  // Status visible at a glance: banner, roster row, chat header.
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 2_000 })
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 2_000 })
   await page.locator('[data-bot=nova] .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 2_000 })
   await page.locator('.chat-identity.is-working .chat-status').getByText('Au travail').waitFor({ timeout: 2_000 })
-  await delay(600) // laisse finir les entrées animées : Chrome sans interface ne les avance qu’à la demande
+  await delay(600) // let the entrance animations finish: headless Chrome only advances them on demand
   await page.screenshot({ path: `${SCREENSHOTS}nova-working-ui.png` })
   await page.locator('.details-panel .live-avatar.is-done img.live-avatar-motion').waitFor({ timeout: 6_000 })
   await page.locator('[data-bot=nova] .bot-row-status.is-done').getByText('Terminé').waitFor({ timeout: 2_000 })
   await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 2_000 })
   await page.screenshot({ path: `${SCREENSHOTS}nova-done-ui.png` })
-  // Bot jamais ouvert, réveillé par un autre bot : seul son `session.active_list` le dit au travail.
+  // Bot never opened, woken by another bot: only its `session.active_list` reports it as working.
   liveStatusByProfile.orion = 'working'
   await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 9_000 })
   if (!activeListParams.some((params) => params.profile === 'orion')) throw new Error('session.active_list n’est pas demandé pour le profil du bot.')
@@ -587,7 +593,7 @@ try {
   if (await page.locator('.message-content img[src*="evil.example"]').count()) throw new Error('Image distante chargée.')
   if (await page.locator('.bot-row-preview').getByText('NOREPLY').count()) throw new Error('NOREPLY est visible dans le roster.')
 
-  // Médias MEDIA: : galerie, vidéo lue avec Range, repli, visionneuse, jamais de texte brut ni de file://.
+  // MEDIA: media: gallery, video played with Range, fallback, viewer, never raw text or file://.
   await page.locator('.media-group.is-grid img.media-image').nth(1).scrollIntoViewIfNeeded()
   await page.waitForFunction(() => {
     const images = [...document.querySelectorAll('.media-group.is-grid img.media-image')]
@@ -611,14 +617,14 @@ try {
   await page.keyboard.press('ArrowRight')
   await page.locator('.media-viewer-count').getByText('2 / 2').waitFor()
   await page.waitForFunction(() => { const image = document.querySelector('.media-viewer img'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 5_000 })
-  // Chrome sans interface ne produit d’image qu’à la demande : on attend la fin du fondu avant la capture.
+  // Headless Chrome only renders frames on demand: wait for the fade to end before the capture.
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.media-viewer')).opacity === '1', null, { timeout: 5_000 })
   await page.screenshot({ path: `${SCREENSHOTS}media-viewer.png` })
   await page.keyboard.press('Escape')
   await page.locator('.media-viewer').waitFor({ state: 'detached', timeout: 5_000 })
   await page.locator('.media-group.is-grid').scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SCREENSHOTS}media-chat.png` })
-  // Fichiers cités par chemin, sans MEDIA: : lisibles sous le message, jamais ceux d’un bloc de code.
+  // Files quoted by path, without MEDIA:: readable under the message, never those inside a code block.
   const cited = page.locator('.message-assistant .cited-files')
   await cited.locator('.cited-files-label').getByText('3 fichiers cités').waitFor({ timeout: 5_000 })
   await page.waitForFunction(() => {
@@ -637,7 +643,7 @@ try {
   await cited.evaluate((element) => element.scrollIntoView({ block: 'center' }))
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}cited-files.png` })
-  // Mentions : @ ouvre la liste, Entrée choisit, la note part au bot, l’utilisateur ne voit que son texte.
+  // Mentions: @ opens the list, Enter picks, the note goes to the bot, the user only sees their own text.
   const orionBox = page.getByRole('textbox', { name: 'Message à Orion' })
   await page.locator('.message-user').getByText('Regarde avec').waitFor({ timeout: 5_000 })
   await page.locator('.message-user').getByText('[Fichier : ancien.pdf]').waitFor({ timeout: 2_000 })
@@ -655,7 +661,7 @@ try {
   if (!lastPromptText.includes('@nova = agent profile "nova"') || !lastPromptText.includes('message_agent')) throw new Error('La note de mentions n’est pas partie.')
   if (await page.locator('.messages-scroll').getByText('Bot Mode roster').count()) throw new Error('La note de mentions est visible.')
 
-  // Glisser-déposer : zone visible, images et fichiers joints, fichier vide refusé.
+  // Drag and drop: visible zone, images and files attached, empty file refused.
   await page.evaluate(() => {
     const transfer = new DataTransfer()
     for (const [name, type, body] of [['film.mp4', 'video/mp4', 'video'], ['dossier.pdf', 'application/pdf', 'pdf'], ['vignette.png', 'image/png', 'png'], ['vide.txt', 'text/plain', '']]) transfer.items.add(new File([body], name, { type }))
@@ -671,7 +677,7 @@ try {
   await page.locator('.composer-image img[alt="vignette.png"]').waitFor({ timeout: 2_000 })
   await page.locator('.toast').getByText('vide.txt est vide').waitFor({ timeout: 2_000 })
   await page.locator('.toast button').click()
-  // Le brouillon et ses fichiers restent sur leur bot.
+  // The draft and its files stay on their bot.
   await orionBox.fill('Regarde ça')
   await page.locator('[data-bot=nova]').click()
   await page.locator('[data-bot=nova].is-selected').waitFor()
@@ -689,7 +695,7 @@ try {
   if (await page.locator('.messages-scroll').getByText('@file:').count()) throw new Error('Un @file: brut est visible.')
   await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 5_000 })
 
-  // Documents : onglets à côté du chat. HTML isolé, Markdown rendu, rien de distant ne se charge.
+  // Documents: tabs next to the chat. Isolated HTML, rendered Markdown, nothing remote loads.
   await page.locator('.media-document').getByText('rapport.pdf').scrollIntoViewIfNeeded()
   await page.locator('.media-document').getByText('rapport.pdf').click()
   await page.locator('.rail-tab.is-active').getByText('rapport.pdf').waitFor({ timeout: 3_000 })
@@ -714,7 +720,7 @@ try {
   await page.locator('.details-panel.has-document').waitFor({ state: 'detached', timeout: 2_000 })
   if (remoteRequests.length) throw new Error(`Chargement distant : ${remoteRequests[0]}`)
 
-  // /api/document : session obligatoire, trois formats seulement, HTML sans origine ni réseau.
+  // /api/document: session required, three formats only, HTML with no origin or network.
   const documentRoute = (file, profile = 'orion') => `http://127.0.0.1:4332/api/document?${new URLSearchParams({ profile, path: file })}`
   if ((await fetch(documentRoute('/Users/test/docs/note.md'))).status !== 401) throw new Error('/api/document sans session.')
   const documentHeaders = await page.evaluate(async (routes) => Promise.all(routes.map(async (route) => {
@@ -726,7 +732,7 @@ try {
   if (documentHeaders[1].type !== 'application/pdf' || documentHeaders[1].csp.includes('sandbox')) throw new Error(`PDF : ${JSON.stringify(documentHeaders[1])}`)
   if (documentHeaders[2].status !== 415 || documentHeaders[3].status !== 400) throw new Error(`Filtres /api/document : ${JSON.stringify(documentHeaders.slice(2))}`)
 
-  // Onglet Usage : compteurs de session.stats, répartition du contexte, historique du bot.
+  // Usage tab: session.stats counters, context breakdown, bot history.
   await page.getByRole('tab', { name: 'Usage' }).click()
   await page.locator('.usage-context').getByText('4 %').waitFor({ timeout: 5_000 })
   await page.locator('.usage-stat').filter({ hasText: 'Cache lu' }).first().getByText('90k').waitFor({ timeout: 2_000 })
@@ -739,7 +745,7 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}usage-tab.png` })
   await page.getByRole('tab', { name: 'Routines' }).click()
 
-  // Modes : BRAIN et PLAN ajoutent une consigne pour ce tour seulement, EXEC n’ajoute rien.
+  // Modes: BRAIN and PLAN add an instruction for this turn only, EXEC adds nothing.
   const modeRadio = (name) => page.getByRole('radio', { name, exact: true })
   const sendInMode = async (text) => {
     await orionBox.fill(text)
@@ -769,7 +775,7 @@ try {
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}modes.png` })
 
-  // Pendant le travail : Attendre (défaut) garde le brouillon, File l’envoie après le tour, Prio interrompt le bot.
+  // While working: Attendre (default) keeps the draft, File sends it after the turn, Prio interrupts the bot.
   await orionBox.fill('Test pilotage')
   await orionBox.press('Enter')
   await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 3_000 })
@@ -781,7 +787,7 @@ try {
   if (await orionBox.inputValue() !== 'Fais plutôt la version courte') throw new Error('Attendre doit garder le brouillon dans le champ.')
   if (queuedPrompts.length || steerCalls.length || await page.locator('.message-user').getByText('Fais plutôt la version courte').count()) throw new Error('Attendre ne doit rien envoyer.')
   if (await page.getByRole('button', { name: 'Mettre en file' }).count()) throw new Error('Pas de bouton d’envoi en mode Attendre.')
-  // Le brouillon survit au changement de chat et à la fermeture de l’app (stockage local).
+  // The draft survives switching chats and closing the app (local storage).
   await page.locator('[data-bot=nova]').click()
   await page.locator('[data-bot=nova].is-selected').waitFor()
   if (await page.getByRole('textbox', { name: 'Message à Nova' }).inputValue()) throw new Error('Le brouillon de Orion est passé chez Nova.')
@@ -789,7 +795,7 @@ try {
   await page.locator('[data-bot=orion].is-selected').waitFor()
   if (await orionBox.inputValue() !== 'Fais plutôt la version courte') throw new Error('Brouillon perdu au retour sur le bot.')
   if (!(await page.evaluate(() => localStorage.getItem('hermesbot-drafts') || '')).includes('Fais plutôt la version courte')) throw new Error('Le brouillon n’est pas gardé pour la prochaine ouverture.')
-  // File : part avec `queued`, sans consigne, et reste visible comme « En file ».
+  // File: goes out with `queued`, no instruction, and stays visible as "En file".
   await delivery('File').click()
   await orionBox.press('Enter')
   for (let attempt = 0; attempt < 40 && !queuedPrompts.length; attempt += 1) await delay(25)
@@ -800,7 +806,7 @@ try {
   if ((await page.evaluate(() => localStorage.getItem('hermesbot-drafts') || '')).includes('Fais plutôt la version courte')) throw new Error('Le brouillon envoyé reste stocké.')
   if (interruptCalls.length) throw new Error('File ne doit pas interrompre le bot.')
   await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 1_000 })
-  // Prio : même file avec consigne de reprise, puis interruption du tour en cours.
+  // Prio: same queue with a resume instruction, then interrupts the current turn.
   await delivery('Prio').click()
   await orionBox.fill('Et ajoute le tableau')
   await delay(250)
@@ -813,7 +819,7 @@ try {
   await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
   await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ state: 'detached', timeout: 3_000 })
 
-  // Question du bot en plein tour (outil clarify) : carte au-dessus du champ, « Attend ta réponse » partout.
+  // Bot question mid-turn (clarify tool): card above the field, "Attend ta réponse" everywhere.
   liveStatusByProfile.orion = 'waiting'
   await orionBox.fill('Test question')
   await orionBox.press('Enter')
@@ -840,7 +846,7 @@ try {
     'clarify.respond|orion|chat-orion|1|q2|["Personnage","Décor"]',
     'clarify.respond|orion|chat-orion|1|q3|Fond clair',
   ])) throw new Error(`Réponses aux questions : ${JSON.stringify(sentAnswers)}`)
-  // Une question restée ouverte revient à la reprise de la session.
+  // A question left open comes back when the session resumes.
   resumePrompts['chat-nova'] = [{ kind: 'clarify', prompt_id: 'q-reprise', execution_generation: 1, question: 'On continue ?', choices: ['Oui', 'Non'], multi_select: false }]
   await page.locator('[data-bot=nova]').click()
   await promptCard.getByText('On continue ?').waitFor({ timeout: 5_000 })
@@ -852,7 +858,7 @@ try {
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
 
-  // Raccourcis : palette ⌘K, bot suivant Alt+↓, citation ⌘L, recherche ⌘F.
+  // Shortcuts: palette ⌘K, next bot Alt+↓, quote ⌘L, search ⌘F.
   await page.keyboard.press('Meta+k')
   await page.getByRole('textbox', { name: 'Chercher un bot' }).fill('nov')
   await page.locator('.palette-results').getByText('Nova', { exact: true }).waitFor({ timeout: 2_000 })
@@ -869,7 +875,7 @@ try {
   await page.getByRole('textbox', { name: 'Texte à rechercher' }).waitFor({ timeout: 2_000 })
   await page.getByRole('button', { name: 'Fermer la recherche' }).click()
 
-  // Onglet Médias : ce que le bot a envoyé, documents compris, hors exemples de code.
+  // Media tab: what the bot sent, documents included, excluding code examples.
   await page.getByRole('tab', { name: 'Médias' }).click()
   await page.locator('.media-library .media-document').getByText('note.md').waitFor({ timeout: 3_000 })
   await page.locator('.media-library img.media-image').first().waitFor({ timeout: 3_000 })
@@ -879,7 +885,7 @@ try {
   await page.getByRole('button', { name: 'Fermer rapport.pdf' }).click()
   await page.getByRole('tab', { name: 'Routines' }).click()
 
-  // Thème sombre : même verre, capture de contrôle, puis retour au clair.
+  // Dark theme: same glass, control capture, then back to light.
   await page.getByRole('button', { name: 'Passer au thème sombre' }).click()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
   await delay(400)
@@ -887,18 +893,18 @@ try {
   await page.getByRole('button', { name: 'Passer au thème clair' }).click()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
 
-  // Tour en arrière-plan d’un bot déjà ouvert : « Au travail » tout de suite, puis « Terminé ».
+  // Background turn of an already open bot: "Au travail" right away, then "Terminé".
   for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: 'turn-fond' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 3_000 })
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 3_000 })
   for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: 'turn-fond', text: 'Travail de fond terminé.', status: 'complete' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
 
-  // Résumé du travail : visible sur la ligne d’un bot en arrière-plan, sans non-lu avant la fin du tour.
+  // Work summary: visible on the row of a background bot, with no unread before the turn ends.
   const novaBadge = page.locator('[data-bot=nova] .unread-badge')
   const unreadOf = async () => Number((await novaBadge.count()) ? await novaBadge.innerText() : 0)
   const unreadBeforeWork = await unreadOf()
-  // Comme la vraie gateway pendant ce tour : sinon la lecture des tours (6 s) le dit fini avant le résumé (4 s).
+  // Like the real gateway during this turn: otherwise the turn polling (6 s) reports it done before the summary (4 s).
   liveStatusByProfile.nova = 'working'
   for (const client of wss.clients) {
     send(client, event('chat-nova', 'message.start', { turn_id: 'turn-resume' }))
@@ -911,7 +917,7 @@ try {
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   if (await unreadOf() !== unreadBeforeWork + 1) throw new Error('La fin du tour doit compter un seul non-lu.')
 
-  // Sur le bot ouvert : une étape dans l’en-tête et le panneau, jamais la commande d’un terminal.
+  // On the open bot: a step in the header and the panel, never a terminal command.
   for (const client of wss.clients) {
     send(client, event('chat-orion', 'message.start', { turn_id: 'turn-etape' }))
     send(client, event('chat-orion', 'tool.start', { tool_id: 'a', name: 'read_file', context: '/tmp/dossier/plan.md' }))
@@ -924,7 +930,7 @@ try {
   for (const client of wss.clients) send(client, event('chat-orion', 'message.complete', { turn_id: 'turn-etape', text: 'Étape terminée.', status: 'complete' }))
   await page.locator('.work-card').waitFor({ state: 'detached', timeout: 3_000 })
 
-  // Coffre et accords : la gateway demande, l’app répond avec le même id, rien de secret ne reste.
+  // Vault and approvals: the gateway asks, the app answers with the same id, nothing secret remains.
   if (capabilityCalls === 0) throw new Error('client.capabilities n’a pas été annoncé.')
   const sheet = page.locator('.request-sheet')
   const ask = (id, method, params = {}) => { for (const client of wss.clients) send(client, { jsonrpc: '2.0', id, method, params: { session_id: 'chat-orion', ...params } }) }
@@ -963,7 +969,7 @@ try {
   if ((await answerOf('srq-non-gere')).error?.code !== -32601) throw new Error('Une demande non gérée doit être refusée tout de suite.')
   ask('srq-fenetre', 'terminal.read')
   if ((await answerOf('srq-fenetre')).error?.code !== 4404) throw new Error('Une demande de fenêtre doit répondre 4404.')
-  // Une demande restée ouverte revient à la reprise de la session.
+  // A request left open comes back when the session resumes.
   openRequests = [{ id: 'srq-reprise', method: 'vault.code', params: { session_id: 'chat-nova', site: 'reprise.test' } }]
   await page.locator('[data-bot=nova]').click()
   await sheet.getByText('Code de vérification pour reprise.test').waitFor({ timeout: 5_000 })
@@ -975,7 +981,7 @@ try {
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
 
-  // Coffre CDP : API bots sur 4333, fenêtre locale sur 4332, gateway jamais destinataire.
+  // CDP vault: bots API on 4333, local window on 4332, gateway never the recipient.
   const vaultCall = async (action) => {
     const response = await fetch(`http://127.0.0.1:4333/v1/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet-steam' }),
@@ -1002,7 +1008,7 @@ try {
   await browserSheet.waitFor({ state: 'detached', timeout: 2_000 })
   const listedBrowser = await vaultCall('list')
   if (listedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || listedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('list du coffre CDP incorrect.')
-  // Rangé dans le trousseau (jetable ici), réservé au bot qui l’a demandé.
+  // Stored in the keychain (disposable here), reserved for the bot that asked for it.
   const keychainDump = await execFileAsync('/usr/bin/security', ['dump-keychain', BROWSER_VAULT_KEYCHAIN])
   if (!keychainDump.stdout.includes('HermesBot') || !keychainDump.stdout.includes('"crtr"<uint32>="HBot"') || keychainDump.stdout.includes(BROWSER_SECRET)) throw new Error('Identifiant absent du trousseau.')
   const otherBot = await fetch('http://127.0.0.1:4333/v1/fill', {
@@ -1013,7 +1019,7 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova' }),
   })
   if ((await otherList.json()).entries?.length !== 0) throw new Error('Un bot voit les identifiants réservés à un autre.')
-  // Un bot ne peut pas s’autoriser lui-même par l’API de l’app : jeton exigé, fichier en 0600.
+  // A bot cannot authorize itself through the app API: token required, file in 0600.
   const selfGrant = (headers) => fetch('http://127.0.0.1:4333/admin/v1/entries', {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({ origin: 'https://store.steampowered.com', identifier: 'steam-test', bots: ['*'] }),
@@ -1023,7 +1029,7 @@ try {
     if (refused.status !== 403 || (await refused.json()).error !== 'admin_forbidden') throw new Error('API d’administration du coffre ouverte sans jeton.')
   }
   if ((await fetch('http://127.0.0.1:4333/admin/v1/entries')).status !== 403) throw new Error('Liste d’administration lisible sans jeton.')
-  // Même avec le jeton (lisible par un bot du même compte), une écriture exige la session Hermes de l’utilisateur.
+  // Even with the token (readable by a bot of the same account), a write requires the user's Hermes session.
   const stolenToken = { Authorization: `Bearer ${readFileSync(BROWSER_VAULT_TOKEN, 'utf8').trim()}` }
   for (const headers of [stolenToken, { ...stolenToken, 'X-Hermes-Cookie': 'hermes_session=faux' }]) {
     const refused = await selfGrant(headers)
@@ -1040,7 +1046,7 @@ try {
   })
   if (JSON.parse(cliFilled.stdout).status !== 'filled' || cdpInjections.at(-1).target !== 'onglet-steam') throw new Error('CLI fill ne respecte pas le targetId.')
 
-  // Rechargement simulé : seuls les arguments CDP portent le secret, jamais le JavaScript évalué.
+  // Simulated reload: only the CDP arguments carry the secret, never the evaluated JavaScript.
   cdpUrl = 'https://store.steampowered.com/login/?reloaded=1'
   const filledBrowser = await vaultCall('fill')
   if (filledBrowser.httpStatus !== 200 || filledBrowser.body.fields?.join() !== 'identifier,password') throw new Error(`Remplissage CDP refusé: ${filledBrowser.raw}`)
@@ -1073,7 +1079,7 @@ try {
   await browserSheet.getByRole('button', { name: 'Plus tard' }).click()
   if ((await cancellingBrowser).body.status !== 'cancelled') throw new Error('Annulation du coffre CDP incorrecte.')
 
-  // Réglages > Coffre : l’identifiant apparaît sans mot de passe, Nova y est autorisé en plus de Orion.
+  // Settings > Vault: the identifier shows without a password, Nova is authorized in addition to Orion.
   await page.keyboard.press('Meta+,')
   await page.locator('.settings-nav').getByRole('button', { name: 'Coffre' }).click()
   const vaultEntry = page.locator('.vault-entry').filter({ hasText: 'store.steampowered.com' })
@@ -1088,7 +1094,7 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
   })
   if (allowedFill.status !== 200 || cdpInjections.at(-1).values.join() !== `steam-test,${BROWSER_SECRET}`) throw new Error('Mot de passe perdu après le changement de bots.')
-  // Ajout direct depuis les réglages, puis retrait.
+  // Direct add from the settings, then removal.
   await page.locator('.vault-tools').getByRole('button', { name: 'Ajouter un identifiant' }).click()
   await page.locator('.vault-form').getByLabel('Site').fill('https://exemple.com/connexion')
   await page.locator('.vault-form').getByLabel('Identifiant').fill('ajout-test')
@@ -1109,7 +1115,7 @@ try {
   if (JSON.stringify([...clientResponses.values()]).includes(BROWSER_SECRET) || JSON.stringify([...clientResponses.values()]).includes(BROWSER_CODE)) throw new Error('Secret CDP passé par la gateway.')
   if (await page.getByText(BROWSER_SECRET).count() || await page.evaluate((secret) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(secret), BROWSER_SECRET)) throw new Error('Secret CDP conservé dans le navigateur.')
 
-  // Carte de mail : corrigée à la main, l’envoi au bot porte ce qui a été validé et son empreinte.
+  // Mail card: edited by hand, what is sent to the bot carries what was approved and its digest.
   const askMail = async (id) => {
     await page.getByRole('textbox', { name: 'Message à Orion' }).fill(`Test mail ${id}`)
     await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
@@ -1128,7 +1134,7 @@ try {
   await card.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SCREENSHOTS}mail-card.png` })
   const promptsBeforeMail = promptCalls
-  // Un mail validé part même si le composer est en PLAN : la consigne « ne rien envoyer » ne doit pas le suivre.
+  // An approved mail goes out even if the composer is in PLAN: the "send nothing" instruction must not follow it.
   await page.getByRole('radio', { name: 'PLAN', exact: true }).click()
   await card.getByRole('button', { name: 'Envoyer' }).click()
   for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeMail; attempt += 1) await delay(50)
@@ -1142,8 +1148,8 @@ try {
   await card.waitFor({ state: 'detached', timeout: 3_000 })
   await page.locator('.message-assistant .mail-note').getByText('Mail approuvé : Re: Votre demande').waitFor({ timeout: 2_000 })
   await page.locator('.message-user .mail-note').getByText('Re: Votre demande, à autre@exemple.test').waitFor({ timeout: 2_000 })
-  await delay(500) // le tour simulé se termine : l’envoi suivant serait ignoré tant qu’il tourne
-  // Ignorer : aucun tour lancé, choix conservé après rechargement du fil.
+  await delay(500) // the simulated turn ends: the next send would be ignored while it runs
+  // Ignore: no turn started, choice kept after the thread reloads.
   await askMail('m2')
   await card.waitFor({ timeout: 5_000 })
   const promptsBeforeDiscard = promptCalls
@@ -1152,7 +1158,7 @@ try {
   if (promptCalls !== promptsBeforeDiscard) throw new Error('Ignorer ne doit lancer aucun tour.')
   if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('hermes-mail').count()) throw new Error('Le roster montre le bloc brut.')
 
-  // Une vidéo lancée pendant le streaming continue quand le message se termine : même élément, même lecture.
+  // A video started during streaming keeps playing when the message ends: same element, same playback.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test média en direct')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   await page.locator('.message.is-streaming video.media-video').waitFor({ timeout: 5_000 })
@@ -1167,7 +1173,7 @@ try {
   if (liveVideo.marker !== 'pendant') throw new Error('La vidéo a été recréée à la fin du streaming.')
   if (liveVideo.paused) throw new Error('La vidéo s’est arrêtée à la fin du streaming.')
 
-  // Un NOREPLY écrit lettre par lettre n’apparaît jamais dans le fil, même pendant le streaming.
+  // A NOREPLY typed letter by letter never appears in the thread, even during streaming.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test silence')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   for (let probe = 0; probe < 20; probe += 1) {
@@ -1178,7 +1184,7 @@ try {
   }
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
 
-  // /api/media côté HTTP : session obligatoire, extensions et chemins filtrés, Range exact, en-têtes durs.
+  // /api/media over HTTP: session required, extensions and paths filtered, exact Range, strict headers.
   const sessionCookie = (await page.context().cookies('http://127.0.0.1:4332')).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
   const media = (query, headers = {}) => fetch(`http://127.0.0.1:4332/api/media?${new URLSearchParams(query)}`, { headers: { Cookie: sessionCookie, ...headers } })
   if ((await fetch('http://127.0.0.1:4332/api/media?profile=orion&path=%2FUsers%2Ftest%2Fvideos%2Fvideo.mp4')).status !== 401) throw new Error('/api/media répond sans session.')
@@ -1210,14 +1216,14 @@ try {
     || !/sandbox/.test(image.headers.get('content-security-policy') || '')
     || image.headers.get('x-content-type-options') !== 'nosniff') throw new Error('En-têtes de l’image relayée incorrects.')
   await page.getByRole('tab', { name: /Activité/ }).click()
-  // L’historique et « Test silence » : deux silences, tous deux rangés dans Activité.
+  // History and "Test silence": two silences, both filed under Activité.
   await page.locator('.activity-row').getByText('NOREPLY').first().waitFor()
   await page.locator('.activity-row').getByText('Background process').first().waitFor()
   await page.locator('.activity-row').getByText('Délégation terminée').first().waitFor()
   if (await page.locator('.activity-row').getByText('demande entre bots').count()) throw new Error('Un message entre bots est resté dans Activité.')
   await page.getByRole('tab', { name: /Routines/ }).click()
 
-  // Messages entre bots : « Nova messaged Orion », « Orion messaged Nova », « Nova replied to Orion ».
+  // Messages between bots: "Nova messaged Orion", "Orion messaged Nova", "Nova replied to Orion".
   const notes = page.locator('.messages-scroll .agent-note')
   await notes.first().waitFor({ timeout: 5_000 })
   const noteLines = await notes.locator('.agent-note-line').evaluateAll((lines) => lines.map((line) => [...line.children].filter((child) => child.tagName !== 'TIME').map((child) => child.textContent.trim()).join(' ')))
@@ -1232,7 +1238,7 @@ try {
   await notes.filter({ hasText: 'Nova replied to Orion' }).getByRole('button', { name: 'replied to' }).click()
   await page.locator('.agent-note-body').getByText('Plan relu, OK écrit.').waitFor()
   await page.locator('.agent-note-body .cited-files img.media-image').waitFor({ timeout: 5_000 })
-  // Un geste vers le haut décroche le fil du bas, comme l’utilisateur qui remonte.
+  // An upward gesture detaches the thread from the bottom, like a user scrolling up.
   await page.locator('.messages-scroll').hover()
   await page.mouse.wheel(0, -200)
   await notes.first().evaluate((element) => element.scrollIntoView({ block: 'start' }))
@@ -1240,7 +1246,7 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}agent-messages.png` })
   await sentNote.getByRole('button', { name: 'messaged' }).click()
   await sentNote.locator('.agent-note-body').waitFor({ state: 'detached' })
-  // En direct : un appel `message_agent`, puis un tour lancé par le message d’un autre bot.
+  // Live: a `message_agent` call, then a turn started by another bot's message.
   const notesBefore = await notes.count()
   for (const client of wss.clients) {
     send(client, event('chat-orion', 'tool.start', { tool_id: 'tool-live-dm', name: 'message_agent', args: { target: 'nova', message: 'Envoi en direct' } }))
@@ -1294,12 +1300,12 @@ try {
   if (await page.locator('.model-option[data-model="modele-interdit"]').count()) throw new Error('Fournisseur non connecté proposé.')
   if (await page.locator('.model-option[data-model="hidden-model"]').count()) throw new Error('Un fournisseur masqué par les réglages doit être retiré du sélecteur.')
   page.once('dialog', (dialog) => dialog.accept())
-  // Le groupe du modèle actif est ouvert, les autres sont pliés ; le pliage reste d'une ouverture à l'autre.
+  // The active model's group is open, the others are collapsed; collapsing persists between launches.
   const kimiGroup = page.locator('.model-group', { hasText: 'Kimi' })
   const anthropicGroup = page.locator('.model-group', { hasText: 'Anthropic' })
   if (!await anthropicGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Le groupe du modèle actif doit être ouvert.')
   if (await kimiGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Les autres fournisseurs doivent être pliés.')
-  // Les vrais logos passent la CSP de l'app ; tous les serveurs locaux forment un seul groupe sans logo de marque.
+  // The real logos pass the app's CSP; all local servers form a single group with no brand logo.
   await page.waitForFunction(() => {
     const logos = [...document.querySelectorAll('.model-group-tile.has-logo img')]
     return logos.length === 2 && logos.every((logo) => logo.complete && logo.naturalWidth > 0)
@@ -1336,7 +1342,7 @@ try {
   if (lastMutation?.payload?.model !== 'claude-sonnet-5-5' || lastMutation?.payload?.provider !== 'anthropic' || lastMutation?.payload?.confirm !== 'confirm-test') throw new Error(`Mutation inattendue: ${JSON.stringify(lastMutation)}`)
   if (!lastMutation?.request_id || lastMutation.request_id === modelMutations[0].request_id) throw new Error('La confirmation doit avoir une nouvelle request_id.')
 
-  // Réglages : thème, texte, touche d’envoi, puis un modèle masqué quitte le sélecteur et revient d’un clic.
+  // Settings: theme, text, send key, then a hidden model leaves the picker and comes back in one click.
   const openSettings = async () => {
     await page.getByRole('button', { name: 'Réglages', exact: true }).click()
     await settingsDialog.waitFor({ timeout: 3_000 })
@@ -1397,7 +1403,7 @@ try {
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
-  // Un vrai geste de l’utilisateur (molette vers le haut) décroche le fil ; un défilement programmé ne le ferait pas.
+  // A real user gesture (wheel up) detaches the thread; a programmatic scroll would not.
   const scrollBox = await page.locator('.messages-scroll').boundingBox()
   await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2)
   await page.mouse.wheel(0, -40_000)
@@ -1414,7 +1420,7 @@ try {
   const jumpedScrollTop = await page.locator('.messages-scroll').evaluate((element) => element.scrollTop)
   if (jumpedScrollTop === 0) throw new Error('Le bouton Nouveaux messages ne descend pas.')
 
-  // Coupure brutale de la gateway (code 1006) : le serveur doit survivre, puis l’envoi doit reprendre.
+  // Abrupt gateway cut (code 1006): the server must survive, then sending must resume.
   for (const client of wss.clients) client.terminate()
   await delay(500)
   if (!(await fetch('http://127.0.0.1:4332/api/health')).ok) throw new Error('Le serveur est tombé sur une fermeture 1006.')
@@ -1426,7 +1432,7 @@ try {
   if (promptCalls === promptsBeforeReconnect) throw new Error('Envoi perdu après reconnexion.')
   await delay(400)
 
-  // Bouton de reconnexion : statut visible, retour sans recharger la page, chat ouvert réabonné.
+  // Reconnect button: visible status, recovery without reloading the page, open chat resubscribed.
   const refresh = page.getByRole('button', { name: 'Reconnecter Hermes' })
   const connection = page.locator('.connection-label')
   for (const client of wss.clients) client.terminate()
@@ -1436,14 +1442,14 @@ try {
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
   for (let attempt = 0; attempt < 30 && sessionResumeCalls === resumesBeforeRefresh; attempt += 1) await delay(100)
   if (sessionResumeCalls === resumesBeforeRefresh) throw new Error('Le chat ouvert n’a pas été réabonné après reconnexion.')
-  await refresh.click() // socket encore ouvert : doit être remplacé, pas doublé
+  await refresh.click() // socket still open: must be replaced, not doubled
   await delay(500)
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
   if (wss.clients.size !== 1) throw new Error(`Sockets ouverts après reconnexion : ${wss.clients.size} au lieu de 1.`)
   for (const client of wss.clients) send(client, event('chat-orion', 'message.complete', { turn_id: 'turn-retour', text: 'Reçu après reconnexion.', status: 'complete' }))
   await page.locator('.message-assistant').getByText('Reçu après reconnexion.').waitFor({ timeout: 3_000 })
 
-  // Gateway injoignable : message clair, puis retour au clic suivant.
+  // Unreachable gateway: clear message, then recovery on the next click.
   forcedAuthStatus = 503
   await refresh.click()
   await page.locator('.toast').getByText('Hermes ne répond pas').waitFor({ timeout: 5_000 })
@@ -1455,17 +1461,17 @@ try {
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
   if (await page.locator('.toast').count()) throw new Error('Le message d’erreur reste affiché après reconnexion.')
 
-  // Identifiants gardés côté serveur, jamais dans le navigateur.
+  // Credentials kept server-side, never in the browser.
   if (JSON.parse(readFileSync(SAVED_LOGIN_FILE, 'utf8')).username !== 'test') throw new Error('Identifiants non enregistrés.')
   if (await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage, cookie: document.cookie }).includes('"password"'))) throw new Error('Mot de passe présent dans le navigateur.')
 
-  // Un autre processus local, même avec le bon Origin, n’obtient rien sans cookie de session.
+  // Another local process, even with the right Origin, gets nothing without a session cookie.
   const loginsBeforeForged = loginCalls
   const forged = await fetch('http://127.0.0.1:4332/api/auth/restore', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332' } })
   await forged.arrayBuffer()
   if (forged.status !== 404 || forged.headers.get('set-cookie') || loginCalls !== loginsBeforeForged) throw new Error(`Restauration sans cookie acceptée : HTTP ${forged.status}.`)
 
-  // Session Hermes expirée : reconnexion silencieuse avec les identifiants gardés.
+  // Expired Hermes session: silent reconnection with the stored credentials.
   const loginsBeforeExpiry = loginCalls
   expiredBefore = cookieCounter
   await refresh.click()
@@ -1474,7 +1480,7 @@ try {
   if (loginCalls !== loginsBeforeExpiry + 1) throw new Error(`Reconnexion silencieuse : ${loginCalls - loginsBeforeExpiry} connexions au lieu de 1.`)
   if (await page.locator('.login-card').count()) throw new Error('Écran de connexion affiché malgré les identifiants gardés.')
 
-  // Mot de passe changé : identifiants oubliés, retour à l’écran, puis reprise du même bot.
+  // Password changed: credentials forgotten, back to the screen, then the same bot resumes.
   expiredBefore = cookieCounter
   loginRefused = true
   await refresh.click()
@@ -1489,7 +1495,7 @@ try {
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
   if (await page.locator('.toast').count()) throw new Error('Le message de session expirée reste affiché après connexion.')
 
-  // Classement : sections par groupes, liste unique par activité avec le bot le plus récent en tête.
+  // Ordering: sections by group, single list by activity with the most recent bot first.
   const rosterOrder = () => page.locator('.bot-row:not([data-bot^="local:"])').evaluateAll((rows) => rows.map((row) => row.dataset.bot).join())
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Ordre par groupes : ${await rosterOrder()}`)
@@ -1517,7 +1523,7 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) break } catch { /* serveur pas prêt */ }
+    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) break } catch { /* server not ready */ }
     await delay(100)
   }
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -1526,7 +1532,7 @@ try {
   const persistedBrowser = await vaultCall('list')
   if (persistedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || persistedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le coffre CDP ne survit pas au redémarrage.')
 
-  // Propriétaire du Chrome partagé : la route et le roster le marquent au travail, même sans tour Hermes.
+  // Owner of the shared Chrome: the route and the roster mark it as working, even without a Hermes turn.
   if ((await fetch('http://127.0.0.1:4332/api/browser-turn')).status !== 401) throw new Error('Le propriétaire du Chrome est lisible sans session.')
   writeFileSync(BROWSER_TOUR_OWNER_FILE, 'orion')
   const browserTurn = await page.evaluate(async () => (await fetch('/api/browser-turn')).json())
@@ -1536,7 +1542,7 @@ try {
   await page.locator('[data-bot=orion]').getByText('Pilote le Chrome partagé').waitFor()
   rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
 
-  // Chat local isolé : modèle installé seulement, aucun outil, aucune requête à Hermes.
+  // Isolated local chat: installed model only, no tools, no request to Hermes.
   if ((await fetch('http://127.0.0.1:4332/api/local-chat', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
   await page.locator('[data-bot="local:ollama"]').click()
   const localBox = page.getByRole('textbox', { name: 'Message à Modèle local' })
@@ -1559,13 +1565,13 @@ try {
   const requestsBeforeUnknown = localChatRequests.length
   if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe', messages: [{ role: 'user', content: 'x' }] }) })).status) !== 404 || localChatRequests.length !== requestsBeforeUnknown) throw new Error('Un modèle non installé a été demandé à Ollama.')
   if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: 'x' }] }) })).status) !== 400) throw new Error('Rôle system accepté.')
-  // Aller sur un autre bot garde la conversation locale.
+  // Switching to another bot keeps the local conversation.
   await page.locator('[data-bot=nova]').click()
   await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
   await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 3_000 })
   await page.locator('[data-bot="local:ollama"]').click()
   await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 2_000 })
-  // Modèle absent : message clair, pas de plantage.
+  // Missing model: clear message, no crash.
   localModelMissing = true
   await localBox.fill('Encore')
   await localBox.press('Enter')
@@ -1576,19 +1582,19 @@ try {
   if (await page.locator('.local-chat .message-assistant').count()) throw new Error('Conversation locale non effacée.')
   await page.locator('[data-bot=nova]').click()
 
-  // Une liste vraiment vide garde son message, une fois le chargement fini.
+  // A truly empty list keeps its message once loading is done.
   emptyRoster = true
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByText('Aucun bot à afficher.').waitFor({ timeout: 15_000 })
   emptyRoster = false
 
-  // Lancement avec une session Hermes expirée : pas d’écran de connexion.
+  // Launch with an expired Hermes session: no login screen.
   expiredBefore = cookieCounter
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await page.locator('.login-card').count()) throw new Error('Écran de connexion au lancement malgré les identifiants gardés.')
 
-  // Se déconnecter oublie les identifiants ; une connexion sans la case n’enregistre rien.
+  // Signing out forgets the credentials; a login without the checkbox stores nothing.
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'Se déconnecter' }).click()
   await page.locator('.login-card').waitFor({ timeout: 10_000 })
@@ -1600,19 +1606,27 @@ try {
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (existsSync(SAVED_LOGIN_FILE)) throw new Error('Case décochée : rien ne doit être enregistré.')
 
-  // Mode démo : plusieurs états à la fois (travail, terminé, attente), captures claire et sombre.
+  // Demo mode: several states at once (working, done, waiting), light and dark captures.
   await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
   await page.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
   await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
   await page.locator('[data-bot=orion] img.live-avatar-motion').waitFor()
+  await page.locator('.section-heading', { hasText: 'Atelier' }).first().waitFor({ timeout: 3_000 })
+  await page.getByText('Fais-moi un point simple.').waitFor({ timeout: 3_000 })
   await delay(900)
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-light.png` })
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
   await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}demo-activity.png` })
-  // Interface en anglais : même démo, système en anglais.
-  const english = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'en-US' })
+  // English interface: same demo, English system.
+  // Twice the pixel density: this capture is the screenshot of the README (docs/screenshot.png).
+  const english = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'en-US', deviceScaleFactor: 2 })
+  // No animation pack, as on a fresh install: the test animations are 1×1 images and would leave blank avatars.
+  await english.route('**/api/app-config', async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...(await response.json()), animatedBots: [] } })
+  })
   await english.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
   await english.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
   await english.getByRole('button', { name: 'Settings' }).waitFor({ timeout: 3_000 })
@@ -1620,6 +1634,14 @@ try {
   if (await english.evaluate(() => document.documentElement.lang) !== 'en') throw new Error('La langue du document doit suivre le système.')
   const frenchChrome = await english.locator('[aria-label], button').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') || node.textContent || '').filter((label) => /Réglages|Activité|Groupes|Se déconnecter|Au travail|Rechercher/.test(label)))
   if (frenchChrome.length) throw new Error(`Interface anglaise avec des libellés français : ${frenchChrome.slice(0, 5).join(' | ')}`)
+  // The demo data follows the language too: sections, previews, messages and routines.
+  await english.locator('.section-heading', { hasText: 'Build' }).first().waitFor({ timeout: 3_000 })
+  await english.getByText('Give me a quick update.').waitFor({ timeout: 3_000 })
+  await english.getByText('Morning briefing').waitFor({ timeout: 3_000 })
+  const frenchDemo = await english.locator('body').evaluate((body) => /Atelier|Maison|Lecture|Voyage|Point du matin|factures/.exec(body.innerText)?.[0] || '')
+  if (frenchDemo) throw new Error(`Démo anglaise avec des données en français : ${frenchDemo}`)
+  await english.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
+  await delay(900)
   await english.screenshot({ path: `${SCREENSHOTS}demo-english.png` })
   await english.close()
   if (await page.locator('.sidebar-filter-row').evaluate((row) => row.scrollWidth > row.clientWidth)) throw new Error('La ligne de filtres déborde de la sidebar.')

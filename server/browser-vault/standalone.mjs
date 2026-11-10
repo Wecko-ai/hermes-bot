@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Coffre du Chrome partagé, lancé seul (LaunchAgent de la machine des bots) : le trousseau de session n’est lisible
-// que depuis la session graphique, et les bots s’en servent même quand l’app HermesBot est fermée.
+// Shared Chrome vault, run on its own (LaunchAgent on the bots' machine): the session keychain is only readable
+// from the graphical session, and the bots use it even when the HermesBot app is closed.
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -12,16 +12,16 @@ const auditFile = process.env.HERMESBOT_VAULT_AUDIT
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/browser-vault-audit.jsonl')
 fs.mkdirSync(path.dirname(auditFile), { recursive: true, mode: 0o700 })
 
-// Jeton de l’API d’administration, réservé à l’app HermesBot. Créé une fois, lisible par ce compte seulement.
+// Admin API token, reserved for the HermesBot app. Created once, readable by this account only.
 const tokenFile = process.env.HERMESBOT_VAULT_TOKEN_FILE
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/vault-admin.token')
 function adminToken() {
   try {
-    // Un jeton ouvert à d’autres comptes, ou posé par un autre, est remplacé.
+    // A token open to other accounts, or placed by someone else, is replaced.
     const info = fs.statSync(tokenFile)
     const value = fs.readFileSync(tokenFile, 'utf8').trim()
     if (info.uid === process.getuid() && (info.mode & 0o077) === 0 && /^[0-9a-f]{64}$/.test(value)) return value
-  } catch { /* créé ci-dessous */ }
+  } catch { /* created below */ }
   const value = randomBytes(32).toString('hex')
   fs.mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 })
   const temporary = `${tokenFile}.${randomBytes(8).toString('hex')}.tmp`
@@ -31,7 +31,7 @@ function adminToken() {
   return value
 }
 
-// Session Hermes de l’utilisateur, transmise par l’app pour chaque écriture : la gateway dit si elle est valide.
+// The user's Hermes session, passed by the app for each write: the gateway says whether it is valid.
 const hermesOrigin = process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120'
 async function verifyUser(cookie) {
   const response = await fetch(`${hermesOrigin}/api/auth/me`, { headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(8000) })
@@ -39,7 +39,7 @@ async function verifyUser(cookie) {
   return response.status === 200
 }
 
-// Origine CDP : BROWSER_VAULT_CDP_ORIGIN force un seul Chrome ; sinon le fichier des équipes ; sinon 9222.
+// CDP origin: BROWSER_VAULT_CDP_ORIGIN forces a single Chrome; otherwise the teams file; otherwise 9222.
 const chromeTeams = process.env.BROWSER_VAULT_CDP_ORIGIN ? null
   : loadChromeTeams(process.env.HERMESBOT_CHROME_TEAMS || path.join(os.homedir(), '.config/chrome-teams.json'))
 
@@ -53,7 +53,7 @@ const vault = createBrowserVault({
 })
 
 await vault.listen()
-console.log(`Coffre HermesBot sur 127.0.0.1:${process.env.BROWSER_VAULT_PORT || 4331}`)
+console.log(`HermesBot vault on 127.0.0.1:${process.env.BROWSER_VAULT_PORT || 4331}`)
 const stop = () => vault.close().finally(() => process.exit(0))
 process.on('SIGTERM', stop)
 process.on('SIGINT', stop)

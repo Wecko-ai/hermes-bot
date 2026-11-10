@@ -73,8 +73,8 @@ function hermesReady() {
 }
 
 /**
- * Mode client : une autre session macOS de la même machine (compte des bots) fait déjà tourner HermesBot sur
- * 127.0.0.1:4330. Cette copie n'ouvre alors qu'une fenêtre sur ce serveur, sans serveur, tunnel ni trousseau.
+ * Client mode: another macOS session on the same machine (the bots' account) already runs HermesBot on
+ * 127.0.0.1:4330. This copy then only opens a window on that server, with no server, tunnel or keychain.
  */
 function hermesBotAlreadyServing() {
   return new Promise((resolve) => {
@@ -124,8 +124,8 @@ async function openHermesTunnel() {
 }
 
 /**
- * Coffre du Chrome partagé : il vit sur la machine des bots, avec le trousseau. Son port 4331 passe par un ssh à
- * part, pour qu’un port déjà pris n’empêche jamais la connexion à Hermes.
+ * Shared Chrome vault: it lives on the bots' machine, with the keychain. Its port 4331 goes through a separate
+ * ssh, so that a port already in use never prevents the connection to Hermes.
  */
 function openVaultTunnel() {
   if (vaultTunnelProcess && !tunnelHasExited(vaultTunnelProcess)) return
@@ -139,7 +139,7 @@ function openVaultTunnel() {
   fetchVaultToken()
 }
 
-/** Jeton d’administration du coffre, lu sur la machine des bots par SSH et gardé en mémoire seulement. */
+/** Vault admin token, read on the bots' machine over SSH and kept in memory only. */
 function fetchVaultToken() {
   if (/^[0-9a-f]{64}$/.test(process.env.HERMESBOT_VAULT_TOKEN || '')) return
   execFile('/usr/bin/ssh', [
@@ -166,14 +166,14 @@ function stopHermesTunnel() {
 }
 
 /**
- * Bouton ↻ : après une veille, le ssh lancé au démarrage peut être mort, ou vivant mais muet
- * et gardant le port 9120. On l'arrête donc avant d'en ouvrir un autre. Sans tunnel au
- * démarrage (gateway locale), il n'y a rien à relancer.
+ * ↻ button: after sleep, the ssh started at launch may be dead, or alive but silent
+ * and holding port 9120. So we stop it before opening another. With no tunnel at
+ * startup (local gateway), there is nothing to restart.
  */
 function restartHermesTunnel() {
   hermesTunnelRestart ??= (async () => {
     if (!hermesTunnelProcess) return
-    // Le ssh du coffre a pu mourir seul pendant une veille, même si Hermes répond encore.
+    // The vault's ssh may have died on its own during sleep, even if Hermes still answers.
     openVaultTunnel()
     if (await hermesReady()) return
     await stopHermesTunnel()
@@ -196,7 +196,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Le lecteur PDF de Chromium est un plugin : sans ce réglage, l’onglet document reste vide.
+      // Chromium's PDF viewer is a plugin: without this setting, the document tab stays empty.
       plugins: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
@@ -205,7 +205,7 @@ async function createWindow() {
     if (/^https:\/\//.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
-  // Un fichier lâché hors de la zone de dépôt, ou un lien d’une page de bot, ne doit jamais remplacer l’app.
+  // A file dropped outside the drop zone, or a link from a bot's page, must never replace the app.
   const leavesApp = (url) => /^(?:https?|file):/.test(url) && !url.startsWith(`${ORIGIN}/`)
   mainWindow.webContents.on('will-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
   mainWindow.webContents.on('will-frame-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })

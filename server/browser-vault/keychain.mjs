@@ -1,13 +1,13 @@
 /**
- * Identifiants des bots dans le trousseau de session macOS, par `/usr/bin/security`.
+ * Bot credentials in the macOS session keychain, through `/usr/bin/security`.
  *
- * Un identifiant = un « mot de passe Internet » : serveur, protocole et port de l’origine, compte =
- * identifiant, créateur `HBot`, libellé « HermesBot · <origine> », commentaire `{"bots":[…]}` (bots
- * autorisés, `*` pour tous). Visible et modifiable dans Trousseau d’accès.
+ * One credential = one "Internet password": server, protocol and port of the origin, account =
+ * login, creator `HBot`, label "HermesBot · <origin>", comment `{"bots":[…]}` (allowed bots,
+ * `*` for all). Visible and editable in Keychain Access.
  *
- * Le mot de passe passe par l’entrée standard de `security -i`, jamais par ses arguments (lisibles
- * dans `ps`). Il n’est lu qu’au remplissage. Le trousseau de session n’est lisible que depuis la
- * session graphique de l’utilisateur (pas depuis SSH) : le service tourne en LaunchAgent sur la machine des bots.
+ * The password goes through the standard input of `security -i`, never through its arguments (readable
+ * in `ps`). It is only read when filling. The session keychain is only readable from the user's
+ * graphical session (not over SSH): the service runs as a LaunchAgent on the bots' machine.
  */
 import { spawn } from 'node:child_process'
 import os from 'node:os'
@@ -19,12 +19,12 @@ const SECURITY = '/usr/bin/security'
 const CREATOR = 'HBot'
 const LABEL_PREFIX = 'HermesBot · '
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
-// Une fin de ligne fermerait la commande de `security -i` : refusée partout, comme les autres contrôles.
+// A line break would end the `security -i` command: refused everywhere, like the other checks.
 const CONTROL = /[\u0000-\u001f\u007f]/
 
 export const defaultKeychain = () => process.env.HERMESBOT_KEYCHAIN || path.join(os.homedir(), 'Library/Keychains/login.keychain-db')
 
-/** Lance `security`. `input` part sur l’entrée standard. Ne rejette jamais : le code de sortie fait foi. */
+/** Runs `security`. `input` goes to the standard input. Never rejects: the exit code is what counts. */
 export function runSecurity(args, input = '', timeoutMs = 15_000) {
   return new Promise((resolve) => {
     const child = spawn(SECURITY, args, { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -39,7 +39,7 @@ export function runSecurity(args, input = '', timeoutMs = 15_000) {
   })
 }
 
-/** Valeur d’attribut de `security` : `<NULL>`, `"texte"` brut ou `0xHEX  "échappé"`. */
+/** Attribute value from `security`: `<NULL>`, plain `"text"` or `0xHEX  "escaped"`. */
 export function attributeValue(raw) {
   const value = raw.trim()
   if (!value || value === '<NULL>') return null
@@ -49,7 +49,7 @@ export function attributeValue(raw) {
   return value
 }
 
-/** Mot de passe de `find-internet-password -g` (sortie d’erreur) : texte brut, ou hexadécimal dès qu’il y a des guillemets, `\` ou des accents. */
+/** Password from `find-internet-password -g` (error output): plain text, or hexadecimal as soon as there are quotes, `\` or accents. */
 export function passwordValue(stderr) {
   const line = String(stderr).split('\n').find((item) => item.startsWith('password:'))
   if (line === undefined) return null
@@ -60,7 +60,7 @@ export function passwordValue(stderr) {
   return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value
 }
 
-/** Éléments `inet` de `dump-keychain`, attributs décodés. */
+/** `inet` items from `dump-keychain`, attributes decoded. */
 export function parseDump(text) {
   const items = []
   let current = null
@@ -79,7 +79,7 @@ export function parseDump(text) {
     const attribute = /^\s+"([a-z]{4})"<([a-z0-9]+)>=(.*)$/.exec(line)
     if (!attribute) continue
     const [, name, type, raw] = attribute
-    // Un entier (`port`) est écrit en hexadécimal : c’est un nombre, pas du texte.
+    // An integer (`port`) is written in hexadecimal: it is a number, not text.
     const number = type === 'uint32' ? /^0x([0-9A-Fa-f]+)\s*$/.exec(raw.trim()) : null
     current.attributes[name] = number ? Number.parseInt(number[1], 16) : attributeValue(raw)
   }
@@ -88,7 +88,7 @@ export function parseDump(text) {
 
 const PROTOCOLS = { 'https:': 'htps', 'http:': 'http' }
 
-/** Origine → serveur, protocole `security` et port explicite (0 si celui par défaut). */
+/** Origin → server, `security` protocol and explicit port (0 for the default one). */
 export function originParts(origin) {
   const url = new URL(normalizeOrigin(origin))
   return { origin: url.origin, server: url.hostname, protocol: PROTOCOLS[url.protocol], port: Number(url.port || 0) }
@@ -120,7 +120,7 @@ const keychainDate = (value) => {
   return match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z` : null
 }
 
-/** Chaîne pour `security -i` : guillemets et `\` échappés. Les fins de ligne sont refusées avant. */
+/** String for `security -i`: quotes and `\` escaped. Line breaks are refused beforehand. */
 const quote = (value) => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 
 export function validBots(value) {
@@ -152,7 +152,7 @@ export class KeychainStore {
       .filter((item) => item.origin)
   }
 
-  /** Métadonnées seulement : jamais de mot de passe. `bot` restreint aux identifiants qu’il peut utiliser. */
+  /** Metadata only: never a password. `bot` restricts to the credentials it can use. */
   async list(bot) {
     return (await this.items())
       .map(({ attributes, origin }) => ({
@@ -172,7 +172,7 @@ export class KeychainStore {
     return (await this.list()).find((entry) => entry.origin === origin) || null
   }
 
-  /** Identifiant et mot de passe d’une origine, pour le remplissage seulement. */
+  /** Login and password of an origin, for filling only. */
   async get(originValue) {
     const entry = await this.find(originValue)
     if (!entry) throw new BrowserVaultError('origin_not_found', 404)
@@ -186,7 +186,7 @@ export class KeychainStore {
 
   async deleteOrigin(origin) {
     const { server, protocol, port } = originParts(origin)
-    // Un identifiant changé laisse l’ancien élément : on retire tous ceux de cette origine.
+    // A changed login leaves the old item behind: we remove all those of this origin.
     for (let attempt = 0; attempt < 16; attempt += 1) {
       const args = ['delete-internet-password', '-s', server, '-r', protocol, '-P', String(port), '-c', CREATOR]
       const result = await this.run([...args, this.keychain])
@@ -194,7 +194,7 @@ export class KeychainStore {
     }
   }
 
-  /** Crée ou remplace l’identifiant d’une origine. Sans `password`, garde l’actuel (changement d’identifiant ou de bots). */
+  /** Creates or replaces the credential of an origin. Without `password`, keeps the current one (login or bots change). */
   async save(originValue, identifier, password, bots) {
     const { origin, server, protocol, port } = originParts(originValue)
     const allowed = validBots(bots)
@@ -216,13 +216,13 @@ export class KeychainStore {
       '-l', quote(`${LABEL_PREFIX}${origin}`),
       '-c', CREATOR,
       '-j', quote(JSON.stringify({ bots: allowed })),
-      // `security` seul lit l’élément sans fenêtre d’autorisation : le service n’a pas d’écran.
+      // `security` alone reads the item without an authorization window: the service has no screen.
       '-T', SECURITY,
       '-w', quote(secret),
       quote(this.keychain),
     ].join(' ')
     const result = await this.run(['-i'], `${command}\n`)
-    // `security -i` rend 0 même si la commande échoue : on vérifie en relisant.
+    // `security -i` returns 0 even if the command fails: we check by reading back.
     const saved = await this.find(origin)
     if (result.code !== 0 || !saved || saved.identifier !== identifier) throw new BrowserVaultError('vault_write_failed', 503)
     return saved
@@ -242,6 +242,6 @@ export class KeychainStore {
   }
 
   async markUsed() {
-    // Le trousseau garde sa propre date de modification ; l’usage est dans le journal du coffre.
+    // The keychain keeps its own modification date; usage is in the vault log.
   }
 }

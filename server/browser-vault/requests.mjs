@@ -10,7 +10,7 @@ const publicRequest = (request) => ({
   createdAt: request.createdAt,
 })
 
-/** Demandes des bots en attente d’une réponse de l’utilisateur. Aucun secret dans les snapshots. */
+/** Bot requests waiting for the user's answer. No secret in the snapshots. */
 export class BrowserVaultRequests {
   constructor() {
     this.pending = new Map()
@@ -67,7 +67,7 @@ export class BrowserVaultRequests {
     const request = this.get(id)
     request.busy = busy
     clearTimeout(request.timer)
-    // Une injection déjà validée ne doit pas expirer pendant les appels CDP.
+    // An injection that was already approved must not expire during the CDP calls.
     if (!busy) this.arm(request, Math.max(0, request.deadline - Date.now()))
     this.notify()
   }

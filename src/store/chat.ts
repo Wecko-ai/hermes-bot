@@ -3,7 +3,7 @@ import type { ChatMessage, Routine, SessionUsage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
 import { resolveUpdater, type Updater } from './updater'
 
-/** Ce qu’on garde d’un Bot Chat pour le rouvrir instantanément, avant la relecture serveur. */
+/** What is kept of a Bot Chat to reopen it instantly, before the server re-read. */
 export interface ChatCacheEntry {
   chat: ActiveChat
   messages: ChatMessage[]
@@ -15,15 +15,15 @@ export function latestMessageTime(messages: ChatMessage[]) {
 }
 
 /**
- * Messages à garder après une relecture serveur : jamais une copie serveur plus ancienne que le cache.
- * `preserveLive` : un tour est suivi en direct, le cache fait foi quoi que dise le serveur.
+ * Messages to keep after a server re-read: never a server copy older than the cache.
+ * `preserveLive`: a turn is being followed live, the cache wins whatever the server says.
  */
 export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server: ChatMessage[], preserveLive: boolean) {
   const newerCache = Boolean(cached) && latestMessageTime(cached!.messages) > latestMessageTime(server)
   return (preserveLive || newerCache) && cached ? cached.messages : server
 }
 
-/** Notes pas encore présentes dans la liste (par identifiant). */
+/** Notes not yet in the list (by identifier). */
 export function freshNotes(items: ChatMessage[], notes: ChatMessage[]) {
   return notes.filter((note) => !items.some((item) => item.id === note.id))
 }
@@ -47,14 +47,14 @@ export interface ChatState {
   chatLoading: boolean
   streaming: string
   /**
-   * Identifiant du tour en cours : la bulle de streaming et le message final le partagent,
-   * React garde donc le même élément (une vidéo en lecture continue).
+   * Identifier of the current turn: the streaming bubble and the final message share it,
+   * so React keeps the same element (a playing video keeps playing).
    */
   streamKey: string
   running: boolean
   activity: string
   usage: SessionUsage | null
-  /** Un Bot Chat par profil. Table mutée en place (jamais lue pour le rendu) : on la lit via les actions. */
+  /** One Bot Chat per profile. Table mutated in place (never read for rendering): read it through the actions. */
   cache: Map<string, ChatCacheEntry>
 
   setActiveChat: (chat: ActiveChat | null) => void
@@ -73,17 +73,17 @@ export interface ChatState {
   setCached: (profile: string, entry: ChatCacheEntry) => void
   updateCachedChat: (profile: string, changes: Partial<ActiveChat>) => void
   appendCachedMessage: (profile: string, message: ChatMessage) => void
-  /** Ajoute au cache les notes qui n’y sont pas déjà. */
+  /** Adds to the cache the notes that are not already there. */
   appendCachedNotes: (profile: string, notes: ChatMessage[]) => void
   markCachedFailed: (profile: string, messageId: string) => void
-  /** Après une coupure : aucun tour du cache n’est plus suivi. */
+  /** After a disconnection: no cached turn is followed any more. */
   stopAllCachedRuns: () => void
 
-  /** Retour à un bot depuis la liste : état du cache, ou vide avec chargement. N’efface pas le modèle ni l’usage. */
+  /** Back to a bot from the list: cached state, or empty with loading. Does not clear the model or the usage. */
   showProfileFromList: (profile: string) => void
-  /** Bot sélectionné (effet sur `selected`) : repart de zéro, puis reprend le cache s’il existe. */
+  /** Bot selected (effect on `selected`): starts from scratch, then takes the cache if there is one. */
   enterProfile: (profile: string) => void
-  /** Relecture serveur terminée : cache, chat ouvert, messages et statut de tour. Ne touche ni routines ni chargement. */
+  /** Server re-read finished: cache, open chat, messages and turn status. Touches neither routines nor loading. */
   applySyncedChat: (profile: string, synced: SyncedChat, options: { preserveLive: boolean; resumed: boolean }) => void
 }
 
@@ -193,7 +193,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 }))
 
-/** Remise à zéro complète (tests). */
+/** Full reset (tests). */
 export function resetChatStore() {
   useChatStore.setState({
     activeChat: null, chatModel: '', messages: [], routines: [], routinesLoading: false, chatLoading: true,

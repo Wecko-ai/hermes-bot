@@ -1,101 +1,139 @@
 # HermesBot
 
-A desktop app (Electron, macOS) to run and follow your [Hermes Agent](https://github.com/NousResearch/hermes-agent) bots from one window: live chats, who is working right now, what each bot is doing, a secure credential prompt and approvals. The interface is currently in French.
+A desktop app to run a team of [Hermes Agent](https://github.com/NousResearch/hermes-agent) bots from one window. You see who is working, what each bot is doing and who is waiting for you, and you talk to each bot in its own chat.
 
-Application de bureau pour piloter ses bots Hermes Agent depuis une seule fenêtre.
+![HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot](docs/screenshot.png)
 
-![Mode démo de HermesBot](docs/screenshot.png)
+HermesBot is a client. Your bots, their tools and their memory stay in Hermes; HermesBot connects to the Hermes gateway on your machine. The interface is in English and French.
 
-Projet indépendant, sans lien avec Nous Research.
+It is an independent project, not affiliated with Nous Research. Status: early (0.2), used daily by its author, macOS only.
 
-## Fonctions
+## Try it without Hermes
 
-- Roster par groupes, ou liste unique avec l'activité la plus récente en premier.
-- Qui travaille, d'un coup d'œil, avec un résumé de ce que fait chaque bot, rafraîchi en continu et assemblé sans appel de modèle.
-- Bot Chat en streaming, Markdown, images envoyées, recherche, arrêt du tour.
-- Médias des bots (`MEDIA:/chemin`) : galeries, vidéo, audio, visionneuse.
-- Fichiers cités par leur chemin (images, vidéos, sons, PDF) affichés sous le message, pour valider sans quitter le chat.
-- Messages entre bots (`message_agent`) : une ligne « Orion messaged Iris », le texte s’ouvre d’un clic.
-- Statut en direct de chaque bot, même réveillé par un autre bot, sans ouvrir son chat.
-- Mentions `@bot`, glisser-déposer de fichiers, documents PDF, HTML et Markdown en onglets à côté du chat.
-- Onglet Usage (contexte, tokens, 30 jours), modes BRAIN, PLAN et EXEC, réglages, palette de commandes.
-- Chat local isolé avec Ollama, sans outils (facultatif).
-- Coffre d'identifiants : quand un bot doit se connecter à un site, une fenêtre montre le site et demande les identifiants ou un code. Tout va dans le coffre local de Hermes.
-- Accords : une action soumise à approbation ouvre une fenêtre (une fois, session, toujours, refuser).
-- Carte de mail : un brouillon à faire approuver s'affiche dans le fil, modifiable avant envoi. Voir `skills/mail-approval/`.
-- Choix du modèle par conversation, contexte et débit.
-- Routines en lecture seule, activité technique à part, thèmes clair et sombre.
-- Bouton de reconnexion à la gateway.
-
-## Prérequis
-
-- macOS, Node.js 22 ou plus.
-- Hermes Agent avec sa gateway Webapp sur `http://127.0.0.1:9120` et un compte à mot de passe.
-- Des profils Hermes avec un bloc `ui_meta["hermes-bots"]` : seuls ceux-là apparaissent comme bots.
-
-## Démarrer
+You need Node.js 22 or later.
 
 ```bash
 npm ci
 npm run dev
 ```
 
-L'interface s'ouvre sur http://127.0.0.1:4330. Pour la voir sans Hermes : http://127.0.0.1:4330/?demo=1
+Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and makes no network call.
 
-Application de bureau :
+## What it does
+
+- **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K).
+- **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". The status is right even for a bot woken by another bot.
+- **Chat.** Streaming, Markdown, tables and code. Stop the current turn. Search in the conversation. Drafts are kept per bot.
+- **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. An action that needs approval opens a dialog (once, for the session, always, deny).
+- **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).
+- **Files.** Drag and drop images, videos, PDFs and other files into the chat.
+- **Bot media.** Images, galleries, video and audio that a bot sends (`MEDIA:` lines) or cites by path show under its message, with a full-screen viewer. PDF, HTML and Markdown documents open in tabs next to the chat.
+- **Bot-to-bot messages.** "Orion messaged Iris" lines in both chats, with the reply. `@bot` mentions tell a bot which other bot you mean.
+- **Modes.** BRAIN (think with me), PLAN (write a plan) and EXEC (do it), per bot. BRAIN and PLAN are an instruction for one turn, not a lock on tools.
+- **Model picker.** Change the model for one conversation. The bot's profile is never rewritten.
+- **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
+- **Routines.** The scheduled jobs of each bot, read-only.
+- **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
+- **Settings.** Theme, text size, language, send key, hidden bots, which models the picker offers. They stay on your Mac; nothing is written to Hermes profiles.
+
+## Connect it to Hermes
+
+HermesBot needs:
+
+- **Hermes Agent with its gateway Webapp on.** By default the gateway serves it on `http://127.0.0.1:9120`. See "Use the Desktop workspace from a browser" in the Hermes documentation (`hermes config set webapp.enabled true`, then `hermes gateway restart`).
+- **A username and password sign-in on that Webapp.** HermesBot signs in with the username and password of Hermes' dashboard sign-in gate (`dashboard.basic_auth` in the Hermes configuration). See "Web Dashboard", section "Authentication", in the Hermes documentation.
+
+> [!IMPORTANT]
+> A Webapp left on its default local setup has no password: Hermes signs your browser in with a one-use link. HermesBot cannot sign in to that setup yet. It needs the password sign-in above.
+
+Start HermesBot (`npm run dev`, or the desktop app below), open http://127.0.0.1:4330 and sign in with your Hermes username and password.
+
+Every Hermes profile shows as a bot, except `default` and a profile named `notify`. A profile can carry a card that sets its name, role and group, under `ui_meta["hermes-bots"]`: `title`, `description`, `sectionName` and `sectionId`. Profiles without a card go under "Unassigned".
+
+> [!WARNING]
+> Sending a message starts a turn with the model set in the bot's Hermes profile. Depending on your provider, a message can cost money.
+
+### A gateway on another machine
+
+If nothing answers on the gateway address, the desktop app can open an SSH tunnel to the machine that runs Hermes. Set `sshHost` (see Settings) to an SSH host alias that connects without a password prompt. The tunnel forwards port 9120 and closes with the app.
+
+## Desktop app
 
 ```bash
-npm run desktop
-npm run pack
+npm run desktop    # build, then open the app with Electron
+npm run pack       # build release/mac-arm64/HermesBot.app
 ```
 
-`npm run pack` produit une app non signée dans `release/`.
+`npm run pack` makes an unsigned app for Apple silicon. An app you build yourself opens normally; one copied from another Mac is quarantined by macOS until you allow it. There is no prebuilt download and no automatic update.
 
-## Réglages
+The desktop app keeps your session between launches, encrypted with the macOS Keychain. With "Stay signed in on this Mac" ticked, it also keeps your password the same way, to sign in again when the Hermes session expires. Neither is ever sent back to the window.
 
-Tous sont facultatifs.
+## Settings
 
-| Variable | Clé de `config.json` | Défaut | Rôle |
+All settings are optional. Each one is an environment variable, or a key of `config.json` in `~/Library/Application Support/HermesBot/`. [.env.example](.env.example) lists them all.
+
+| Variable | Key in `config.json` | Default | Purpose |
 |---|---|---|---|
-| `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Adresse de la gateway |
-| `HERMES_BROWSER_ORIGIN` | `browserOrigin` | même valeur | `Origin` envoyé à la gateway, si elle n'accepte qu'une adresse publique |
-| `HERMES_SSH_HOST` | `sshHost` | vide | Hôte SSH pour ouvrir un tunnel quand la gateway ne répond pas |
+| `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Address of the Hermes gateway |
+| `HERMES_BROWSER_ORIGIN` | `browserOrigin` | same as the gateway | `Origin` header sent to the gateway, when it only trusts its public address behind a reverse proxy |
+| `HERMES_SSH_HOST` | `sshHost` | none | SSH host alias for the tunnel to a remote gateway |
+| `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat |
+| `HERMESBOT_ANIMATIONS` | `animationsDir` | `animations/` in the data folder | Folder of bot animations |
+| `PORT` | | `4330` | Port of the local server |
 
-`config.json` se place dans `~/Library/Application Support/HermesBot/` et ne sert qu'à l'application de bureau.
+Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) only exist in `config.json`.
 
-## Carte de mail
+## Optional extras
 
-Copie `skills/mail-approval/` dans `skills/email/` du profil Hermes concerné (il lui faut [himalaya](https://github.com/pimalaya/himalaya)). Le bot affiche alors un brouillon modifiable. Envoyer lance un tour du bot, avec le contenu validé et son empreinte ; le script de la skill refuse d'envoyer un mail qui n'y correspond plus, ou le même mail deux fois.
+- **Local chat.** With [Ollama](https://ollama.com) running, a "Local" entry in the roster chats with a model installed on your machine. You pick the model in Settings > Chats. This chat never goes through Hermes and never gets tools.
+- **Bot animations.** Put `<profile>-working.webp` and `<profile>-done.webp` in the animations folder. The bot then plays the first while it works and the second when it finishes. Without them, bots keep a still avatar.
+- **Mail approval card.** With the skill in [skills/mail-approval/](skills/mail-approval/), a bot shows an email draft as a card you can edit before it goes out (the skill uses [himalaya](https://github.com/pimalaya/himalaya)). Only the fields you approved are sent; the skill's script refuses a mail that no longer matches them, or the same mail twice.
+- **Vault for a shared Chrome.** For bots that drive a Chrome over CDP: a small service (`server/browser-vault/`) keeps site logins in the macOS login keychain and types them into the bot's tab itself, so the password never reaches the bot's context. It needs your own setup (a launchd agent for `server/browser-vault/standalone.mjs`, and the skill in [skills/browser-vault/](skills/browser-vault/)). Read "Security" below before using it.
 
-## Animations facultatives
+## How it works
 
-Pour qu'un bot s'anime, ajoute `public/animations/<slug>-working.webp` et `<slug>-done.webp`, puis son slug dans `src/lib/animations.ts`.
+```
+window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4330)  ──▶  Hermes gateway (127.0.0.1:9120)
+```
 
-## Sécurité
+- `src/`: the interface. React 19, TypeScript, Zustand stores in `src/store/`, texts in `src/i18n/locales/{en,fr}/`.
+- `server/`: the local server. It signs in to Hermes, keeps Hermes cookies and WebSocket tickets on its side, and relays JSON-RPC (`hermes-gateway-v1`), media and documents. `server/config.cjs` reads the settings.
+- `electron/`: the macOS shell. It runs the same server in its main process, keeps sessions in the Keychain and opens the SSH tunnel.
+- `tests/e2e.mjs`: an end-to-end run against a fake gateway and a fake Chrome. No model is ever called.
+- `skills/`: optional Hermes skills that go with the app.
 
-- Le serveur local écoute seulement sur `127.0.0.1:4330` et vérifie `Host` et `Origin`.
-- Les cookies et tickets Hermes restent côté serveur. Le navigateur reçoit un identifiant opaque.
-- Dans l'application de bureau, les sessions sont chiffrées avec `safeStorage` et le Trousseau. Sans lui, rien n'est conservé.
-- Les réponses des bots passent par une CSP stricte. Aucune image distante n'est chargée.
-- Les identifiants saisis dans le coffre ne sont ni affichés, ni journalisés, ni gardés par l'app.
+## Security
 
-À savoir :
+- The local server listens on `127.0.0.1` only and rejects requests whose `Host` or `Origin` is not local.
+- Hermes cookies and tickets stay in the server process. The window only gets an opaque session id.
+- Bot output is treated as hostile. No remote image or resource ever loads. Bot files only pass through the local server, with a fixed content type and no SVG. HTML documents run in a sandboxed iframe with no network and no access to the app.
+- HermesBot trusts whatever answers on the gateway address. A local process that took that port would receive your password, but it would already run with your rights.
+- HermesBot does not sandbox your bots. They run with the rights of the Hermes gateway's user; use Hermes' own approvals and terminal backends for that.
+- The shared-Chrome vault protects against mistakes, not against a hostile bot. Its bots run under the same macOS account as the keychain, so a bot with a terminal could read a saved password or a filled page.
 
-- Tout processus local qui écoute sur le port de la gateway reçoit le mot de passe de connexion.
-- Envoyer un message lance le modèle du profil : cela peut être payant.
-- Il n'y a pas encore de bouton de déconnexion. Une session dure 30 jours.
-- L'application n'est pas signée.
-- Le tunnel SSH n'est pas relancé s'il tombe : il faut relancer l'application.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Tests
 
 ```bash
-npm run check
-npm run test:e2e
+npm run check      # typecheck and unit tests
+npm run test:e2e   # end-to-end run, needs macOS and Google Chrome
 ```
 
-Le test de bout en bout utilise une gateway simulée, sans appel de modèle. Il lui faut Google Chrome.
+## Known limits
 
-## Crédits et licence
+- Password sign-in only (see "Connect it to Hermes").
+- macOS only, and the packaged app is for Apple silicon. The server and the interface may run elsewhere with `npm run dev`, but this is not tested.
+- Bots, groups and routines cannot be created or edited from the app yet.
+- Most features are verified against the simulated gateway of the test suite and on the author's own setup, not on a wide range of Hermes versions. The gateway contract can change between Hermes releases.
+- The SSH tunnel is not restarted by itself when it drops. The reconnect button at the bottom of the roster tries to reopen it.
 
-Licence MIT, voir [LICENSE](LICENSE). Certaines règles, dont les balises `MEDIA:`, suivent le comportement de Hermes Desktop (Nous Research, MIT).
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Credits and license
+
+MIT License, see [LICENSE](LICENSE). Third-party work is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+HermesBot is an independent project: it is not affiliated with, endorsed by or connected to Nous Research or any provider named in the app. Some behaviors, such as `MEDIA:` lines and the note added for an `@mention`, follow Hermes Desktop.

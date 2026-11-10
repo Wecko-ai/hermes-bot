@@ -3,23 +3,23 @@ import type { Bot } from '../types'
 import { applyWorkEvent, type WorkSummary } from '../lib/work-summary'
 import { resolveUpdater, type Updater } from './updater'
 
-/** Délai pendant lequel un bot qui vient de finir reste « Terminé » avant de repasser au repos. */
+/** How long a bot that has just finished stays “Done” before going back to idle. */
 export const DONE_VISIBLE_MS = 5000
 
 type WorkEvent = Parameters<typeof applyWorkEvent>[1]
 
-/** Copie de la liste avec les changements appliqués au seul bot visé. */
+/** Copy of the list with the changes applied to the targeted bot only. */
 export function patchBot(bots: Bot[], slug: string, changes: Partial<Bot>): Bot[] {
   return bots.map((bot) => bot.slug === slug ? { ...bot, ...changes } : bot)
 }
 
-/** Garde l’objet courant tant que le contenu est identique : pas de rendu inutile. */
+/** Keeps the current object while the content is identical: no needless render. */
 export function publishedWork(current: Record<string, WorkSummary>, next: Record<string, WorkSummary>) {
   return JSON.stringify(current) === JSON.stringify(next) ? current : next
 }
 
-// Hors état réactif : ces tables changent à chaque événement et ne se lisent jamais à l’écran directement.
-// `work` est publié dans `workSummaries` à son rythme (voir `publishWork`).
+// Outside reactive state: these tables change on every event and are never read on screen directly.
+// `work` is published into `workSummaries` at its own pace (see `publishWork`).
 const work = new Map<string, WorkSummary>()
 const workSeq = new Map<string, number>()
 const doneTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -27,7 +27,7 @@ const doneTimers = new Map<string, ReturnType<typeof setTimeout>>()
 export interface RosterState {
   bots: Bot[]
   selected: string
-  /** Tant que le roster n’a pas répondu, une liste vide veut dire « pas encore », pas « aucun bot ». */
+  /** Until the roster has answered, an empty list means “not yet”, not “no bot”. */
   rosterLoaded: boolean
   connected: boolean
   reconnecting: boolean
@@ -40,15 +40,15 @@ export interface RosterState {
   setConnected: (value: boolean) => void
   setReconnecting: (value: boolean) => void
 
-  /** Replie un événement dans le résumé de travail du bot (non publié tout de suite). */
+  /** Folds an event into the bot's work summary (not published right away). */
   applyWork: (slug: string, event: WorkEvent) => void
-  /** Publie les résumés accumulés si quelque chose a changé. */
+  /** Publishes the accumulated summaries if anything changed. */
   publishWork: () => void
   getWorkSeq: (slug: string) => number
   setWorkSeq: (slug: string, seq: number) => void
 
   clearDoneTimer: (slug: string) => void
-  /** Fin de tour : « Terminé » 5 s, puis repos. Un worker encore actif garde le bot « au travail ». */
+  /** End of turn: “Done” for 5 s, then idle. A worker that is still active keeps the bot “at work”. */
   markDone: (slug: string) => void
 }
 
@@ -90,7 +90,7 @@ export const useRosterStore = create<RosterState>()((set, get) => ({
   markDone: (slug) => {
     const { clearDoneTimer, updateBot } = get()
     clearDoneTimer(slug)
-    // Un worker du bot tourne encore : le tour de chat est fini, pas son travail.
+    // A worker of the bot is still running: the chat turn is over, not its work.
     if (get().bots.find((bot) => bot.slug === slug)?.workerActive) {
       updateBot(slug, { status: 'working' })
       return
@@ -100,7 +100,7 @@ export const useRosterStore = create<RosterState>()((set, get) => ({
   },
 }))
 
-/** Remise à zéro complète (tests). */
+/** Full reset (tests). */
 export function resetRosterStore() {
   work.clear()
   workSeq.clear()

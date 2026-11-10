@@ -10,7 +10,7 @@ import { workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore } from './store'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
-import { demoBots, demoMessages, demoRoutines, demoUsageDetails, demoWork } from './lib/demo'
+import { demoData, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { CommandPalette } from './components/CommandPalette'
@@ -31,7 +31,7 @@ import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
-import { i18n } from './i18n'
+import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
@@ -40,10 +40,14 @@ const MAX_OPEN_DOCUMENTS = 8
 const LIVE_STATUS_MS = 6_000
 const asText = (value: unknown) => typeof value === 'string' ? value : ''
 
-// Visual demo: the stores start from fictional datasets, with no network.
+const demoLanguage = (): DemoLanguage => (i18n.language === 'fr' ? 'fr' : 'en')
+
+// Visual demo: the stores start from fictional datasets, with no network. This runs before the language setting
+// is applied to i18n, so the language is read from the settings.
 if (DEMO) {
-  useRosterStore.setState({ bots: demoBots, selected: 'nova', rosterLoaded: true, connected: true, workSummaries: demoWork })
-  useChatStore.setState({ messages: demoMessages, routines: demoRoutines, chatLoading: false })
+  const demo = demoData(resolveLanguage(getSettings().language))
+  useRosterStore.setState({ bots: demo.bots, selected: 'nova', rosterLoaded: true, connected: true, workSummaries: demo.work })
+  useChatStore.setState({ messages: demo.messages, routines: demo.routines, chatLoading: false })
 }
 
 // Store actions have a stable identity: we take them once, without subscribing.
@@ -78,7 +82,7 @@ function revealTheme(dark: boolean, apply: () => void, origin?: { x: number; y: 
 }
 
 export default function App() {
-  const { t } = useTranslation()
+  const { t, i18n: { language } } = useTranslation()
   const clientRef = useRef<HermesClient | null>(null)
   if (!clientRef.current) clientRef.current = new HermesClient()
   const client = clientRef.current
@@ -115,6 +119,13 @@ export default function App() {
   const appConfig = useAppConfig()
   // In the demo too: the installed animations show up there.
   useEffect(() => { void ensureAppConfig() }, [])
+  // Visual demo: the fictional data follows the interface language, also when it changes in the settings.
+  useEffect(() => {
+    if (!DEMO) return
+    const demo = demoData(language === 'fr' ? 'fr' : 'en')
+    useRosterStore.setState({ bots: demo.bots, workSummaries: demo.work })
+    useChatStore.setState({ messages: demo.messages, routines: demo.routines })
+  }, [language])
   const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
@@ -602,8 +613,9 @@ export default function App() {
     if (!DEMO) showProfileFromList(bot.slug)
     updateBot(bot.slug, { unread: 0 })
     if (DEMO) {
-      setMessages(demoMessages)
-      setRoutines(demoRoutines)
+      const demo = demoData(demoLanguage())
+      setMessages(demo.messages)
+      setRoutines(demo.routines)
       setChatLoading(false)
       setRunning(false)
       setStreaming('')
@@ -742,7 +754,7 @@ export default function App() {
 
   /** Three independent reads: a gateway that only knows part of them still shows the rest. */
   const loadUsageDetails = async (): Promise<UsageDetails> => {
-    if (DEMO) return demoUsageDetails
+    if (DEMO) return demoData(demoLanguage()).usageDetails
     const chat = useChatStore.getState().activeChat
     const [usageResult, contextResult, historyResult] = await Promise.allSettled([
       chat ? loadUsage(client, chat) : Promise.resolve(null),

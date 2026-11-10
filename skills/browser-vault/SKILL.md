@@ -3,44 +3,46 @@ name: coffre-chrome
 description: Use when a site in your team's bots Chrome (CDP address from `browser-turn cdp --owner <you>`) asks you to log in, or asks for a verification code. Never type or read a password yourself.
 ---
 
-# Se connecter dans le Chrome de ton équipe avec le coffre HermesBot
+# Log in inside your team's Chrome with the HermesBot vault
 
-Le coffre HermesBot garde les identifiants dans le trousseau de session macOS de la machine des bots. Il tape lui-même le mot de passe dans TON onglet : tu ne vois jamais le mot de passe, il ne passe ni par le chat, ni par tes outils, ni par les journaux.
+The HermesBot vault keeps credentials in the macOS login keychain of the bots' machine. It types the password into YOUR tab itself: you never see the password, and it goes through neither the chat, nor your tools, nor the logs.
 
-Commande, depuis n’importe quel dossier :
+Command, from any folder:
 
 ```bash
-node ~/projects/hermes-bot/scripts/browser-vault.mjs <list|save|fill|code> --bot <ton profil> [--target <targetId>]
+node <path to HermesBot>/scripts/browser-vault.mjs <list|save|fill|code> --bot <your profile> [--target <targetId>]
 ```
 
-`targetId` est l’id de TON onglet : celui renvoyé par `PUT /json/new?<url>` (ou `cdp.mjs new`). Jamais un onglet que tu n’as pas ouvert.
+`<path to HermesBot>` is the folder where the HermesBot repository is cloned on the bots' machine.
 
-## Règles
+`targetId` is the id of YOUR tab: the one returned by `PUT /json/new?<url>` (or `cdp.mjs new`). Never a tab you did not open.
 
-- Chaque équipe de bots a son Chrome. Prendre son tour avant, comme pour tout accès à ce Chrome (`browser-turn prendre --owner <ton profil>`, qui donne aussi son adresse CDP ; `browser-turn cdp --owner <ton profil>` la redonne), et le rendre après.
-- Ne jamais taper, lire, copier ni afficher un mot de passe : pas de `eval` sur un champ `password`, pas de `.value`, pas de capture d’un formulaire rempli envoyée dans un message.
-- Ne jamais demander un mot de passe à l’utilisateur dans le chat : le coffre lui ouvre une fenêtre sécurisée dans HermesBot.
-- Dans le Chrome de ton équipe, utiliser ce coffre, pas l’outil `browser_vault` de Hermes : celui-ci range les mots de passe ailleurs.
-- Seulement les quatre commandes ci-dessus. Ne jamais appeler l’API `/admin` du coffre, lire son jeton, ni chercher un mot de passe dans le trousseau (`security`) : c’est réservé à l’utilisateur et à l’app HermesBot.
-- En tâche planifiée (cron) : jamais `save` ni `code`, personne n’est là pour répondre. Si `fill` ne suffit pas, s’arrêter et le signaler.
+## Rules
 
-## Déroulé
+- Each team of bots has its own Chrome. Take your turn first, as for any access to that Chrome (`browser-turn prendre --owner <your profile>`, which also gives its CDP address; `browser-turn cdp --owner <your profile>` gives it again), and give it back afterwards.
+- Never type, read, copy or display a password: no `eval` on a `password` field, no `.value`, no screenshot of a filled-in form sent in a message.
+- Never ask the user for a password in the chat: the vault opens a secure window for them in HermesBot.
+- In your team's Chrome, use this vault, not Hermes's `browser_vault` tool: that one stores passwords elsewhere.
+- Only the four commands above. Never call the vault's `/admin` API, read its token, or look for a password in the keychain (`security`): that is reserved for the user and the HermesBot app.
+- In a scheduled task (cron): never `save` or `code`, nobody is there to answer. If `fill` is not enough, stop and report it.
 
-1. `list --bot <profil>` : les sites auxquels tu as droit (origine et identifiant, jamais de mot de passe).
-2. Ouvrir la page de connexion dans ton onglet et vérifier `location.origin`.
-3. Si l’origine est listée : `fill --bot <profil> --target <targetId>`. Réponse `{"status":"filled","fields":["identifier","password"]}`. Cliquer ensuite toi-même sur le bouton de connexion.
-4. Sinon : `save --bot <profil> --target <targetId>`. l’utilisateur reçoit « <bot> a besoin de tes identifiants » dans HermesBot. La commande attend jusqu’à 6 minutes.
-   - `{"status":"saved"}` : refaire `fill`.
-   - `{"status":"cancelled"}` : l’utilisateur a répondu « Plus tard ». Ne pas redemander pendant ce tour ; le dire dans ta réponse.
-5. Code de vérification :
-   - reçu par mail : le lire dans ta boîte et le taper toi-même (un code à usage unique n’est pas un mot de passe) ;
-   - sinon : `code --bot <profil> --target <targetId>`. l’utilisateur tape le code dans HermesBot et le coffre l’injecte dans la page.
+## Steps
 
-## Erreurs
+1. `list --bot <profile>`: the sites you are allowed to use (origin and username, never a password).
+2. Open the login page in your tab and check `location.origin`.
+3. If the origin is listed: `fill --bot <profile> --target <targetId>`. Response `{"status":"filled","fields":["identifier","password"]}`. Then click the login button yourself.
+4. Otherwise: `save --bot <profile> --target <targetId>`. The user receives "<bot> needs your credentials" in HermesBot. The command waits up to 6 minutes.
+   - `{"status":"saved"}`: run `fill` again.
+   - `{"status":"cancelled"}`: the user answered "Later". Do not ask again during this turn; say so in your reply.
+5. Verification code:
+   - received by email: read it in your mailbox and type it yourself (a one-time code is not a password);
+   - otherwise: `code --bot <profile> --target <targetId>`. The user types the code into HermesBot and the vault injects it into the page.
 
-- `origin_not_found` : aucun identifiant pour ce site. Faire `save`.
-- `bot_not_allowed` : l’identifiant est réservé à d’autres bots. Demander à l’utilisateur de t’autoriser (HermesBot, Réglages, Coffre). Ne pas contourner avec `save`.
-- `origin_mismatch` : la page a changé de site pendant l’appel. Vérifier l’URL, puis recommencer.
-- `login_fields_not_found` ou `code_field_not_found` : aucun champ reconnu. Afficher le bon formulaire (étape « Se connecter », champ du mot de passe), puis recommencer.
-- `target_required` : il manque `--target`.
-- `vault_unavailable`, `vault_service_unavailable`, `request_timeout`, `cdp_unavailable` : s’arrêter et prévenir.
+## Errors
+
+- `origin_not_found`: no credentials for this site. Run `save`.
+- `bot_not_allowed`: the credentials are reserved for other bots. Ask the user to authorize you (HermesBot, Settings, Vault). Do not work around it with `save`.
+- `origin_mismatch`: the page changed site during the call. Check the URL, then start again.
+- `login_fields_not_found` or `code_field_not_found`: no field recognized. Show the right form (the "Sign in" step, the password field), then start again.
+- `target_required`: `--target` is missing.
+- `vault_unavailable`, `vault_service_unavailable`, `request_timeout`, `cdp_unavailable`: stop and report it.
