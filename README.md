@@ -1,12 +1,65 @@
-# HermesBot
+<p align="center">
+  <img src="docs/readme/hero.png" alt="HermesBot. Your agents. Your rules." width="100%" />
+</p>
 
-A desktop app to run a team of [Hermes Agent](https://github.com/NousResearch/hermes-agent) bots from one window. You see who is working, what each bot is doing and who is waiting for you, and you talk to each bot in its own chat.
+<p align="center">
+  <b>One window for your whole team of <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> bots.</b><br />
+  You own them. You pick the model. It runs on your machine.
+</p>
+
+<p align="center">
+  <a href="#try-it-without-hermes">Try the demo</a> ·
+  <a href="#connect-it-to-hermes">Connect it to Hermes</a> ·
+  <a href="docs/readme/hermesbot-film.mp4">Watch the film</a>
+</p>
+
+<p align="center">
+  <a href="docs/readme/hermesbot-film.mp4"><img src="docs/readme/film-poster.png" alt="Watch the film, 60 seconds: one window, your whole team" width="100%" /></a>
+</p>
+
+HermesBot is a desktop app for macOS. You see who is working, what each bot is doing and who is waiting for you, and you talk to each bot in its own chat. It is a client: your bots, their tools and their memory stay in Hermes, on your machine.
+
+It is an independent project, not affiliated with Nous Research. Status: early (0.2), used daily by its author. The interface is in English and French.
+
+## Yours, not rented
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/readme/own.png" alt="You own them: memories, skills, SOUL.md and config.yaml in the bot's own folder, on your machine" /><br />
+      <b>You own your agents.</b> A bot is a Hermes profile: its memory, its skills and its files live in a folder on your disk. HermesBot is a window on them, nothing more.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/readme/models.png" alt="Pick your model: the model picker with Anthropic, OpenAI and Google Gemini, and a local model" /><br />
+      <b>Pick your model.</b> Claude, GPT, Gemini, or a local model on your own GPU: any provider your Hermes is set up with. Change it for one conversation; the bot's profile is never rewritten.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/readme/machine.png" alt="Your machine: http://127.0.0.1:4330" /><br />
+      <b>It runs on your machine.</b> The app's server listens on <code>127.0.0.1</code> only and talks to the Hermes gateway on your machine. Your provider keys stay in Hermes. HermesBot puts no cloud service in between.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/readme/open.png" alt="Open source: MIT license, free, yours to change" /><br />
+      <b>Open source.</b> MIT license. Free. Yours to read and to change.
+    </td>
+  </tr>
+</table>
+
+## One window
 
 ![HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot](docs/screenshot.png)
 
-HermesBot is a client. Your bots, their tools and their memory stay in Hermes; HermesBot connects to the Hermes gateway on your machine. The interface is in English and French.
-
-It is an independent project, not affiliated with Nous Research. Status: early (0.2), used daily by its author, macOS only.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/readme/question.png" alt="A bot's question shown as a card above the input, with three choices" />
+    </td>
+    <td width="50%" valign="top">
+      <b>See who needs you.</b> A bot that works is marked "Working", with one line on what it is doing. A bot that asks you something is marked "Waiting for your reply", and its question shows as a card: you answer in one click and it goes back to work.
+    </td>
+  </tr>
+</table>
 
 ## Try it without Hermes
 
