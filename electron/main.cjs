@@ -78,6 +78,28 @@ function hermesReady() {
   })
 }
 
+/**
+ * Mode client : une autre session macOS de la même machine (compte des bots) fait déjà tourner HermesBot sur
+ * 127.0.0.1:4330. Cette copie n'ouvre alors qu'une fenêtre sur ce serveur, sans serveur, tunnel ni trousseau.
+ */
+function hermesBotAlreadyServing() {
+  return new Promise((resolve) => {
+    const request = http.get(`${ORIGIN}/api/health`, { timeout: 1500 }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => {
+        body += chunk
+        if (body.length > 512) request.destroy()
+      })
+      response.on('end', () => {
+        try { resolve(response.statusCode === 200 && JSON.parse(body).service === 'hermes-bot') } catch { resolve(false) }
+      })
+    })
+    request.on('error', () => resolve(false))
+    request.on('timeout', () => { request.destroy(); resolve(false) })
+  })
+}
+
 function tunnelHasExited(tunnel) {
   return tunnel.exitCode !== null || tunnel.signalCode !== null
 }
@@ -203,8 +225,12 @@ ipcMain.handle('hermes-bot:restart-tunnel', (event) => {
 })
 
 app.whenReady().then(async () => {
-  await ensureHermes()
-  await startServer()
+  if (await hermesBotAlreadyServing()) {
+    console.log(`HermesBot : mode client sur ${ORIGIN}`)
+  } else {
+    await ensureHermes()
+    await startServer()
+  }
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
