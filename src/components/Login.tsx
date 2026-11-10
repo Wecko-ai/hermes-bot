@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, LockKeyhole } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 export function Logo() {
   return (
@@ -12,14 +13,15 @@ export function Logo() {
 }
 
 export function Login({ onLogin, error }: { onLogin: (username: string, password: string, remember: boolean) => Promise<void>; error: string }) {
+  const { t } = useTranslation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [remember, setRemember] = useState(true)
-  // Seule l’app de bureau a le Trousseau : sans lui, rien n’est gardé et la case n’apparaît pas.
+  // Only the desktop app has the Keychain: without it nothing is kept and the checkbox doesn’t appear.
   const [canRemember, setCanRemember] = useState(false)
   useEffect(() => {
-    fetch('/api/auth/options', { credentials: 'same-origin' }).then((response) => response.json()).then((options) => setCanRemember(options.remember === true)).catch(() => { /* case masquée */ })
+    fetch('/api/auth/options', { credentials: 'same-origin' }).then((response) => response.json()).then((options) => setCanRemember(options.remember === true)).catch(() => { /* checkbox stays hidden */ })
   }, [])
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -31,16 +33,16 @@ export function Login({ onLogin, error }: { onLogin: (username: string, password
       <section className="login-card">
         <Logo />
         <p className="login-eyebrow">HERMESBOT</p>
-        <h1>Retrouve tes bots.</h1>
-        <p className="login-intro">Tes bots Hermes, leurs conversations et leurs routines, réunis dans une seule fenêtre.</p>
+        <h1>{t('login.title')}</h1>
+        <p className="login-intro">{t('login.intro')}</p>
         <form onSubmit={submit}>
-          <label>Identifiant Hermes<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required autoFocus /></label>
-          <label>Mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
-          {canRemember && <label className="login-remember"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />Rester connecté sur ce Mac</label>}
+          <label>{t('login.username')}<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required autoFocus /></label>
+          <label>{t('login.password')}<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+          {canRemember && <label className="login-remember"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />{t('login.remember')}</label>}
           {error && <p className="login-error" role="alert">{error}</p>}
-          <button className="login-submit" type="submit" disabled={busy}>{busy ? 'Connexion…' : 'Ouvrir mes bots'}{!busy && <ArrowRight size={17} />}</button>
+          <button className="login-submit" type="submit" disabled={busy}>{busy ? t('login.signingIn') : t('login.submit')}{!busy && <ArrowRight size={17} />}</button>
         </form>
-        <p className="login-security"><LockKeyhole size={13} />Connexion locale à 127.0.0.1. Le mot de passe va uniquement à ta gateway Hermes.{canRemember && remember && ' Il reste chiffré par le Trousseau de ce Mac.'}</p>
+        <p className="login-security"><LockKeyhole size={13} />{t('login.security')}{canRemember && remember && ` ${t('login.securityKeychain')}`}</p>
       </section>
     </main>
   )

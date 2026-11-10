@@ -1,4 +1,5 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowUp, ChevronDown, FileText, Film, Gauge, Mic, Music, Plus, Square, X } from 'lucide-react'
 import type { Bot, SessionUsage } from '../types'
 import { formatUsage } from '../lib/model'
@@ -7,25 +8,26 @@ import { mentionOptions, mentionTokenAt, type MentionOption, type MentionToken }
 import { CHAT_MODES, loadModes, modePlaceholder, saveModes, type ChatMode } from '../lib/modes'
 import { DELIVERY_MODES, deliveryPlaceholder, loadDraft, saveDraft, type DeliveryMode } from '../lib/delivery'
 import { useSettings } from '../lib/settings'
+import { locale } from '../i18n'
 import { BotAvatar } from './BotAvatar'
 
 export interface ComposerHandle {
   addFiles: (files: File[]) => void
   focus: () => void
-  /** Cite un passage du fil au début du brouillon. */
+  /** Quotes a passage of the thread at the start of the draft. */
   quote: (text: string) => void
 }
 
 interface ComposerProps {
   ref?: Ref<ComposerHandle>
-  /** Chat local : du texte seulement, ni fichiers, ni modes, ni choix du modèle. */
+  /** Local chat: text only, no files, no modes, no model picker. */
   minimal?: boolean
   bot: Bot
   bots: Bot[]
   running: boolean
   disabled: boolean
   focusSignal: number
-  /** `false` : rien n’est parti, le brouillon et ses fichiers reviennent dans le composer. `delivery` : seulement pendant un tour. */
+  /** `false`: nothing was sent, the draft and its files come back into the composer. `delivery`: only during a turn. */
   onSend: (text: string, attachments: PendingAttachment[], mode: ChatMode, delivery?: DeliveryMode) => Promise<boolean> | boolean | void
   onStop: () => void
   onNotice: (text: string) => void
@@ -50,6 +52,7 @@ function FileIcon({ name }: { name: string }) {
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
 export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage }: ComposerProps) {
+  const { t } = useTranslation()
   const { sendKey } = useSettings()
   const [text, setText] = useState(() => loadDraft(bot.slug))
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -61,9 +64,9 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modes, setModes] = useState(loadModes)
   const mode = modes[bot.slug] ?? 'exec'
-  // Pendant un tour : Attendre par défaut. Revient à Attendre après chaque envoi et à chaque fin de tour.
+  // During a turn: Wait by default. Goes back to Wait after every send and at the end of every turn.
   const [delivery, setDelivery] = useState<DeliveryMode>('wait')
-  // Entrée en mode Attendre : rien ne part, le sélecteur se signale (un toast le couvrirait).
+  // Enter in Wait mode: nothing is sent, the selector flags itself (a toast would cover it).
   const [nudge, setNudge] = useState(0)
   const busy = running && !minimal
   const chooseMode = (next: ChatMode) => {
@@ -71,7 +74,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     setModes(updated)
     saveModes(updated)
   }
-  // Chaque bot garde son brouillon et ses fichiers : changer de bot n’envoie rien au mauvais destinataire.
+  // Each bot keeps its own draft and files: switching bots never sends anything to the wrong recipient.
   const draftsRef = useRef(new Map<string, Draft>())
   const botRef = useRef(bot.slug)
   const attachmentCountRef = useRef(0)
@@ -94,7 +97,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
 
   useEffect(() => () => recognitionRef.current?.stop?.(), [])
 
-  // Avant l’affichage : le champ ne montre jamais, même un instant, le brouillon du bot précédent.
+  // Before paint: the field never shows, even for an instant, the previous bot’s draft.
   useLayoutEffect(() => {
     if (botRef.current === bot.slug) return
     if (text || attachments.length) draftsRef.current.set(botRef.current, { text, attachments })
@@ -107,7 +110,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     setDelivery('wait')
   }, [bot.slug])
 
-  // Après le changement de bot ci-dessus : le brouillon s’écrit toujours sous le bot affiché.
+  // After the bot switch above: the draft is always saved under the bot on screen.
   useEffect(() => { saveDraft(botRef.current, text) }, [text])
 
   useEffect(() => {
@@ -117,7 +120,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const addFiles = (files: File[]) => {
     if (!files.length) return
     const { accepted, refused } = filterAttachments(files, attachmentCountRef.current)
-    if (refused.length) onNotice(`Non ajouté : ${refused.join(', ')}.`)
+    if (refused.length) onNotice(t('composer.notAdded', { files: refused.join(', ') }))
     if (accepted.length) setAttachments((current) => [...current, ...accepted.map(toAttachment)])
     textareaRef.current?.focus()
   }
@@ -198,7 +201,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SpeechRecognition) return
     const recognition = new SpeechRecognition()
-    recognition.lang = 'fr-FR'
+    recognition.lang = locale()
     recognition.continuous = true
     recognition.interimResults = true
     recognition.onresult = (event: any) => {
@@ -218,7 +221,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   return (
     <div className="composer-wrap">
       {menuOpen && (
-        <div className="mention-menu" id="mention-menu" role="listbox" aria-label="Bots à mentionner">
+        <div className="mention-menu" id="mention-menu" role="listbox" aria-label={t('composer.mentionMenu')}>
           {options.map((option, index) => (
             <button
               type="button"
@@ -228,7 +231,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
               aria-selected={index === activeOption}
               className={index === activeOption ? 'is-active' : ''}
               onMouseEnter={() => setMentionIndex(index)}
-              // Avant le blur du champ : sinon le menu se ferme sous le clic.
+              // Before the field’s blur: otherwise the menu closes under the click.
               onMouseDown={(event) => { event.preventDefault(); insertMention(option) }}
             >
               <BotAvatar bot={option.bot} size={24} />
@@ -243,27 +246,27 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           {attachments.map((attachment) => attachment.previewUrl ? (
             <div className="composer-image" key={attachment.id} title={attachment.name}>
               <img src={attachment.previewUrl} alt={attachment.name} />
-              <button aria-label={`Retirer ${attachment.name}`} onClick={() => removeAttachment(attachment)}><X size={12} /></button>
+              <button aria-label={t('composer.remove', { name: attachment.name })} onClick={() => removeAttachment(attachment)}><X size={12} /></button>
             </div>
           ) : (
             <div className="composer-file" key={attachment.id} title={attachment.name}>
               <FileIcon name={attachment.name} />
               <span><strong>{attachment.name}</strong><small>{formatBytes(attachment.size)}</small></span>
-              <button aria-label={`Retirer ${attachment.name}`} onClick={() => removeAttachment(attachment)}><X size={12} /></button>
+              <button aria-label={t('composer.remove', { name: attachment.name })} onClick={() => removeAttachment(attachment)}><X size={12} /></button>
             </div>
           ))}
         </div>
       )}
       <div className={`composer ${listening ? 'is-listening' : ''}`}>
-        {!minimal && <input ref={fileRef} className="visually-hidden" type="file" multiple aria-label="Choisir des fichiers" onChange={(event) => { addFiles(Array.from(event.target.files || [])); event.target.value = '' }} />}
-        {!minimal && <button type="button" className="composer-plus" aria-label="Ajouter des fichiers" disabled={disabled} onClick={() => fileRef.current?.click()}><Plus size={19} /></button>}
+        {!minimal && <input ref={fileRef} className="visually-hidden" type="file" multiple aria-label={t('composer.chooseFiles')} onChange={(event) => { addFiles(Array.from(event.target.files || [])); event.target.value = '' }} />}
+        {!minimal && <button type="button" className="composer-plus" aria-label={t('composer.addFiles')} disabled={disabled} onClick={() => fileRef.current?.click()}><Plus size={19} /></button>}
         <textarea
           ref={textareaRef}
           rows={1}
           value={text}
           disabled={disabled}
-          placeholder={busy ? deliveryPlaceholder(delivery, bot.name) : running ? `Message ${bot.name}` : modePlaceholder(mode, bot.name)}
-          aria-label={`Message à ${bot.name}`}
+          placeholder={busy ? deliveryPlaceholder(delivery, bot.name) : running ? t('modes.placeholder.exec', { name: bot.name }) : modePlaceholder(mode, bot.name)}
+          aria-label={t('composer.messageTo', { name: bot.name })}
           aria-expanded={menuOpen}
           aria-controls={menuOpen ? 'mention-menu' : undefined}
           aria-activedescendant={menuOpen ? `mention-${options[activeOption].bot.slug}` : undefined}
@@ -302,13 +305,13 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             }
           }}
         />
-        {speechAvailable && !running && <button type="button" className={`composer-mic ${listening ? 'is-active' : ''}`} aria-label={listening ? 'Arrêter la dictée' : 'Dicter'} onClick={dictate}><Mic size={17} /></button>}
-        {running && <button type="button" className="composer-send is-stop" aria-label="Arrêter le bot" onClick={onStop}><Square size={13} fill="currentColor" /></button>}
-        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? 'Envoyer en priorité' : 'Mettre en file') : 'Envoyer'} disabled={disabled || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
+        {speechAvailable && !running && <button type="button" className={`composer-mic ${listening ? 'is-active' : ''}`} aria-label={listening ? t('composer.stopDictation') : t('composer.dictate')} onClick={dictate}><Mic size={17} /></button>}
+        {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Square size={13} fill="currentColor" /></button>}
+        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-hint">
         {!minimal && (
-          <div className="mode-switch" role="radiogroup" aria-label="Mode de travail">
+          <div className="mode-switch" role="radiogroup" aria-label={t('composer.modeGroup')}>
             {CHAT_MODES.map((item) => (
               <button type="button" key={item.id} role="radio" aria-checked={mode === item.id} title={item.title} className={`mode-${item.id} ${mode === item.id ? 'is-active' : ''}`} onClick={() => chooseMode(item.id)}>
                 <i aria-hidden="true" />{item.label}
@@ -317,7 +320,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           </div>
         )}
         {busy && (
-          <div key={nudge} className={`delivery-switch ${nudge ? 'is-nudged' : ''}`} role="radiogroup" aria-label="Envoi pendant le travail">
+          <div key={nudge} className={`delivery-switch ${nudge ? 'is-nudged' : ''}`} role="radiogroup" aria-label={t('composer.deliveryGroup')}>
             {DELIVERY_MODES.map((item) => (
               <button type="button" key={item.id} role="radio" aria-checked={delivery === item.id} title={item.title} className={`delivery-${item.id} ${delivery === item.id ? 'is-active' : ''}`} onClick={() => { setDelivery(item.id); textareaRef.current?.focus() }}>
                 {item.label}
@@ -325,12 +328,12 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             ))}
           </div>
         )}
-        {busy && <span className="composer-hint-keys" aria-live="polite">{delivery === 'wait' ? `Brouillon gardé jusqu’à la fin du tour · File ou Prio pour l’envoyer maintenant` : delivery === 'queue' ? `Part quand ${bot.name} a fini` : `${bot.name} s’interrompt, lit, puis reprend`}</span>}
-        {!busy && <span className="composer-hint-keys">{sendKey === 'enter' ? 'Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne' : '⌘ Entrée pour envoyer · Entrée pour une nouvelle ligne'}{minimal ? '' : ' · @ pour citer un bot · /model'}</span>}
+        {busy && <span className="composer-hint-keys" aria-live="polite">{delivery === 'wait' ? t('composer.hintWait') : delivery === 'queue' ? t('composer.hintQueue', { name: bot.name }) : t('composer.hintPriority', { name: bot.name })}</span>}
+        {!busy && <span className="composer-hint-keys">{sendKey === 'enter' ? t('composer.hintEnter') : t('composer.hintCmdEnter')}{minimal ? '' : t('composer.hintExtras')}</span>}
         {!minimal && <div className="composer-status">
           {showUsage && <span className="usage-readout">{formatUsage(usage)}</span>}
-          <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label="Afficher le contexte et le débit" aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={13} /></button>
-          <button type="button" className="model-chip" aria-label="Choisir le modèle" onClick={() => onOpenModels('')}>{modelLabel}<ChevronDown size={11} /></button>
+          <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label={t('composer.usageToggle')} aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={13} /></button>
+          <button type="button" className="model-chip" aria-label={t('composer.chooseModel')} onClick={() => onOpenModels('')}>{modelLabel}<ChevronDown size={11} /></button>
         </div>}
       </div>
     </div>

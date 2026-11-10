@@ -1,4 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, Copy, ArrowDown, ChevronDown } from 'lucide-react'
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -30,8 +31,8 @@ interface MentionContextValue {
   onOpenBot: (slug: string) => void
 }
 
-// Les composants Markdown restent au niveau du module : une nouvelle identité à chaque rendu
-// remonterait tout le sous-arbre, et une vidéo en lecture repartirait à zéro pendant le streaming.
+// The Markdown components stay at module level: a new identity on every render would remount
+// the whole subtree, and a playing video would restart from zero while streaming.
 const MediaContext = createContext<MediaContextValue | null>(null)
 const MentionContext = createContext<MentionContextValue | null>(null)
 
@@ -46,8 +47,8 @@ function MarkdownLink({ href, children, node: _node, ...props }: ComponentProps<
 }
 
 /**
- * Un paragraphe fait seulement de médias devient une galerie (plusieurs images à la suite). Toujours un
- * `<p>` : changer d’élément quand du texte arrive après un média remonterait une vidéo en lecture.
+ * A paragraph made only of media becomes a gallery (several images in a row). Always a
+ * `<p>`: changing the element when text arrives after a media would remount a playing video.
  */
 function MarkdownParagraph({ node, children }: ComponentProps<'p'> & ExtraProps) {
   const nodes = node?.children || []
@@ -58,14 +59,15 @@ function MarkdownParagraph({ node, children }: ComponentProps<'p'> & ExtraProps)
   return <p className={onlyMedia ? `media-group ${media.length === 1 ? 'is-single' : 'is-grid'}` : undefined}>{children}</p>
 }
 
-// Une image distante chargée toute seule peut faire fuiter des données dans son URL.
+// A remote image that loads on its own can leak data through its URL.
 function MarkdownImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
+  const { t } = useTranslation()
   const url = typeof src === 'string' ? src : ''
   if (url.startsWith('data:image/') || url.startsWith('blob:')) return <img src={url} alt={alt || ''} />
-  return <a href={url} target="_blank" rel="noreferrer noopener">{alt || 'Image'}</a>
+  return <a href={url} target="_blank" rel="noreferrer noopener">{alt || t('messages.imageFallback')}</a>
 }
 
-/** Un bloc de code `hermes-mail` devient la carte de mail à valider. */
+/** A `hermes-mail` code block becomes the mail card to approve. */
 function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
   const context = useContext(MediaContext)
   const code = node?.children[0]
@@ -82,10 +84,10 @@ const MARKDOWN_COMPONENTS: Components = { a: MarkdownLink, p: MarkdownParagraph,
 interface MarkdownProps {
   content: string
   profile: string
-  /** Identifiant du message : versionne les URL des médias. */
+  /** Message id: versions the media URLs. */
   version: string
   streaming?: boolean
-  /** Montre sous le texte les images, vidéos, sons et PDF que le bot cite par leur chemin. */
+  /** Shows below the text the images, videos, sounds and PDFs the bot cites by path. */
   citedFiles?: boolean
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
@@ -99,15 +101,16 @@ interface CitedFilesProps {
   onOpenDocument?: (media: MediaRef) => void
 }
 
-/** Ce que le bot a produit, lisible sans quitter le chat : vignettes, lecteurs, PDF à côté. */
+/** What the bot produced, readable without leaving the chat: thumbnails, players, PDFs beside. */
 function CitedFiles({ files, profile, version, onOpenImages, onOpenDocument }: CitedFilesProps) {
+  const { t } = useTranslation()
   const openImage = (item: MediaRef) => {
     const images = files.filter((entry) => entry === item || (entry.kind === 'image' && !mediaFailed(profile, entry)))
     onOpenImages(images, Math.max(0, images.indexOf(item)), version)
   }
   return (
     <div className="cited-files">
-      <div className="cited-files-label">{files.length === 1 ? 'Fichier cité' : `${files.length} fichiers cités`}</div>
+      <div className="cited-files-label">{t('messages.citedFile', { count: files.length })}</div>
       <div className="cited-files-grid">
         {files.map((file) => <MediaEmbed key={file.path} media={file} profile={profile} version={version} onOpenImage={openImage} onOpenDocument={onOpenDocument} />)}
       </div>
@@ -117,7 +120,7 @@ function CitedFiles({ files, profile, version, onOpenImages, onOpenDocument }: C
 
 export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
-  // Un collecteur par texte : le plugin y range les médias, les liens #media:<index> y renvoient.
+  // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
   const mentionIndexValue = useContext(MentionContext)?.index
   const plugins = useMemo<NonNullable<Options['remarkPlugins']>>(() => [
@@ -131,13 +134,13 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
     version,
     streaming,
     openImage: (item) => {
-      // Toutes les images lisibles du message, dans l’ordre : on passe d’une slide à l’autre.
+      // All the readable images of the message, in order: the viewer moves from one slide to the next.
       const images = sink.media.filter((entry) => entry === item || (entry.kind === 'image' && isServablePath(entry.path) && !mediaFailed(profile, entry)))
       onOpenImages(images, Math.max(0, images.indexOf(item)), version)
     },
     openDocument: onOpenDocument,
   }), [sink, profile, version, streaming, onOpenImages, onOpenDocument])
-  // Pendant le streaming, un chemin peut être coupé : les fichiers s’affichent à la fin du message.
+  // While streaming, a path can be cut off: the files show once the message is complete.
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (
     <MediaContext.Provider value={context}>
@@ -154,18 +157,19 @@ interface MessageProps {
   onOpenDocument: (media: MediaRef) => void
 }
 
-// Un message que l’utilisateur vient d’envoyer entre en douceur ; le fil chargé ou mis en cache s’affiche tel quel.
+// A message the user just sent fades in; a loaded or cached thread shows as is.
 const isEntering = (message: ChatMessage) => message.id.startsWith('local-') && Date.now() - Date.parse(message.createdAt || '') < 2500
 
-/** Bot nommé par Hermes (`iris`, `@iris`, `Dr. Foo`, `moxie@homelab`) : le bot du roster, ou le nom tel quel. */
+/** Bot named by Hermes (`iris`, `@iris`, `Dr. Foo`, `moxie@homelab`): the roster bot, or the name as is. */
 function AgentName({ handle, fallback }: { handle: string; fallback?: string }) {
+  const { t } = useTranslation()
   const mentions = useContext(MentionContext)
   const tag = handle.trim().replace(/^@/, '').toLowerCase()
   const slug = mentions?.index.get(tag) ?? mentions?.index.get(tag.split('@')[0]) ?? mentionedSlugOf(fallback || '', mentions?.index)
   const bot = slug ? mentions?.bots.get(slug) : undefined
   if (!bot) return <span className="agent-note-name">{fallback || handle.replace(/^@/, '')}</span>
   return (
-    <button type="button" className="agent-note-name" onClick={() => mentions?.onOpenBot(bot.slug)} title={`Ouvrir ${bot.name}`}>
+    <button type="button" className="agent-note-name" onClick={() => mentions?.onOpenBot(bot.slug)} title={t('agentNotes.open', { name: bot.name })}>
       <BotAvatar bot={bot} size={16} />{bot.name}
     </button>
   )
@@ -176,10 +180,11 @@ function mentionedSlugOf(name: string, index?: Map<string, string | null>) {
   return form ? index?.get(form) ?? undefined : undefined
 }
 
-const AGENT_VERBS: Record<AgentMessage['kind'], string> = { message: 'messaged', reply: 'replied to', 'no-reply': 'hasn’t replied to' }
+const AGENT_VERB_KEYS: Record<AgentMessage['kind'], string> = { message: 'agentNotes.message', reply: 'agentNotes.reply', 'no-reply': 'agentNotes.noReply' }
 
-/** « Orion messaged Iris » : le verbe ouvre le message, chaque nom ouvre son bot. */
+/** “Orion messaged Iris”: the verb opens the message, each name opens its bot. */
 function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessageProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const agent = message.agent as AgentMessage
   return (
@@ -187,7 +192,7 @@ function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessagePr
       <div className="agent-note-line">
         <AgentName handle={agent.from} fallback={agent.fromName} />{' '}
         <button type="button" className="agent-note-verb" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-          {AGENT_VERBS[agent.kind]}<ChevronDown size={11} aria-hidden="true" />
+          {t(AGENT_VERB_KEYS[agent.kind])}<ChevronDown size={11} aria-hidden="true" />
         </button>{' '}
         <AgentName handle={agent.to} />
         {message.createdAt && <>{' '}<time>{shortTime(message.createdAt)}</time></>}
@@ -196,7 +201,7 @@ function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessagePr
         <div className="agent-note-body message-content">
           {agent.text
             ? <Markdown content={agent.text} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
-            : <p className="agent-note-empty">Message vide.</p>}
+            : <p className="agent-note-empty">{t('agentNotes.empty')}</p>}
         </div>
       )}
     </div>
@@ -204,6 +209,7 @@ function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessagePr
 }
 
 const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument }: MessageProps) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     await navigator.clipboard.writeText(message.content)
@@ -222,16 +228,16 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
       </div>
       {!message.streaming && (
         <div className="message-meta">
-          <span>{message.pending ? 'Envoi…' : message.failed ? 'Échec de l’envoi' : shortTime(message.createdAt)}</span>
-          {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? 'Prioritaire' : 'En file'}</span>}
-          {message.role === 'assistant' && <button className="message-copy" aria-label="Copier la réponse" onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
+          <span>{message.pending ? t('messages.sending') : message.failed ? t('messages.sendFailed') : shortTime(message.createdAt)}</span>
+          {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? t('messages.priority') : t('messages.queued')}</span>}
+          {message.role === 'assistant' && <button className="message-copy" aria-label={t('messages.copyReply')} onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
         </div>
       )}
     </article>
   )
 })
 
-// Touches qui font défiler le fil : elles comptent comme un geste de l’utilisateur.
+// Keys that scroll the thread: they count as a user gesture.
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '])
 
 interface MessageListProps {
@@ -239,7 +245,7 @@ interface MessageListProps {
   bots: Bot[]
   messages: ChatMessage[]
   streaming: string
-  /** Identifiant du tour en cours : le message final le reprend, la bulle n’est pas remontée. */
+  /** Id of the current turn: the final message reuses it, so the bubble is not remounted. */
   streamKey: string
   running: boolean
   activity: string
@@ -250,6 +256,7 @@ interface MessageListProps {
 }
 
 export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, loading, onSuggestion, onOpenDocument, onOpenBot }: MessageListProps) {
+  const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -258,7 +265,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const [showJump, setShowJump] = useState(false)
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   const visibleMessages = messages.filter((message) => message.agent || (!message.technical && message.role !== 'system' && message.role !== 'tool'))
-  // Un `NOREPLY` en cours d’écriture ne s’affiche jamais : on montre le bot au travail à la place.
+  // A `NOREPLY` being written never shows: the bot at work is shown instead.
   const silentStream = Boolean(streaming) && mayBecomeSilent(streaming)
   const items = streaming && !silentStream
     ? [...visibleMessages, { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage]
@@ -266,11 +273,11 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const count = items.length
   const profile = bot.slug
   const mailContext = useMemo(() => ({ profile, running, approved: approvedMailIds(messages), onApprove: onSuggestion }), [profile, running, messages, onSuggestion])
-  // Le roster est relu toutes les 30 s : tant que les noms ne changent pas, aucun message n’est réanalysé.
+  // The roster is re-read every 30 s: as long as names don’t change, no message is re-parsed.
   const rosterKey = bots.map((item) => `${item.slug}\n${item.name}\n${item.avatar?.shape}\n${item.avatar?.color}`).join('\n')
   const mentionValue = useMemo<MentionContextValue>(() => ({
     index: buildMentionIndex(bots),
-    // Avatar fixe dans le fil : un bot nommé ne s’anime jamais ici, même au travail.
+    // Static avatar in the thread: a named bot never animates here, even when working.
     bots: new Map(bots.map((item) => [item.slug, { ...item, status: 'idle' as const }])),
     onOpenBot,
   }), [rosterKey, onOpenBot])
@@ -288,8 +295,8 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     setShowJump(false)
     endRef.current?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'instant' })
   }
-  // On suit l’intention de l’utilisateur, pas la géométrie : un défilement programmé ou une image qui charge
-  // ne décroche jamais le fil ; une molette vers le haut le décroche tout de suite, avant même le scroll.
+  // We follow the user’s intent, not the geometry: a programmatic scroll or a loading image
+  // never detaches the thread; a wheel turn upward detaches it right away, before the scroll even happens.
   const noteIntent = () => { intentAtRef.current = Date.now() }
   const unstick = () => {
     stickToBottomRef.current = false
@@ -302,7 +309,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   useEffect(() => {
     if (stickToBottomRef.current) followBottom()
   }, [count, streaming, running, loading])
-  // Une image ou une vidéo qui finit de charger agrandit le fil : on reste en bas seulement si l’utilisateur y était.
+  // An image or video that finishes loading makes the thread taller: we stay at the bottom only if the user was there.
   useEffect(() => {
     const column = columnRef.current
     if (!column || typeof ResizeObserver === 'undefined') return
@@ -325,7 +332,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
         onTouchStart={noteIntent}
         onTouchMove={noteIntent}
         onKeyDown={(event) => { if (SCROLL_KEYS.has(event.key)) noteIntent() }}
-        // Un clic sur le conteneur lui-même, c’est sa barre de défilement.
+        // A click on the container itself is a click on its scrollbar.
         onPointerDown={(event) => { if (event.target === event.currentTarget) noteIntent() }}
         onScroll={() => {
           const element = scrollRef.current
@@ -344,7 +351,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             <div className="chat-skeleton" aria-hidden="true">
               <span className="is-bot" /><span className="is-user" /><span className="is-bot is-tall" /><span className="is-user is-short" /><span className="is-bot" />
             </div>
-            <div className="chat-loading-label"><BotAvatar bot={bot} size={22} /><span>Ouverture de la conversation avec {bot.name}…</span></div>
+            <div className="chat-loading-label"><BotAvatar bot={bot} size={22} /><span>{t('messages.opening', { name: bot.name })}</span></div>
           </div>
         )}
         {!loading && items.length === 0 && (
@@ -353,7 +360,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             <h2>{bot.name}</h2>
             <p>{bot.role}</p>
             <div className="suggestions">
-              {['Que peux-tu faire ?', 'Fais-moi un point sur ta journée.', 'Qu’as-tu terminé récemment ?'].map((suggestion) => (
+              {[t('messages.suggestionCapabilities'), t('messages.suggestionDay'), t('messages.suggestionRecent')].map((suggestion) => (
                 <button key={suggestion} onClick={() => onSuggestion(suggestion)}>{suggestion}</button>
               ))}
             </div>
@@ -381,7 +388,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
       </MentionContext.Provider>
       </MailContext.Provider>
       </div>
-      {showJump && <button className="jump-latest" onClick={() => scrollToBottom(true)}><ArrowDown size={14} />Nouveaux messages</button>}
+      {showJump && <button className="jump-latest" onClick={() => scrollToBottom(true)}><ArrowDown size={14} />{t('messages.newMessages')}</button>}
       {viewer && <MediaViewer viewer={viewer} onClose={closeViewer} onMove={moveViewer} />}
     </div>
   )

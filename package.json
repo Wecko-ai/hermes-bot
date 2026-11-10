@@ -25,12 +25,15 @@
     "minimatch": "11.0.1"
   },
   "dependencies": {
+    "i18next": "26.5.11",
     "lucide-react": "0.577.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-i18next": "17.1.9",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
-    "ws": "8.22.0"
+    "ws": "8.22.0",
+    "zustand": "5.1.0"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

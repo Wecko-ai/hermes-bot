@@ -523,7 +523,8 @@ try {
   if ((await fetch('http://127.0.0.1:4332/api/health', { headers: { Origin: 'null' } })).status !== 403) throw new Error('Origin null accepté.')
 
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  // Interface en français : les textes cherchés plus bas sont ceux du catalogue français.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'fr-FR' })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   // Chromium annonce la requête avant que la CSP la bloque : seul un refus CSP la retire de la liste.
@@ -1610,6 +1611,17 @@ try {
   await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}demo-activity.png` })
+  // Interface en anglais : même démo, système en anglais.
+  const english = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'en-US' })
+  await english.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
+  await english.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
+  await english.getByRole('button', { name: 'Settings' }).waitFor({ timeout: 3_000 })
+  await english.getByRole('button', { name: 'Activity', exact: true }).waitFor({ timeout: 3_000 })
+  if (await english.evaluate(() => document.documentElement.lang) !== 'en') throw new Error('La langue du document doit suivre le système.')
+  const frenchChrome = await english.locator('[aria-label], button').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') || node.textContent || '').filter((label) => /Réglages|Activité|Groupes|Se déconnecter|Au travail|Rechercher/.test(label)))
+  if (frenchChrome.length) throw new Error(`Interface anglaise avec des libellés français : ${frenchChrome.slice(0, 5).join(' | ')}`)
+  await english.screenshot({ path: `${SCREENSHOTS}demo-english.png` })
+  await english.close()
   if (await page.locator('.sidebar-filter-row').evaluate((row) => row.scrollWidth > row.clientWidth)) throw new Error('La ligne de filtres déborde de la sidebar.')
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
   await page.getByRole('button', { name: 'Passer au thème sombre' }).click()

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, ImageOff, X } from 'lucide-react'
 import { isServablePath, mediaUrl, type MediaRef } from '../lib/media'
@@ -12,19 +13,20 @@ export interface ViewerState {
 interface MediaEmbedProps {
   media: MediaRef
   profile: string
-  /** Identifiant du message : une nouvelle version d’un fichier au même nom ne sort pas du cache. */
+  /** Message id: a new version of a file with the same name does not come from the cache. */
   version: string
   onOpenImage?: (media: MediaRef) => void
   onOpenDocument?: (media: MediaRef) => void
 }
 
-// Médias introuvables : la visionneuse les saute. Un média qui finit par se charger en sort.
+// Media that cannot be found: the viewer skips them. A media that eventually loads leaves the set.
 const failedMedia = new Set<string>()
 const failureKey = (profile: string, path: string) => `${profile}\n${path}`
 export const mediaFailed = (profile: string, media: MediaRef) => failedMedia.has(failureKey(profile, media.path))
 
-/** Un média `MEDIA:` du bot, lu par le serveur local. Rien ne charge directement le disque ni l’extérieur. */
+/** A bot `MEDIA:` item, read through the local server. Nothing loads directly from disk or from the outside. */
 export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocument }: MediaEmbedProps) {
+  const { t } = useTranslation()
   const [failed, setFailedState] = useState(false)
   const setFailed = (value: boolean) => {
     if (value) failedMedia.add(failureKey(profile, media.path))
@@ -32,11 +34,11 @@ export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocumen
     setFailedState(value)
   }
   if (media.kind === 'link') {
-    // Règle du projet : une image distante ne se charge jamais toute seule, lien seulement.
+    // Project rule: a remote image never loads on its own, link only.
     return (
       <a className="media-card media-link" href={media.path} target="_blank" rel="noreferrer noopener" title={media.path}>
         <ExternalLink size={14} />
-        <span className="media-card-text"><strong>{media.name}</strong><small>Lien externe</small></span>
+        <span className="media-card-text"><strong>{media.name}</strong><small>{t('media.externalLink')}</small></span>
       </a>
     )
   }
@@ -44,12 +46,12 @@ export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocumen
     return (
       <button type="button" className="media-card media-document" title={media.path} onClick={() => onOpenDocument?.(media)}>
         <FileText size={15} />
-        <span className="media-card-text"><strong>{media.name}</strong><small>Ouvrir à côté</small></span>
+        <span className="media-card-text"><strong>{media.name}</strong><small>{t('media.openBeside')}</small></span>
       </button>
     )
   }
   if (failed || media.kind === 'file' || !isServablePath(media.path)) {
-    const detail = failed ? 'Aperçu indisponible' : media.kind === 'file' ? 'Fichier local' : 'Chemin relatif'
+    const detail = failed ? t('media.previewUnavailable') : media.kind === 'file' ? t('media.localFile') : t('media.relativePath')
     return (
       <span className="media-card media-fallback" title={media.path}>
         {media.kind === 'file' || media.kind === 'document' ? <FileText size={15} /> : <ImageOff size={15} />}
@@ -60,7 +62,7 @@ export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocumen
   const src = mediaUrl(profile, media.path, version)
   if (media.kind === 'image') {
     return (
-      <button type="button" className="media-item media-thumb" title={media.name} aria-label={`Agrandir ${media.name}`} onClick={() => onOpenImage?.(media)}>
+      <button type="button" className="media-item media-thumb" title={media.name} aria-label={t('media.enlarge', { name: media.name })} onClick={() => onOpenImage?.(media)}>
         <img className="media-image" src={src} alt={media.name} loading="lazy" decoding="async" draggable={false} onLoad={() => setFailed(false)} onError={() => setFailed(true)} />
       </button>
     )
@@ -89,15 +91,16 @@ interface MediaViewerProps {
 const typingTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
-/** Visionneuse plein écran : Échap ferme, ← → passent d’une slide à l’autre, le focus reste dedans. */
+/** Full-screen viewer: Esc closes, ← → move between slides, focus stays inside. */
 export function MediaViewer({ viewer, onClose, onMove }: MediaViewerProps) {
+  const { t } = useTranslation()
   const { images, index, profile, version } = viewer
   const count = images.length
   const media = images[index]
   const [failed, setFailed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => setFailed(false), [index])
-  // À la fermeture, le focus revient là où il était (la vignette cliquée).
+  // On close, focus goes back to where it was (the clicked thumbnail).
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     return () => previous?.focus({ preventScroll: true })
@@ -129,7 +132,7 @@ export function MediaViewer({ viewer, onClose, onMove }: MediaViewerProps) {
     <div className="media-viewer" ref={rootRef} role="dialog" aria-modal="true" aria-label={media.name} onClick={onClose}>
       <figure className="media-viewer-figure" onClick={(event) => event.stopPropagation()}>
         {failed
-          ? <span className="media-viewer-missing"><ImageOff size={22} />Aperçu indisponible</span>
+          ? <span className="media-viewer-missing"><ImageOff size={22} />{t('media.previewUnavailable')}</span>
           : <img key={media.path} src={mediaUrl(profile, media.path, version)} alt={media.name} onError={() => setFailed(true)} />}
         <figcaption>
           <span title={media.path}>{media.name}</span>
@@ -138,11 +141,11 @@ export function MediaViewer({ viewer, onClose, onMove }: MediaViewerProps) {
       </figure>
       {count > 1 && (
         <>
-          <button type="button" className="media-viewer-nav is-prev" aria-label="Image précédente" onClick={move(-1)}><ChevronLeft size={20} /></button>
-          <button type="button" className="media-viewer-nav is-next" aria-label="Image suivante" onClick={move(1)}><ChevronRight size={20} /></button>
+          <button type="button" className="media-viewer-nav is-prev" aria-label={t('media.previous')} onClick={move(-1)}><ChevronLeft size={20} /></button>
+          <button type="button" className="media-viewer-nav is-next" aria-label={t('media.next')} onClick={move(1)}><ChevronRight size={20} /></button>
         </>
       )}
-      <button type="button" className="media-viewer-close" aria-label="Fermer" autoFocus onClick={(event) => { event.stopPropagation(); onClose() }}><X size={18} /></button>
+      <button type="button" className="media-viewer-close" aria-label={t('media.close')} autoFocus onClick={(event) => { event.stopPropagation(); onClose() }}><X size={18} /></button>
     </div>
   )
 }

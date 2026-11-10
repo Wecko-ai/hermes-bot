@@ -1,12 +1,14 @@
+import { i18n, locale } from '../i18n'
+
 /**
- * Pièces jointes du composer : choix du fichier, glisser-déposer et collage.
- * Les images lisibles par le modèle passent par `image.attach_bytes`, tout le reste par `file.attach`,
- * dont le `@file:` part dans le texte du prompt. Même chemin en local et à distance : depuis
- * un autre Mac, le fichier n’existe pas côté gateway.
+ * Composer attachments: file picker, drag and drop, and paste.
+ * Images the model can read go through `image.attach_bytes`, everything else through `file.attach`,
+ * whose `@file:` goes into the prompt text. Same path locally and remotely: from
+ * another Mac, the file does not exist on the gateway side.
  */
 
 export const MAX_ATTACHMENTS = 10
-/** `_ATTACHMENT_MAX_BYTES` de Hermes vaut 256 Mio, et le base64 ajoute un tiers dans la trame WebSocket. */
+/** Hermes’s `_ATTACHMENT_MAX_BYTES` is 256 MiB, and base64 adds a third in the WebSocket frame. */
 export const MAX_FILE_BYTES = 200 * 1024 * 1024
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024
 const VISION_IMAGE = /^image\/(png|jpeg|gif|webp)$/
@@ -19,7 +21,7 @@ export interface PendingAttachment {
   name: string
   size: number
   kind: AttachmentKind
-  /** Vignette `blob:` des images, libérée au retrait ou après l’envoi. */
+  /** `blob:` thumbnail of images, released on removal or after sending. */
   previewUrl?: string
 }
 
@@ -28,19 +30,19 @@ export function attachmentKind(file: Pick<File, 'type' | 'size'>): AttachmentKin
 }
 
 export function formatBytes(bytes: number) {
-  if (bytes >= 1_000_000) return `${Number((bytes / 1_000_000).toFixed(1)).toLocaleString('fr-FR')} Mo`
-  if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} ko`
-  return `${bytes} o`
+  if (bytes >= 1_000_000) return i18n.t('attachments.megabytes', { value: Number((bytes / 1_000_000).toFixed(1)).toLocaleString(locale()) })
+  if (bytes >= 1_000) return i18n.t('attachments.kilobytes', { value: Math.round(bytes / 1_000) })
+  return i18n.t('attachments.bytes', { value: bytes })
 }
 
-/** Sépare ce qui peut partir de ce qui est refusé, avec la raison à montrer. */
+/** Splits what can be sent from what is refused, with the reason to show. */
 export function filterAttachments<T extends Pick<File, 'name' | 'size'>>(files: T[], existing: number) {
   const accepted: T[] = []
   const refused: string[] = []
   for (const file of files) {
-    if (file.size === 0) refused.push(`${file.name} est vide`)
-    else if (file.size > MAX_FILE_BYTES) refused.push(`${file.name} dépasse 200 Mo`)
-    else if (existing + accepted.length >= MAX_ATTACHMENTS) refused.push(`${file.name} : ${MAX_ATTACHMENTS} fichiers maximum`)
+    if (file.size === 0) refused.push(i18n.t('attachments.empty', { name: file.name }))
+    else if (file.size > MAX_FILE_BYTES) refused.push(i18n.t('attachments.tooLarge', { name: file.name }))
+    else if (existing + accepted.length >= MAX_ATTACHMENTS) refused.push(i18n.t('attachments.tooMany', { name: file.name, max: MAX_ATTACHMENTS }))
     else accepted.push(file)
   }
   return { accepted, refused }
@@ -49,12 +51,12 @@ export function filterAttachments<T extends Pick<File, 'name' | 'size'>>(files: 
 export function toAttachment(file: File): PendingAttachment {
   const kind = attachmentKind(file)
   return {
-    id: crypto.randomUUID(), file, name: file.name || 'fichier', size: file.size, kind,
+    id: crypto.randomUUID(), file, name: file.name || i18n.t('attachments.fallbackName'), size: file.size, kind,
     ...(kind === 'image' ? { previewUrl: URL.createObjectURL(file) } : {}),
   }
 }
 
-/** Les fichiers d’un dépôt. Un dossier se dépose comme un fichier vide : il est écarté ici. */
+/** The files of a drop. A folder drops as an empty file: it is filtered out here. */
 export function droppedFiles(transfer: DataTransfer) {
   const items = Array.from(transfer.items || []).filter((item) => item.kind === 'file')
   if (!items.length) return Array.from(transfer.files || [])
@@ -69,25 +71,25 @@ export function readDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(new Error(`Lecture impossible : ${file.name}`))
+    reader.onerror = () => reject(new Error(i18n.t('attachments.readFailed', { name: file.name })))
     reader.readAsDataURL(file)
   })
 }
 
 export const attachmentLabel = (attachment: Pick<PendingAttachment, 'name' | 'kind'>) =>
-  `[${attachment.kind === 'image' ? 'Image' : 'Fichier'} : ${attachment.name}]`
+  i18n.t(attachment.kind === 'image' ? 'attachments.labelImage' : 'attachments.labelFile', { name: attachment.name })
 
 export function defaultPrompt(attachments: Pick<PendingAttachment, 'kind'>[]) {
-  if (attachments.length === 1 && attachments[0].kind === 'image') return 'Analyse cette image.'
-  return attachments.length === 1 ? 'Regarde ce fichier.' : 'Regarde ces fichiers.'
+  if (attachments.length === 1 && attachments[0].kind === 'image') return i18n.t('attachments.promptImage')
+  return i18n.t(attachments.length === 1 ? 'attachments.promptFile' : 'attachments.promptFiles')
 }
 
 const FILE_REF = /@file:(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)/g
 
-/** Un `@file:attachments/rapport.pdf` déjà envoyé se relit comme une pièce jointe, pas comme un chemin. */
+/** An already-sent `@file:attachments/report.pdf` reads back as an attachment, not as a path. */
 export function withoutFileRefs(text: string) {
   return text.replace(FILE_REF, (_match, value: string) => {
     const path = /^[`"']/.test(value) ? value.slice(1, -1) : value
-    return `[Fichier : ${path.split('/').filter(Boolean).at(-1) || path}]`
+    return i18n.t('attachments.fileRef', { name: path.split('/').filter(Boolean).at(-1) || path })
   })
 }

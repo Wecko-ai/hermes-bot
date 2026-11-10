@@ -1,14 +1,17 @@
+import { i18n } from '../i18n'
+
 /**
- * Modes de travail du composer. BRAIN et PLAN partent dans `api_text` : le bot lit la consigne pour ce
- * tour seulement, et l’historique garde le texte de l’utilisateur. Hermes n’a pas de lecture seule par tour sur
- * un Bot Chat : c’est une consigne donnée au modèle, pas un verrou sur ses outils.
+ * Composer work modes. BRAIN and PLAN go out in `api_text`: the bot reads the instruction for this
+ * turn only, and the history keeps the user’s text. Hermes has no per-turn read-only mode on
+ * a Bot Chat: this is an instruction given to the model, not a lock on its tools.
  */
 export type ChatMode = 'brain' | 'plan' | 'exec'
 
 export const CHAT_MODES: { id: ChatMode; label: string; title: string }[] = [
-  { id: 'brain', label: 'BRAIN', title: 'Réfléchit avec toi et cherche les meilleures solutions, sans rien exécuter' },
-  { id: 'plan', label: 'PLAN', title: 'Construit un plan avec toi avant toute exécution' },
-  { id: 'exec', label: 'EXEC', title: 'Exécute la tâche' },
+  // Getters: the text follows the interface language at read time.
+  { id: 'brain', get label() { return i18n.t('modes.brain.label') }, get title() { return i18n.t('modes.brain.title') } },
+  { id: 'plan', get label() { return i18n.t('modes.plan.label') }, get title() { return i18n.t('modes.plan.title') } },
+  { id: 'exec', get label() { return i18n.t('modes.exec.label') }, get title() { return i18n.t('modes.exec.title') } },
 ]
 
 const NO_ACTION = 'You may read and research. Do not change files, run anything with side effects, send messages, or start the work.'
@@ -18,22 +21,20 @@ const INSTRUCTIONS: Partial<Record<ChatMode, string>> = {
   plan: `[HermesBot mode: PLAN. For this turn only, help the user build a plan before anything is executed. ${NO_ACTION} Give ordered steps, what each step touches, the risks, and how the result will be verified. Ask the questions that block the plan, then wait for the user's go.]`,
 }
 
-/** Le texte lu par le modèle, ou `undefined` en EXEC : le tour reste alors un message normal. */
+/** The text the model reads, or `undefined` in EXEC: the turn then stays a normal message. */
 export function modeApiText(text: string, mode: ChatMode) {
   const instruction = INSTRUCTIONS[mode]
   return instruction ? `${text}\n\n${instruction}` : undefined
 }
 
 export function modePlaceholder(mode: ChatMode, botName: string) {
-  if (mode === 'brain') return `Réfléchir avec ${botName}`
-  if (mode === 'plan') return `Préparer un plan avec ${botName}`
-  return `Message ${botName}`
+  return i18n.t(`modes.placeholder.${mode}`, { name: botName })
 }
 
 const STORAGE_KEY = 'hermesbot-modes'
 const isMode = (value: unknown): value is ChatMode => CHAT_MODES.some((mode) => mode.id === value)
 
-/** Le mode de chaque bot. Une valeur inconnue revient à EXEC, le comportement normal. */
+/** Each bot’s mode. An unknown value falls back to EXEC, the normal behavior. */
 export function loadModes(): Record<string, ChatMode> {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
@@ -45,5 +46,5 @@ export function loadModes(): Record<string, ChatMode> {
 }
 
 export function saveModes(modes: Record<string, ChatMode>) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(modes)) } catch { /* storage indisponible */ }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(modes)) } catch { /* storage unavailable */ }
 }

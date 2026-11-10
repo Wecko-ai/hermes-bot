@@ -1,0 +1,142 @@
+{
+  "composer": {
+    "mentionMenu": "Bots to mention",
+    "remove": "Remove {{name}}",
+    "chooseFiles": "Choose files",
+    "addFiles": "Add files",
+    "messageTo": "Message to {{name}}",
+    "stopDictation": "Stop dictation",
+    "dictate": "Dictate",
+    "stopBot": "Stop the bot",
+    "sendPriority": "Send as priority",
+    "sendQueue": "Add to queue",
+    "send": "Send",
+    "modeGroup": "Work mode",
+    "deliveryGroup": "Sending while working",
+    "notAdded": "Not added: {{files}}.",
+    "hintWait": "Draft kept until the turn ends · Queue or Prio to send it now",
+    "hintQueue": "Sends when {{name}} is done",
+    "hintPriority": "{{name}} stops, reads, then resumes",
+    "hintEnter": "Enter to send · Shift + Enter for a new line",
+    "hintCmdEnter": "⌘ Enter to send · Enter for a new line",
+    "hintExtras": " · @ to mention a bot · /model",
+    "usageToggle": "Show context and throughput",
+    "chooseModel": "Choose the model"
+  },
+  "messages": {
+    "citedFile_one": "Cited file",
+    "citedFile_other": "{{count}} cited files",
+    "imageFallback": "Image",
+    "sending": "Sending…",
+    "sendFailed": "Failed to send",
+    "priority": "Priority",
+    "queued": "Queued",
+    "copyReply": "Copy the reply",
+    "opening": "Opening the conversation with {{name}}…",
+    "suggestionCapabilities": "What can you do?",
+    "suggestionDay": "Give me an update on your day.",
+    "suggestionRecent": "What have you finished recently?",
+    "newMessages": "New messages"
+  },
+  "prompt": {
+    "approvalTitle": "{{name}} needs your approval",
+    "approvalDefault": "This action needs approval.",
+    "questionTitle": "{{name}} has a question for you",
+    "questionDefault": "The bot is waiting for your answer.",
+    "confirm": "Confirm",
+    "confirmCount": "Confirm ({{count}})",
+    "otherAnswer": "Other answer…",
+    "yourAnswer": "Your answer…",
+    "freeAnswer": "Free answer to {{name}}",
+    "sendAnswer": "Send the answer"
+  },
+  "mail": {
+    "approved": "Mail approved: {{subject}}",
+    "discarded": "Draft dismissed: {{subject}}",
+    "restore": "Restore",
+    "cardLabel": "Mail draft: {{subject}}",
+    "title": "Mail",
+    "subject": "Subject",
+    "from": "From",
+    "replyTo": "In reply to",
+    "to": "To",
+    "cc": "Cc",
+    "ccPlaceholder": "name@example.com",
+    "body": "Mail body",
+    "pending": "Awaiting approval",
+    "dismiss": "Dismiss",
+    "send": "Send",
+    "botBusy": "The bot is still working.",
+    "drafting": "Drafting mail…",
+    "sentTo": "{{subject}}, to {{to}}"
+  },
+  "media": {
+    "externalLink": "External link",
+    "openBeside": "Open beside",
+    "previewUnavailable": "Preview unavailable",
+    "localFile": "Local file",
+    "relativePath": "Relative path",
+    "enlarge": "Enlarge {{name}}",
+    "previous": "Previous image",
+    "next": "Next image",
+    "close": "Close",
+    "preview": {
+      "image": "Image",
+      "video": "Video",
+      "audio": "Audio",
+      "document": "Document",
+      "file": "File",
+      "link": "Link"
+    }
+  },
+  "document": {
+    "reload": "Reload {{name}}",
+    "download": "Download {{name}}",
+    "loading": "Opening…",
+    "tooLarge": "File too large to preview (16 MB maximum).",
+    "unavailable": "Preview unavailable."
+  },
+  "attachments": {
+    "bytes": "{{value}} B",
+    "kilobytes": "{{value}} kB",
+    "megabytes": "{{value}} MB",
+    "empty": "{{name}} is empty",
+    "tooLarge": "{{name}} exceeds 200 MB",
+    "tooMany": "{{name}}: {{max}} files maximum",
+    "fallbackName": "file",
+    "readFailed": "Cannot read {{name}}",
+    "labelImage": "[Image: {{name}}]",
+    "labelFile": "[File: {{name}}]",
+    "promptImage": "Analyze this image.",
+    "promptFile": "Look at this file.",
+    "promptFiles": "Look at these files.",
+    "fileRef": "[File: {{name}}]"
+  },
+  "agentNotes": {
+    "message": "messaged",
+    "reply": "replied to",
+    "noReply": "hasn’t replied to",
+    "empty": "Empty message.",
+    "open": "Open {{name}}"
+  },
+  "delivery": {
+    "wait": { "label": "Wait", "title": "The message stays a draft until the turn ends" },
+    "queue": { "label": "Queue", "title": "The message sends by itself once the bot has finished its task" },
+    "priority": { "label": "Prio", "title": "The bot stops, reads this message, then resumes its task" },
+    "placeholder": {
+      "queue": "Message for {{name}}, sent at the end of its turn",
+      "priority": "Priority message: {{name}} stops to read it",
+      "wait": "Write to {{name}}: the message waits for the end of its turn"
+    }
+  },
+  "modes": {
+    "brain": { "label": "BRAIN", "title": "Thinks it through with you and looks for the best solutions, without running anything" },
+    "plan": { "label": "PLAN", "title": "Builds a plan with you before anything runs" },
+    "exec": { "label": "EXEC", "title": "Runs the task" },
+    "placeholder": {
+      "brain": "Think it through with {{name}}",
+      "plan": "Prepare a plan with {{name}}",
+      "exec": "Message {{name}}"
+    }
+  }
+}

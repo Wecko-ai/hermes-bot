@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../types'
 
-/** Brouillon proposé par un bot dans un bloc ````hermes-mail, modifiable avant envoi. */
+/** Draft proposed by a bot in a ````hermes-mail block, editable before sending. */
 export interface MailDraft {
   id: string
   draftId: string
@@ -22,7 +22,7 @@ const HEADERS = new Map<string, keyof MailDraft>([
 const oneLine = (value: string) => value.replace(/[\r\n]+/g, ' ').trim()
 const normalizedBody = (value: string) => value.replace(/\r\n/g, '\n').replace(/\s+$/, '')
 
-/** En-têtes, ligne vide, corps : le format même d’un mail, plus sûr à écrire pour un modèle que du JSON. */
+/** Headers, blank line, body: the very format of a mail, safer for a model to write than JSON. */
 export function parseMailBlock(source: string): MailDraft | null {
   const text = source.replace(/\r\n/g, '\n').replace(/^\n+/, '').replace(/\n+$/, '')
   const split = text.indexOf('\n\n')
@@ -41,14 +41,14 @@ const addresses = (value: string) => value.split(',').map((item) => item.trim())
 export const validAddresses = (value: string) => addresses(value).every((item) => ADDRESS.test(item))
 export const canSendMail = (draft: MailDraft) => Boolean(draft.from) && addresses(draft.to).length > 0 && validAddresses(draft.to) && validAddresses(draft.cc) && Boolean(draft.body.trim())
 
-/** Empreinte de ce que l’utilisateur a validé : le script d’envoi refuse un mail qui n’y correspond plus. */
+/** Fingerprint of what the user approved: the sending script refuses a mail that no longer matches. */
 export async function mailDigest(draft: MailDraft) {
   const canonical = [draft.from, draft.draftId, draft.to, draft.cc, draft.subject].map(oneLine).concat(normalizedBody(draft.body)).join('\n').normalize('NFC')
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-/** Le message envoyé au bot quand un brouillon est approuvé. */
+/** The message sent to the bot when a draft is approved. */
 export async function approvedMailPrompt(draft: MailDraft) {
   const body = normalizedBody(draft.body)
   const longestRun = Math.max(3, ...[...body.matchAll(/`+/g)].map((match) => match[0].length))
@@ -70,7 +70,7 @@ export async function approvedMailPrompt(draft: MailDraft) {
   ].join('\n')
 }
 
-/** Brouillons déjà approuvés, retrouvés dans le fil : l’état survit à un rechargement. */
+/** Already-approved drafts, found again in the thread: the state survives a reload. */
 export function approvedMailIds(messages: ChatMessage[]) {
   const ids = new Set<string>()
   for (const message of messages) {

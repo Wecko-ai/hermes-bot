@@ -6,12 +6,15 @@ const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
 
 const { loadConfig } = require('../server/config.cjs')
+const { messages } = require('./messages.cjs')
 
 const ORIGIN = 'http://127.0.0.1:4330'
 // Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
 const config = loadConfig()
 const HERMES_ORIGIN = config.gatewayOrigin
 const SSH_HOST = config.sshHost
+// Native dialogs follow the system language; app.getPreferredSystemLanguages() needs the app to be ready.
+const text = () => messages(app.isReady() ? app.getPreferredSystemLanguages() : [app.getLocale?.() || ''])
 let hermesTunnelProcess
 let vaultTunnelProcess
 let hermesTunnelRestart
@@ -25,7 +28,7 @@ async function startServer() {
   try {
     await listening
   } catch (error) {
-    if (error.code === 'EADDRINUSE') throw new Error(`Le port ${error.port || 4330} est déjà pris. Quitte l’autre copie de HermesBot, puis relance.`)
+    if (error.code === 'EADDRINUSE') throw new Error(text().portTaken(error.port || 4330))
     throw error
   }
 }
@@ -96,7 +99,7 @@ function tunnelHasExited(tunnel) {
 }
 
 async function openHermesTunnel() {
-  if (!SSH_HOST) throw new Error(`Hermes ne répond pas sur ${HERMES_ORIGIN}. Lance la gateway (hermes gateway), ou renseigne sshHost pour ouvrir un tunnel SSH.`)
+  if (!SSH_HOST) throw new Error(text().noGateway(HERMES_ORIGIN))
   const port = new URL(HERMES_ORIGIN).port || '9120'
   const tunnelCwd = app.getPath('userData')
   fs.mkdirSync(tunnelCwd, { recursive: true })
@@ -109,7 +112,7 @@ async function openHermesTunnel() {
   hermesTunnelProcess = tunnel
   tunnel.once('error', (error) => { tunnelError = error })
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (tunnelError) throw new Error(`Tunnel SSH ${SSH_HOST}: ${tunnelError.message}`)
+    if (tunnelError) throw new Error(text().tunnelFailed(SSH_HOST, tunnelError.message))
     if (await hermesReady()) {
       openVaultTunnel()
       return
@@ -117,7 +120,7 @@ async function openHermesTunnel() {
     if (tunnelHasExited(tunnel)) break
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  throw new Error(`Hermes est absent. Le tunnel SSH ${SSH_HOST} ne répond pas.`)
+  throw new Error(text().tunnelSilent(SSH_HOST))
 }
 
 /**
@@ -211,7 +214,7 @@ async function createWindow() {
 }
 
 ipcMain.handle('hermes-bot:restart-tunnel', (event) => {
-  if (!event.senderFrame?.url.startsWith(`${ORIGIN}/`)) throw new Error('Origine refusée.')
+  if (!event.senderFrame?.url.startsWith(`${ORIGIN}/`)) throw new Error(text().forbiddenOrigin())
   return restartHermesTunnel()
 })
 

@@ -1,4 +1,4 @@
-// Logos officiels copiés depuis @lobehub/icons-static-svg 1.102.0 (MIT), voir src/assets/providers/README.md.
+// Official logos copied from @lobehub/icons-static-svg 1.102.0 (MIT), see src/assets/providers/README.md.
 const LOGOS = import.meta.glob<string>('../assets/providers/*.svg', { eager: true, query: '?url', import: 'default' })
 
 export const LOCAL_GROUP = 'local-llm'
@@ -10,10 +10,10 @@ export interface ProviderBrand {
   logo?: string
 }
 
-// Serveurs tournant sur la machine. opencodex et LiteLLM écoutent aussi en local, mais servent des modèles distants.
+// Servers running on this machine. opencodex and LiteLLM also listen locally, but serve remote models.
 const LOCAL_SERVER = /(?:^|[^a-z])(?:local|localhost|omlx|mlx|ollama|lm[- ]?studio|llama[.-]?cpp|vllm)(?:[^a-z]|$)/
 
-// L'ordre compte : la première marque reconnue dans le slug ou le nom gagne.
+// Order matters: the first brand recognized in the slug or the name wins.
 const BRANDS: Array<[RegExp, string]> = [
   [/anthropic|claude/, 'anthropic'],
   [/openrouter/, 'openrouter-color'],
@@ -49,7 +49,7 @@ const BRANDS: Array<[RegExp, string]> = [
   [/ollama/, 'ollama'],
 ]
 
-/** Tous les serveurs locaux forment un seul groupe « Local LLM » ; le fournisseur réel reste dans l'option envoyée à Hermes. */
+/** All local servers form a single “Local LLM” group; the real provider stays in the option sent to Hermes. */
 export function providerBrand(slug: string, name: string): ProviderBrand {
   const text = `${slug} ${name}`.toLocaleLowerCase('en')
   if (LOCAL_SERVER.test(text) && !text.includes('cloud')) return { group: LOCAL_GROUP, name: 'Local LLM', local: true }

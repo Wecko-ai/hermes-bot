@@ -1,6 +1,6 @@
 import { Logo } from './Login'
 
-/** Écran d’attente de l’app. `index.html` en contient la même forme, pour le temps de charger le code. */
+/** The app’s waiting screen. `index.html` holds the same shape while the code loads. */
 export function LoadingScreen({ label }: { label: string }) {
   return (
     <div className="app-loading" role="status" aria-live="polite">

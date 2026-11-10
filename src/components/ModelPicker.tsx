@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } from 'lucide-react'
 import type { ModelOption } from '../types'
 import { modelLabel } from '../lib/model'
@@ -61,13 +62,14 @@ function readOpenGroups(): string[] {
 }
 
 function saveOpenGroups(slugs: string[]) {
-  try { localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(slugs)) } catch { /* storage indisponible */ }
+  try { localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(slugs)) } catch { /* storage unavailable */ }
 }
 
 export function ModelPicker({ options, current, profileModel, loading, error, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState(initialQuery)
   const [openGroups, setOpenGroups] = useState(readOpenGroups)
-  // Le groupe du modèle actif s'ouvre toujours à l'arrivée : on ne le plie que pour cette ouverture.
+  // The active model's group always opens on arrival: it is only folded for this opening.
   const [currentFolded, setCurrentFolded] = useState(false)
   const [activeKey, setActiveKey] = useState('')
   const [pendingKey, setPendingKey] = useState('')
@@ -92,7 +94,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
   const currentSlug = currentOption ? brandOf(currentOption).group : ''
   const isOpen = (slug: string) => searching || (slug === currentSlug ? !currentFolded : openGroups.includes(slug))
 
-  // En recherche, tout est déplié : les flèches ne parcourent que les modèles.
+  // While searching everything is expanded: the arrows only walk through models.
   const rows = useMemo<Row[]>(() => groups.flatMap((group) => {
     const open = searching || (group.slug === currentSlug ? !currentFolded : openGroups.includes(group.slug))
     const models: Row[] = open ? group.models.map((option) => ({ key: modelKey(option), kind: 'model', slug: group.slug, option })) : []
@@ -158,7 +160,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
       if (active?.kind === 'model') choose(active.option)
       if (active?.kind === 'group') setGroupOpen(active.slug, !isOpen(active.slug))
     } else if (!searching && active && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-      // Champ vide ici : les flèches latérales n'ont pas de curseur à déplacer.
+      // Empty field here: the side arrows have no cursor to move.
       event.preventDefault()
       setGroupOpen(active.slug, event.key === 'ArrowRight')
       setActiveKey(groupKey(active.slug))
@@ -167,30 +169,30 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
 
   return (
     <>
-      <button className="model-picker-scrim" aria-label="Fermer le choix du modèle" onClick={onClose} />
-      <div className="model-picker" role="dialog" aria-label="Choisir un modèle">
+      <button className="model-picker-scrim" aria-label={t('models.closePicker')} onClick={onClose} />
+      <div className="model-picker" role="dialog" aria-label={t('models.choose')}>
         <div className="model-picker-search">
           <Search size={15} />
           <input
             ref={inputRef}
             value={query}
-            placeholder="Rechercher un modèle"
-            aria-label="Rechercher un modèle"
+            placeholder={t('models.search')}
+            aria-label={t('models.search')}
             aria-controls="model-picker-list"
             onChange={(event) => { setQuery(event.target.value); setActiveKey('') }}
             onKeyDown={onKeyDown}
           />
-          {query && <button className="model-picker-tool" aria-label="Effacer la recherche" title="Effacer" onClick={() => { setQuery(''); inputRef.current?.focus() }}><X size={14} /></button>}
+          {query && <button className="model-picker-tool" aria-label={t('models.clearSearch')} title={t('models.clear')} onClick={() => { setQuery(''); inputRef.current?.focus() }}><X size={14} /></button>}
           {!searching && groups.length > 1 && (
-            <button className="model-picker-tool" aria-label={allOpen ? 'Tout plier' : 'Tout déplier'} title={allOpen ? 'Tout plier' : 'Tout déplier'} onClick={toggleAll}>
+            <button className="model-picker-tool" aria-label={allOpen ? t('models.collapseAll') : t('models.expandAll')} title={allOpen ? t('models.collapseAll') : t('models.expandAll')} onClick={toggleAll}>
               {allOpen ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
             </button>
           )}
         </div>
         <div className="model-picker-list" id="model-picker-list" ref={listRef}>
-          {loading && options.length === 0 && <div className="model-picker-skeleton" aria-label="Chargement des modèles…"><span /><span /><span /><span /></div>}
+          {loading && options.length === 0 && <div className="model-picker-skeleton" aria-label={t('models.loading')}><span /><span /><span /><span /></div>}
           {error && <p className="model-picker-note is-error">{error}</p>}
-          {!loading && !error && filtered.length === 0 && <p className="model-picker-note">Aucun modèle trouvé.</p>}
+          {!loading && !error && filtered.length === 0 && <p className="model-picker-note">{t('models.none')}</p>}
           {groups.map((group) => {
             const open = isOpen(group.slug)
             const bodyId = `model-group-${group.slug}`
@@ -231,7 +233,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
                         >
                           <span className="model-option-name">{modelLabel(option.model)}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
-                          {option.model === profileModel && <span className="model-option-tag">Profil</span>}
+                          {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
                           {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                           {isCurrent && <Check className="model-option-check" size={15} />}
                         </button>
@@ -244,8 +246,8 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
           })}
         </div>
         <div className="model-picker-footer">
-          <span>Cette conversation seulement · <button type="button" className="model-picker-manage" onClick={onManage}>Gérer les modèles</button></span>
-          <span className="model-picker-keys" aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd><i>naviguer</i><kbd>←</kbd><kbd>→</kbd><i>plier</i><kbd>↵</kbd><i>choisir</i></span>
+          <span>{t('models.thisConversation')}<button type="button" className="model-picker-manage" onClick={onManage}>{t('models.manage')}</button></span>
+          <span className="model-picker-keys" aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd><i>{t('models.navigate')}</i><kbd>←</kbd><kbd>→</kbd><i>{t('models.fold')}</i><kbd>↵</kbd><i>{t('models.pick')}</i></span>
         </div>
       </div>
     </>

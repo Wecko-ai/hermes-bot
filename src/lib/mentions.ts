@@ -1,12 +1,13 @@
 /**
- * Mentions `@bot` du composer. Même contrat que le Bot Mode de Hermes Desktop
- * (`plugins/hermes-bots/plugin.tsx`) : l’app ne relaie jamais rien elle-même. Elle ajoute au prompt une
- * note qui dit à qui renvoie le tag, et le bot écrit lui-même à l’autre avec son outil `message_agent`.
+ * Composer `@bot` mentions. Same contract as Hermes Desktop’s Bot Mode
+ * (`plugins/hermes-bots/plugin.tsx`): the app never relays anything itself. It adds to the prompt a
+ * note saying which bot the tag refers to, and the bot writes to the other one itself with its `message_agent` tool.
  */
 import type { Bot } from '../types'
+import { locale } from '../i18n'
 
 export interface MentionToken {
-  /** Index du `@`. */
+  /** Index of the `@`. */
   start: number
   query: string
 }
@@ -19,7 +20,7 @@ export interface MentionOption {
 const RESERVED = new Set(['all', 'everyone', 'user', 'default', 'hermes'])
 const NOTE_START = '[@mentions resolved from the Bot Mode roster'
 
-/** Formes d’un nom : `« Dr. Foo »` donne `dr-foo` (ce que l’autocomplétion insère) et `drfoo`. */
+/** Forms of a name: `“Dr. Foo”` gives `dr-foo` (what autocomplete inserts) and `drfoo`. */
 export function mentionNameForms(value: string) {
   const name = value.trim().toLowerCase()
   if (!name) return []
@@ -32,13 +33,13 @@ export function botMentionTag(bot: Pick<Bot, 'slug' | 'name'>) {
   return mentionNameForms(bot.name)[0] || bot.slug
 }
 
-/** Le `@mot` sous le curseur, ou `null` si le curseur n’est pas dans une mention. */
+/** The `@word` under the caret, or `null` if the caret is not in a mention. */
 export function mentionTokenAt(text: string, caret: number): MentionToken | null {
   const match = /(^|\s)@([a-z0-9._-]*)$/i.exec(text.slice(0, caret))
   return match ? { start: match.index + match[1].length, query: match[2].toLowerCase() } : null
 }
 
-/** Bots proposés : jamais le bot de la conversation, ni un bot masqué. Début de nom d’abord. */
+/** Suggested bots: never the conversation’s own bot, nor a hidden one. Name prefix matches first. */
 export function mentionOptions(query: string, bots: Bot[], currentSlug: string, limit = 8): MentionOption[] {
   const rank = (option: MentionOption) => {
     const fields = [option.tag, option.bot.slug.toLowerCase(), option.bot.name.toLowerCase()]
@@ -50,12 +51,12 @@ export function mentionOptions(query: string, bots: Bot[], currentSlug: string, 
     .map((bot) => ({ bot, tag: botMentionTag(bot) }))
     .map((option) => ({ option, score: rank(option) }))
     .filter(({ score }) => score >= 0)
-    .sort((a, b) => a.score - b.score || a.option.bot.name.localeCompare(b.option.bot.name, 'fr'))
+    .sort((a, b) => a.score - b.score || a.option.bot.name.localeCompare(b.option.bot.name, locale()))
     .slice(0, limit)
     .map(({ option }) => option)
 }
 
-/** Forme de mention vers bot. Une forme portée par deux bots ne désigne personne. */
+/** Mention form to bot. A form shared by two bots designates nobody. */
 export function mentionIndex(bots: Pick<Bot, 'slug' | 'name'>[]) {
   const index = new Map<string, string | null>()
   for (const bot of bots) {
@@ -68,7 +69,7 @@ export function mentionIndex(bots: Pick<Bot, 'slug' | 'name'>[]) {
 
 const MENTION = /(^|[\s(])@([a-z0-9][a-z0-9_-]*)/gi
 
-/** Bots réellement mentionnés, hors code. `nova@exemple.com` n’est pas une mention. */
+/** Bots actually mentioned, outside code. `nova@example.com` is not a mention. */
 export function resolveMentions(text: string, bots: Bot[], currentSlug: string) {
   const prose = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
   const index = mentionIndex(bots)
@@ -80,7 +81,7 @@ export function resolveMentions(text: string, bots: Bot[], currentSlug: string) 
   return bots.filter((bot) => found.has(bot.slug))
 }
 
-/** Le texte envoyé au bot : la note n’identifie que les bots tagués, elle ne contacte personne. */
+/** The text sent to the bot: the note only identifies the tagged bots, it contacts nobody. */
 export function withMentionNote(text: string, bots: Bot[], currentSlug: string) {
   const mentioned = resolveMentions(text, bots, currentSlug)
   if (!mentioned.length) return text
@@ -91,7 +92,7 @@ export function withMentionNote(text: string, bots: Bot[], currentSlug: string) 
   return `${text}\n\n${NOTE_START} — the user is referring to: ${lines.join('; ')}. If they want one of these agents contacted, compose your own message and send it with your message_agent tool; never forward the user’s text verbatim. If this session has no message_agent tool, agent messaging is unavailable here — say so.]`
 }
 
-/** La note reste pour le bot : l’utilisateur ne voit que ce qu’il a écrit, à l’écran comme au rechargement. */
+/** The note is for the bot only: the user sees just what they wrote, on screen and after a reload. */
 export function withoutMentionNote(text: string) {
   const at = text.lastIndexOf(`\n\n${NOTE_START}`)
   return at >= 0 && text.trimEnd().endsWith(']') ? text.slice(0, at) : text
@@ -115,7 +116,7 @@ export function mentionedSlug(href: string | undefined) {
   return match ? match[1] : ''
 }
 
-/** Plugin remark : un `@bot` connu devient un lien `#bot:<profil>`, hors code et hors liens. */
+/** Remark plugin: a known `@bot` becomes a `#bot:<profile>` link, outside code and links. */
 export function remarkMentions(sink: MentionSink) {
   return (tree: MdNode) => {
     const visit = (node: MdNode) => {

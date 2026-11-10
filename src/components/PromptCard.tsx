@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, type FormEvent } from 'react'
 import { ArrowUp, Check, MessageCircleQuestion, ShieldCheck } from 'lucide-react'
 import type { PendingPrompt } from '../lib/hermes'
@@ -6,15 +7,16 @@ import { CHOICE_LABELS } from './ServerRequestDialog'
 interface PromptCardProps {
   prompt: PendingPrompt
   botName: string
-  /** Rejette si la gateway refuse : la carte reste alors ouverte. */
+  /** Rejects if the gateway refuses: the card then stays open. */
   onAnswer: (prompt: PendingPrompt, answer: string) => Promise<void>
 }
 
 /**
- * Question (`clarify`) ou accord (`approval`) d’un bot en plein tour, posée au-dessus du champ de saisie.
- * Le bot reste bloqué tant que l’utilisateur ne répond pas : la carte ne se ferme que sur `*.settled`.
+ * Question (`clarify`) or approval (`approval`) from a bot mid-turn, shown above the input field.
+ * The bot stays blocked until the user answers: the card only closes on `*.settled`.
  */
 export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
+  const { t } = useTranslation()
   const [selected, setSelected] = useState<string[]>([])
   const [other, setOther] = useState('')
   const [sending, setSending] = useState(false)
@@ -25,7 +27,7 @@ export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
     try {
       await onAnswer(prompt, answer)
     } catch {
-      // Le parent affiche l’erreur ; la carte reste pour réessayer.
+      // The parent shows the error; the card stays so the user can retry.
     } finally {
       setSending(false)
     }
@@ -34,9 +36,9 @@ export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
   if (prompt.kind === 'approval') {
     const choices = prompt.choices.length ? prompt.choices : ['once', 'deny']
     return (
-      <section className="prompt-card" aria-label={`${botName} demande ton accord`}>
-        <div className="prompt-card-title"><span className="prompt-card-icon"><ShieldCheck size={15} /></span><strong>{botName} demande ton accord</strong></div>
-        <p className="prompt-card-question">{prompt.description || 'Cette action demande une approbation.'}</p>
+      <section className="prompt-card" aria-label={t('prompt.approvalTitle', { name: botName })}>
+        <div className="prompt-card-title"><span className="prompt-card-icon"><ShieldCheck size={15} /></span><strong>{t('prompt.approvalTitle', { name: botName })}</strong></div>
+        <p className="prompt-card-question">{prompt.description || t('prompt.approvalDefault')}</p>
         {prompt.command && <pre className="request-command">{prompt.command}</pre>}
         <div className="prompt-card-actions">
           {[...choices].reverse().map((choice) => (
@@ -53,9 +55,9 @@ export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
     void send(other.trim())
   }
   return (
-    <section className="prompt-card" aria-label={`${botName} te pose une question`}>
-      <div className="prompt-card-title"><span className="prompt-card-icon"><MessageCircleQuestion size={15} /></span><strong>{botName} te pose une question</strong></div>
-      <p className="prompt-card-question">{prompt.question || 'Le bot attend ta réponse.'}</p>
+    <section className="prompt-card" aria-label={t('prompt.questionTitle', { name: botName })}>
+      <div className="prompt-card-title"><span className="prompt-card-icon"><MessageCircleQuestion size={15} /></span><strong>{t('prompt.questionTitle', { name: botName })}</strong></div>
+      <p className="prompt-card-question">{prompt.question || t('prompt.questionDefault')}</p>
       {prompt.choices.length > 0 && (
         <div className="prompt-card-choices" role={prompt.multiSelect ? 'group' : undefined}>
           {prompt.choices.map((choice) => {
@@ -73,7 +75,7 @@ export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
       {prompt.multiSelect && prompt.choices.length > 0 && (
         <div className="prompt-card-actions">
           <button type="button" className="is-primary" disabled={sending || selected.length === 0} onClick={() => void send(JSON.stringify(selected))}>
-            Valider{selected.length ? ` (${selected.length})` : ''}
+            {selected.length ? t('prompt.confirmCount', { count: selected.length }) : t('prompt.confirm')}
           </button>
         </div>
       )}
@@ -81,12 +83,12 @@ export function PromptCard({ prompt, botName, onAnswer }: PromptCardProps) {
         <input
           value={other}
           onChange={(event) => setOther(event.target.value)}
-          placeholder={prompt.choices.length ? 'Autre réponse…' : 'Ta réponse…'}
-          aria-label={`Réponse libre à ${botName}`}
+          placeholder={prompt.choices.length ? t('prompt.otherAnswer') : t('prompt.yourAnswer')}
+          aria-label={t('prompt.freeAnswer', { name: botName })}
           disabled={sending}
           autoFocus={prompt.choices.length === 0}
         />
-        <button type="submit" aria-label="Envoyer la réponse" disabled={sending || !other.trim()}><ArrowUp size={15} /></button>
+        <button type="submit" aria-label={t('prompt.sendAnswer')} disabled={sending || !other.trim()}><ArrowUp size={15} /></button>
       </form>
     </section>
   )

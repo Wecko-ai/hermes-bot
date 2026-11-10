@@ -1,6 +1,7 @@
 import type { Bot } from '../types'
+import { locale } from '../i18n'
 
-/** Dernière activité connue, en millisecondes : Bot Chat, autre session ou tâche de fond. */
+/** Latest known activity, in milliseconds: Bot Chat, another session or a background task. */
 function activityTime(bot: Bot) {
   return Math.max(Date.parse(bot.timestamp ?? '') || 0, bot.lastActivity ?? 0)
 }
@@ -12,7 +13,7 @@ export function latestActivity(bot: Bot) {
 
 const isBusy = (bot: Bot) => bot.status === 'working' || bot.status === 'thinking'
 
-/** Fusionne un roster relu sans perdre l’état local : non-lus, tours lancés ici, animation de fin. */
+/** Merges a re-read roster without losing local state: unread counts, turns started here, end animation. */
 export function mergeRoster(current: Bot[], fresh: Bot[], selected: string, isRunning: (slug: string) => boolean): Bot[] {
   const previous = new Map(current.map((bot) => [bot.slug, bot]))
   return fresh.map((bot) => {
@@ -23,7 +24,7 @@ export function mergeRoster(current: Bot[], fresh: Bot[], selected: string, isRu
     const status = bot.status === 'idle' && keepLocal ? old.status : bot.status
     const timestamp = newer ? bot.timestamp : old.timestamp
     const seenAt = old.seenAt ?? old.timestamp
-    // La date bouge à chaque étape du travail : un seul non-lu, une fois l’activité retombée.
+    // The date moves at every step of the work: a single unread, once activity has settled.
     const settled = (timestamp ? Date.parse(timestamp) : 0) > (seenAt ? Date.parse(seenAt) : 0)
       && !newer && status !== 'working' && status !== 'thinking'
     const isOpen = bot.slug === selected
@@ -38,7 +39,7 @@ export function mergeRoster(current: Bot[], fresh: Bot[], selected: string, isRu
   })
 }
 
-/** Plus récent d’abord. Un bot au travail est actif maintenant, même si sa date n’a pas encore bougé. */
+/** Most recent first. A working bot is active now, even if its date hasn’t moved yet. */
 export function compareBotActivity(a: Bot, b: Bot) {
-  return Number(isBusy(b)) - Number(isBusy(a)) || activityTime(b) - activityTime(a) || a.name.localeCompare(b.name, 'fr')
+  return Number(isBusy(b)) - Number(isBusy(a)) || activityTime(b) - activityTime(a) || a.name.localeCompare(b.name, locale())
 }

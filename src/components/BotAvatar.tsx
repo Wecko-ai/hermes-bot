@@ -1,5 +1,7 @@
+import { useTranslation } from 'react-i18next'
 import type { Bot, BotStatus } from '../types'
 import { getAppConfig } from '../lib/app-config'
+import { i18n } from '../i18n'
 
 const colors = ['#7A63C9', '#E8833A', '#3FA66B', '#D9483B', '#3B82C4', '#7B8794', '#C9559A', '#2BA6A0', '#E0A526', '#9A6B4F', '#2F4858']
 const shapes = ['blob', 'pebble', 'squircle', 'tablet', 'wedge', 'hex', 'cloud', 'teardrop']
@@ -61,14 +63,11 @@ function Shape({ shape }: { shape: string }) {
 }
 
 export function statusLabel(status: BotStatus) {
-  const labels: Record<BotStatus, string> = {
-    idle: 'Disponible', thinking: 'Réfléchit', working: 'Au travail',
-    waiting: 'Attend ta réponse', blocked: 'Bloqué', done: 'Terminé',
-  }
-  return labels[status]
+  return i18n.t(`status.${status}`)
 }
 
 export function BotAvatar({ bot, size = 36, showStatus = false }: { bot: Bot; size?: number; showStatus?: boolean }) {
+  useTranslation() // re-render when the language changes: the label below comes from the global instance
   const seed = hash(bot.slug || bot.name)
   const shape = bot.avatar?.shape || shapes[seed % shapes.length]
   const color = avatarColor(bot)

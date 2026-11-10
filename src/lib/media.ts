@@ -1,18 +1,20 @@
+import { i18n } from '../i18n'
+
 /**
- * Médias envoyés par les bots Hermes avec la convention `MEDIA:/chemin/absolu`.
+ * Media sent by Hermes bots with the `MEDIA:/absolute/path` convention.
  *
- * Mêmes règles que Hermes Desktop (`apps/desktop/src/lib/chat-messages/parts.ts`) : extensions de
- * livraison connues, chemins avec espaces, guillemets, ponctuation de fin de phrase. Les balises sont
- * cherchées dans les nœuds texte du Markdown (plugin remark) : jamais dans un bloc de code, du code en
- * ligne, un lien ou du HTML, quelle que soit l’indentation, liste ou citation comprises.
- * Les fichiers vivent sur la machine de la gateway : l’interface ne les lit jamais en `file://`, elle passe par
- * `/api/media` du serveur local, qui relaie vers la gateway avec la session côté serveur.
+ * Same rules as Hermes Desktop (`apps/desktop/src/lib/chat-messages/parts.ts`): known delivery
+ * extensions, paths with spaces, quotes, end-of-sentence punctuation. Tags are looked for in the
+ * Markdown text nodes (remark plugin): never in a code block, inline code, a link or HTML, whatever the
+ * indentation, lists and quotes included.
+ * The files live on the gateway’s machine: the UI never reads them as `file://`, it goes through the local
+ * server’s `/api/media`, which relays to the gateway with the server-side session.
  */
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'document' | 'file' | 'link'
 
 export interface MediaRef {
-  /** Chemin tel que le bot l’a écrit, sans guillemets. */
+  /** Path as the bot wrote it, without quotes. */
   path: string
   name: string
   kind: MediaKind
@@ -22,7 +24,7 @@ export interface MediaTag {
   start: number
   end: number
   ref: MediaRef
-  /** Ponctuation de phrase prise dans la capture, à remettre après le média. */
+  /** Sentence punctuation caught in the capture, to put back after the media. */
   punctuation: string
 }
 
@@ -35,14 +37,14 @@ const DELIVERY_EXTENSIONS = [
 ]
 
 /**
- * Ce que l’app affiche. Doit rester identique à `MEDIA_TYPES` dans `server/index.mjs`.
- * Pas de SVG (script possible), ni de formats que Chromium ne lit pas (tiff, avi, mkv, 3gp).
+ * What the app displays. Must stay identical to `MEDIA_TYPES` in `server/index.mjs`.
+ * No SVG (scripts possible), nor formats Chromium cannot play (tiff, avi, mkv, 3gp).
  */
 const PLAYABLE: Record<string, MediaKind> = {
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image',
   mp4: 'video', mov: 'video', webm: 'video',
   mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', opus: 'audio', flac: 'audio',
-  // Ouverts dans un onglet à côté du chat, par `/api/document`. Doit rester identique à DOCUMENT_TYPES du serveur.
+  // Opened in a tab beside the chat, through `/api/document`. Must stay identical to the server’s DOCUMENT_TYPES.
   pdf: 'document', html: 'document', htm: 'document', md: 'document', markdown: 'document',
 }
 
@@ -54,28 +56,28 @@ export function documentFormat(path: string): DocumentFormat {
   return extension === 'html' || extension === 'htm' ? 'html' : 'markdown'
 }
 
-/** `revision` force une nouvelle lecture quand un bot a réécrit le fichier. */
+/** `revision` forces a fresh read when a bot has rewritten the file. */
 export function documentUrl(profile: string, path: string, revision = 0) {
   return `/api/document?${new URLSearchParams({ profile, path, r: String(revision) })}`
 }
 
-// `.JPG` comme `.jpg` : chaque lettre accepte les deux casses.
+// `.JPG` like `.jpg`: each letter accepts both cases.
 const caseless = (word: string) => word.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`)
 const EXTENSIONS = [...DELIVERY_EXTENSIONS].sort((a, b) => b.length - a.length).map(caseless).join('|')
-// Après l’extension : une ponctuation de phrase éventuelle, puis une vraie limite.
+// After the extension: optional sentence punctuation, then a real boundary.
 const PATH_END = `(?=[.,;:!?]*(?:[\\s\`"'*_)\\]}]|MEDIA:|$))`
-// Chemin non entouré : ancre de départ, espaces intérieurs permis, fin sur une extension connue.
+// Unquoted path: start anchor, inner spaces allowed, ends on a known extension.
 const PATH_ANCHORED = `(?:~/|/|[A-Za-z]:[/\\\\])\\S+?(?:[^\\S\\n]+\\S+?)*?\\.(?:${EXTENSIONS})${PATH_END}`
-// Repli : un mot sans espace (chemin relatif, extension inconnue).
+// Fallback: a word without spaces (relative path, unknown extension).
 const PATH_BARE = '[^\\s`"]+'
-// Guillemet ouvrant facultatif, puis le même pour fermer : un guillemet d’une autre phrase n’est jamais avalé.
-// Les espaces après `MEDIA:` restent sur la même ligne.
+// Optional opening quote, then the same one to close: a quote from another sentence is never swallowed.
+// Spaces after `MEDIA:` stay on the same line.
 const TAG_SOURCE = `(?<open>["']?)MEDIA:[\\t ]*(?<value>\`[^\`\\n]+\`|"[^"\\n]+"|'[^'\\n]+'|${PATH_ANCHORED}|${PATH_BARE})\\k<open>`
 const TRAILING_PUNCTUATION = '.,;:!?'
 
 const plausiblePath = (path: string) => path.includes('/') || path.includes('\\') || /\.[^.]/.test(path)
 
-/** Chemin et ponctuation de phrase collée derrière (`MEDIA:/tmp/a.png.`). Les guillemets protègent tout. */
+/** Path and sentence punctuation stuck behind it (`MEDIA:/tmp/a.png.`). Quotes protect everything. */
 function parseValue(raw: string): { path: string; punctuation: string } | null {
   const text = raw.trim()
   const quote = text[0]
@@ -102,7 +104,7 @@ export function mediaRef(rawPath: string): MediaRef {
   return { path, name, kind: PLAYABLE[extension] || 'file' }
 }
 
-/** Toutes les balises `MEDIA:` d’un texte brut, dans l’ordre. */
+/** All the `MEDIA:` tags of a plain text, in order. */
 export function findMediaTags(text: string): MediaTag[] {
   if (!text.includes('MEDIA:')) return []
   const tags: MediaTag[] = []
@@ -115,10 +117,10 @@ export function findMediaTags(text: string): MediaTag[] {
   return tags
 }
 
-/** Seuls les chemins absolus de la machine de la gateway passent par le proxy. */
+/** Only absolute paths on the gateway’s machine go through the proxy. */
 export const isServablePath = (path: string) => path.startsWith('/') || path.startsWith('~/')
 
-/** `version` (l’identifiant du message) donne une URL neuve quand un bot réécrit un fichier sous le même nom. */
+/** `version` (the message id) gives a fresh URL when a bot rewrites a file under the same name. */
 export function mediaUrl(profile: string, path: string, version?: string) {
   return `/api/media?${new URLSearchParams({ profile, path, ...(version ? { v: version } : {}) })}`
 }
@@ -129,8 +131,8 @@ export function mediaIndex(href: string | undefined) {
 }
 
 /**
- * Les médias des bots dans cette conversation, du plus récent au plus ancien, sans doublon : balises
- * `MEDIA:` et fichiers cités, dans les réponses du bot et dans les messages entre bots.
+ * The bots’ media in this conversation, newest to oldest, without duplicates: `MEDIA:` tags
+ * and cited files, in the bot’s replies and in messages between bots.
  */
 export function conversationMedia(messages: { id: string; role: string; content: string; agent?: unknown }[]) {
   const seen = new Set<string>()
@@ -150,23 +152,23 @@ export function conversationMedia(messages: { id: string; role: string; content:
 
 const withoutFences = (text: string) => text.replace(/(`{3,}|~{3,})[\s\S]*?(?:\1|$)/g, '\n')
 
-// Fichiers cités sans `MEDIA:` : ce qu’on regarde pour valider. Les `.md` et pages HTML, cités à tout
-// bout de champ (SOUL.md, notes, tableaux de bord), restent du texte.
+// Files cited without `MEDIA:`: what we look at to approve. `.md` files and HTML pages, cited all
+// the time (SOUL.md, notes, dashboards), stay text.
 const CITED_KINDS: Record<string, MediaKind> = Object.fromEntries(Object.entries(PLAYABLE)
   .filter(([extension, kind]) => kind === 'image' || kind === 'video' || kind === 'audio' || extension === 'pdf'))
 const CITED_EXTENSIONS = Object.keys(CITED_KINDS).map(caseless).join('|')
 const CITED_ABSOLUTE = new RegExp(`^(?:~/|/)[^\\n\`"'<>|]*?\\.(?:${CITED_EXTENSIONS})$`)
 const CITED_DIRECTORY = /^(?:~\/|\/)[^`"'<>|\n]*\/$/
 const CITED_NAME = new RegExp(`^[A-Za-z0-9][^/\\\\\\s]*\\.(?:${CITED_EXTENSIONS})$`)
-// `-2.jpg` après `planche-1.jpg` : la même série, abrégée par le bot.
+// `-2.jpg` after `board-1.jpg`: the same series, abbreviated by the bot.
 const CITED_SUFFIX = new RegExp(`^-[A-Za-z0-9][^/\\\\\\s]*\\.(?:${CITED_EXTENSIONS})$`)
-// Chemin absolu écrit en clair dans une phrase, sans espace.
+// Absolute path written plainly in a sentence, without spaces.
 const BARE_PATH = new RegExp(`(?<=^|[\\s(«"'])(?:~/|/)(?:[^\\s\`"'<>()|]+/)*[^\\s\`"'<>()|/]+?\\.(?:${CITED_EXTENSIONS})(?=[.,;:!?)»"']*(?:\\s|$))`, 'g')
 const BARE_DIRECTORY = /(?<=^|[\s(«"'])(?:~\/|\/)(?:[^\s`"'<>()|]+\/)+(?=[.,;:!?)»"']*(?:\s|$))/g
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/
 const CITED_LIMIT = 24
 
-/** Blocs du message : paragraphes et éléments de liste, avec leurs lignes de suite. */
+/** Message blocks: paragraphs and list items, with their continuation lines. */
 function textBlocks(text: string) {
   const blocks: { item: boolean; text: string }[] = []
   let open = false
@@ -185,11 +187,11 @@ function textBlocks(text: string) {
   return blocks
 }
 
-/** Chemins du bloc, dans l’ordre : code en ligne d’abord lu tel quel, puis chemins absolus écrits en clair. */
+/** Paths of the block, in order: inline code read as is first, then absolute paths written plainly. */
 function blockTokens(text: string) {
   const tokens: { at: number; value: string }[] = []
   for (const match of text.matchAll(/`([^`\n]+)`/g)) if (!/^["']?MEDIA:/.test(match[1].trim())) tokens.push({ at: match.index ?? 0, value: match[1].trim() })
-  // Une balise `MEDIA:` est déjà affichée à sa place, même avec des espaces dans son chemin.
+  // A `MEDIA:` tag is already displayed in place, even with spaces in its path.
   let prose = text
   for (const tag of findMediaTags(text)) prose = `${prose.slice(0, tag.start)}${' '.repeat(tag.end - tag.start)}${prose.slice(tag.end)}`
   prose = prose.replace(/`[^`\n]*`/g, (code) => ' '.repeat(code.length))
@@ -198,17 +200,17 @@ function blockTokens(text: string) {
   return tokens.sort((a, b) => a.at - b.at).map((token) => token.value)
 }
 
-/** Dossiers d’un bloc : ceux écrits tels quels, et ceux des fichiers cités par leur chemin complet. */
+/** Directories of a block: those written as is, and those of files cited by full path. */
 function blockDirectories(tokens: string[]) {
   return [...new Set(tokens.flatMap((token) => CITED_DIRECTORY.test(token) ? [token]
     : CITED_ABSOLUTE.test(token) ? [token.slice(0, token.lastIndexOf('/') + 1)] : []))]
 }
 
 /**
- * Images, vidéos, sons et PDF qu’un bot cite par leur chemin, sans balise `MEDIA:` (« Vidéo :
- * `/…/final-v2.mp4` »). Un nom seul (`cover.jpg`) prend le dossier cité dans le même élément de liste ;
- * sinon celui du paragraphe qui précède (« dans le même dossier ») ; sinon le seul dossier du message.
- * Un dossier ambigu ne donne rien. Jamais dans un bloc de code.
+ * Images, videos, sounds and PDFs a bot cites by path, without a `MEDIA:` tag (“Video:
+ * `/…/final-v2.mp4`”). A bare name (`cover.jpg`) takes the directory cited in the same list item;
+ * otherwise that of the preceding paragraph (“in the same folder”); otherwise the message’s only directory.
+ * An ambiguous directory yields nothing. Never inside a code block.
  */
 export function referencedFiles(text: string): MediaRef[] {
   const prose = withoutFences(text)
@@ -238,14 +240,14 @@ export function referencedFiles(text: string): MediaRef[] {
   return found.slice(0, CITED_LIMIT).map(mediaRef)
 }
 
-/** Pendant le streaming, une balise sur la dernière ligne peut être coupée : on l’affiche une fois la ligne finie. */
+/** While streaming, a tag on the last line can be cut off: it is shown once the line is complete. */
 export function withoutUnfinishedTag(text: string) {
   const lineStart = text.lastIndexOf('\n') + 1
   const at = text.slice(lineStart).search(/["'`]?MEDIA:/)
   return at < 0 ? text : text.slice(0, lineStart + at)
 }
 
-/** Nœud mdast, réduit à ce que le plugin lit et écrit. */
+/** mdast node, reduced to what the plugin reads and writes. */
 export interface MdNode {
   type: string
   value?: string
@@ -253,7 +255,7 @@ export interface MdNode {
   children?: MdNode[]
 }
 
-/** Le plugin remplit `media` à chaque passage ; les liens `#media:<index>` y renvoient. */
+/** The plugin fills `media` on every pass; the `#media:<index>` links point back to it. */
 export interface MediaSink {
   media: MediaRef[]
 }
@@ -261,8 +263,8 @@ export interface MediaSink {
 const SKIPPED = new Set(['code', 'inlineCode', 'html', 'link', 'linkReference', 'definition'])
 
 /**
- * Plugin remark : remplace les balises des nœuds texte par des liens `#media:<index>`.
- * Du code en ligne qui ne contient que la balise (`` `MEDIA:/a.png` ``) compte aussi.
+ * Remark plugin: replaces the tags in text nodes with `#media:<index>` links.
+ * Inline code that contains only the tag (`` `MEDIA:/a.png` ``) counts too.
  */
 export function remarkMedia(sink: MediaSink) {
   return (tree: MdNode) => {
@@ -299,14 +301,12 @@ export function remarkMedia(sink: MediaSink) {
   }
 }
 
-const PREVIEW_LABELS: Record<MediaKind, string> = { image: 'Image', video: 'Vidéo', audio: 'Audio', document: 'Document', file: 'Fichier', link: 'Lien' }
-
-/** Aperçu du roster : « Vidéo demo.mp4 » plutôt qu’un chemin complet. */
+/** Roster preview: “Video demo.mp4” rather than a full path. */
 export function mediaPreviewText(text: string) {
   let output = ''
   let last = 0
   for (const tag of findMediaTags(text)) {
-    output += `${text.slice(last, tag.start)}${PREVIEW_LABELS[tag.ref.kind]} ${tag.ref.name}${tag.punctuation}`
+    output += `${text.slice(last, tag.start)}${i18n.t(`media.preview.${tag.ref.kind}`)} ${tag.ref.name}${tag.punctuation}`
     last = tag.end
   }
   return output + text.slice(last)

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { KeyRound, Plus } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { i18n } from '../i18n'
 import type { Bot } from '../types'
 import { listVaultEntries, removeVaultEntry, saveVaultEntry, type VaultEntry } from '../lib/browser-vault'
 
 interface Draft {
-  /** Origine de l’identifiant modifié ; vide pour un ajout. */
+  /** Origin of the credentials being edited; empty when adding. */
   editing: string
   origin: string
   identifier: string
@@ -20,23 +22,24 @@ const hostOf = (origin: string) => {
 }
 
 /**
- * Identifiants du Chrome partagé, rangés dans le trousseau de la machine des bots. Le mot de passe ne revient jamais
- * jusqu’ici : on le remplace, on ne le relit pas.
+ * Credentials for the shared Chrome, stored in the bots machine’s keychain. The password never comes back
+ * here: it is replaced, never read again.
  */
 export function VaultTab({ bots }: { bots: Bot[] }) {
+  const { t } = useTranslation()
   const [entries, setEntries] = useState<VaultEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
   const names = useMemo(() => new Map(bots.map((bot) => [bot.slug, bot.name])), [bots])
-  const choices = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => a.name.localeCompare(b.name, 'fr')), [bots])
+  const choices = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => a.name.localeCompare(b.name, i18n.language)), [bots])
 
   const load = () => {
     setLoading(true)
     listVaultEntries()
       .then((items) => { setEntries(items); setError('') })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Le coffre ne répond pas.'))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : t('vault.unresponsive')))
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
@@ -56,12 +59,12 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
     return { ...current, bots: next }
   })
   const remove = async (entry: VaultEntry) => {
-    if (!window.confirm(`Retirer l’identifiant de ${hostOf(entry.origin)} du trousseau de la machine des bots ?`)) return
+    if (!window.confirm(t('vault.removeConfirm', { host: hostOf(entry.origin) }))) return
     try {
       await removeVaultEntry(entry.origin)
       load()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Retrait impossible.')
+      setError(reason instanceof Error ? reason.message : t('vault.removeFailed'))
     }
   }
   const submit = async (event: FormEvent) => {
@@ -79,42 +82,42 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
       setDraft(null)
       load()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Enregistrement impossible.')
+      setError(reason instanceof Error ? reason.message : t('vault.saveFailed'))
     } finally {
       setSaving(false)
     }
   }
 
   const botLabel = (entry: VaultEntry) => entry.bots.includes('*')
-    ? 'Tous les bots'
+    ? t('vault.allBots')
     : entry.bots.map((slug) => names.get(slug) || slug).join(', ')
 
   return (
     <>
-      <p className="settings-note">Identifiants que les bots utilisent dans le Chrome partagé. Ils sont rangés dans le trousseau de session de la machine des bots, visibles dans Trousseau d’accès. Le coffre tape lui-même le mot de passe : le bot ne le voit jamais.</p>
+      <p className="settings-note">{t('vault.note')}</p>
       {error && <p className="settings-error" role="alert">{error}</p>}
       {!draft && (
         <div className="vault-tools">
-          <button type="button" className="settings-button" onClick={() => setDraft(emptyDraft())}><Plus size={13} />Ajouter un identifiant</button>
+          <button type="button" className="settings-button" onClick={() => setDraft(emptyDraft())}><Plus size={13} />{t('vault.add')}</button>
         </div>
       )}
       {draft && (
         <form className="vault-form" onSubmit={submit} autoComplete="off">
-          <label>Site
+          <label>{t('vault.site')}
             <input value={draft.origin} placeholder="https://www.instagram.com" disabled={Boolean(draft.editing) || saving} required
               onChange={(event) => setDraft({ ...draft, origin: event.target.value })} autoCapitalize="none" spellCheck={false} />
           </label>
-          <label>Identifiant
+          <label>{t('vault.identifier')}
             <input value={draft.identifier} disabled={saving} required onChange={(event) => setDraft({ ...draft, identifier: event.target.value })} autoCapitalize="none" spellCheck={false} />
           </label>
-          <label>Mot de passe
-            <input type="password" value={draft.password} placeholder={draft.editing ? 'Inchangé' : ''} required={!draft.editing} disabled={saving}
+          <label>{t('vault.password')}
+            <input type="password" value={draft.password} placeholder={draft.editing ? t('vault.unchanged') : ''} required={!draft.editing} disabled={saving}
               autoComplete="new-password" onChange={(event) => setDraft({ ...draft, password: event.target.value })} />
           </label>
           <fieldset className="vault-bots">
-            <legend>Bots autorisés</legend>
+            <legend>{t('vault.allowedBots')}</legend>
             <label className="vault-bot is-all">
-              <input type="checkbox" checked={draft.allBots} disabled={saving} onChange={(event) => setDraft({ ...draft, allBots: event.target.checked })} />Tous les bots
+              <input type="checkbox" checked={draft.allBots} disabled={saving} onChange={(event) => setDraft({ ...draft, allBots: event.target.checked })} />{t('vault.allBots')}
             </label>
             {!draft.allBots && choices.map((bot) => (
               <label key={bot.slug} className="vault-bot">
@@ -123,13 +126,13 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
             ))}
           </fieldset>
           <div className="vault-form-actions">
-            <button type="button" className="settings-button" disabled={saving} onClick={() => setDraft(null)}>Annuler</button>
-            <button type="submit" className="settings-button is-primary" disabled={saving || (!draft.allBots && draft.bots.size === 0)}>{saving ? 'Enregistrement…' : 'Enregistrer'}</button>
+            <button type="button" className="settings-button" disabled={saving} onClick={() => setDraft(null)}>{t('vault.cancel')}</button>
+            <button type="submit" className="settings-button is-primary" disabled={saving || (!draft.allBots && draft.bots.size === 0)}>{saving ? t('vault.saving') : t('vault.save')}</button>
           </div>
         </form>
       )}
-      {loading && !entries.length && <p className="settings-note">Lecture du trousseau…</p>}
-      {!loading && !entries.length && !error && <p className="settings-note">Aucun identifiant pour l’instant. Un bot qui doit se connecter te le demandera dans une fenêtre.</p>}
+      {loading && !entries.length && <p className="settings-note">{t('vault.reading')}</p>}
+      {!loading && !entries.length && !error && <p className="settings-note">{t('vault.empty')}</p>}
       <div className="vault-list">
         {entries.map((entry) => (
           <div key={entry.origin} className="settings-row vault-entry">
@@ -138,8 +141,8 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
               <span>{entry.identifier} · {botLabel(entry)}</span>
             </div>
             <div className="vault-entry-actions">
-              <button type="button" className="settings-button" onClick={() => edit(entry)}>Modifier</button>
-              <button type="button" className="settings-button is-danger" onClick={() => void remove(entry)}>Retirer</button>
+              <button type="button" className="settings-button" onClick={() => edit(entry)}>{t('vault.edit')}</button>
+              <button type="button" className="settings-button is-danger" onClick={() => void remove(entry)}>{t('vault.remove')}</button>
             </div>
           </div>
         ))}

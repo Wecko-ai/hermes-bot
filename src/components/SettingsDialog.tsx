@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronRight, Cpu, KeyRound, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
 import { version } from '../../package.json'
 import type { Bot, ModelOption } from '../types'
@@ -6,16 +7,17 @@ import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
+import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, localModelLabel, type LocalModels } from '../lib/local-chat'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
-const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
-  { id: 'general', label: 'Général', icon: SlidersHorizontal },
-  { id: 'chat', label: 'Conversations', icon: MessageSquare },
-  { id: 'models', label: 'Modèles', icon: Cpu },
-  { id: 'vault', label: 'Coffre', icon: KeyRound },
-  { id: 'account', label: 'Compte', icon: UserRound },
+const TABS: { id: SettingsTab; icon: LucideIcon }[] = [
+  { id: 'general', icon: SlidersHorizontal },
+  { id: 'chat', icon: MessageSquare },
+  { id: 'models', icon: Cpu },
+  { id: 'vault', icon: KeyRound },
+  { id: 'account', icon: UserRound },
 ]
 
 interface SettingsDialogProps {
@@ -31,7 +33,7 @@ interface SettingsDialogProps {
   reconnecting: boolean
   onReconnect: () => void
   onLogout: () => void
-  /** Noms des bots et choix des bots autorisés dans le coffre. */
+  /** Bot names and the choice of bots allowed in the vault. */
   bots: Bot[]
 }
 
@@ -64,38 +66,43 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
 }
 
 function GeneralTab({ onChooseTheme }: Pick<SettingsDialogProps, 'onChooseTheme'>) {
+  const { t } = useTranslation()
   const settings = useSettings()
   return (
     <>
-      <Row label="Thème">
-        <Segments<ThemeChoice> label="Thème" value={settings.theme} options={[{ id: 'system', label: 'Système' }, { id: 'light', label: 'Clair' }, { id: 'dark', label: 'Sombre' }]} onChange={onChooseTheme} />
+      <Row label={t('settings.language')}>
+        <Segments<LanguageChoice> label={t('settings.language')} value={settings.language} options={[{ id: 'system', label: t('settings.languageOptions.system') }, { id: 'en', label: t('settings.languageOptions.en') }, { id: 'fr', label: t('settings.languageOptions.fr') }]} onChange={(language) => updateSettings({ language })} />
       </Row>
-      <Row label="Taille du texte" hint="Messages et zone de saisie">
-        <Segments<TextSize> label="Taille du texte" value={settings.textSize} options={[{ id: 'small', label: 'Petite' }, { id: 'normal', label: 'Normale' }, { id: 'large', label: 'Grande' }]} onChange={(textSize) => updateSettings({ textSize })} />
+      <Row label={t('settings.theme')}>
+        <Segments<ThemeChoice> label={t('settings.theme')} value={settings.theme} options={[{ id: 'system', label: t('settings.themeOptions.system') }, { id: 'light', label: t('settings.themeOptions.light') }, { id: 'dark', label: t('settings.themeOptions.dark') }]} onChange={onChooseTheme} />
       </Row>
-      <Toggle label="Réduire les animations" hint="Avatars fixes, le statut reste écrit. Le réglage de macOS s’applique aussi." checked={settings.reduceMotion} onChange={(reduceMotion) => updateSettings({ reduceMotion })} />
+      <Row label={t('settings.textSize')} hint={t('settings.textSizeHint')}>
+        <Segments<TextSize> label={t('settings.textSize')} value={settings.textSize} options={[{ id: 'small', label: t('settings.textSizeOptions.small') }, { id: 'normal', label: t('settings.textSizeOptions.normal') }, { id: 'large', label: t('settings.textSizeOptions.large') }]} onChange={(textSize) => updateSettings({ textSize })} />
+      </Row>
+      <Toggle label={t('settings.reduceMotion')} hint={t('settings.reduceMotionHint')} checked={settings.reduceMotion} onChange={(reduceMotion) => updateSettings({ reduceMotion })} />
     </>
   )
 }
 
 function ChatTab() {
+  const { t } = useTranslation()
   const settings = useSettings()
   const [local, setLocal] = useState<LocalModels | null>(null)
   useEffect(() => { void loadLocalModels().then(setLocal) }, [])
   const localModel = chooseLocalModel(local, settings.localModel)
   return (
     <>
-      <Row label="Envoyer un message avec">
-        <Segments<SendKey> label="Envoyer un message avec" value={settings.sendKey} options={[{ id: 'enter', label: 'Entrée' }, { id: 'cmd-enter', label: '⌘ Entrée' }]} onChange={(sendKey) => updateSettings({ sendKey })} />
+      <Row label={t('settings.sendWith')}>
+        <Segments<SendKey> label={t('settings.sendWith')} value={settings.sendKey} options={[{ id: 'enter', label: t('settings.sendKeys.enter') }, { id: 'cmd-enter', label: t('settings.sendKeys.cmdEnter') }]} onChange={(sendKey) => updateSettings({ sendKey })} />
       </Row>
-      <Toggle label="Afficher le contexte et le débit" hint="Sous la zone de saisie" checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
-      <Row label="Classer les bots">
-        <Segments<'groups' | 'activity'> label="Classer les bots" value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: 'Groupes' }, { id: 'activity', label: 'Activité' }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
+      <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
+      <Row label={t('settings.sortBots')}>
+        <Segments<'groups' | 'activity'> label={t('settings.sortBots')} value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: t('settings.sortOptions.groups') }, { id: 'activity', label: t('settings.sortOptions.activity') }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
       </Row>
-      <Toggle label="Afficher les bots cachés" checked={settings.showHidden} onChange={(showHidden) => updateSettings({ showHidden })} />
+      <Toggle label={t('settings.showHidden')} checked={settings.showHidden} onChange={(showHidden) => updateSettings({ showHidden })} />
       {local?.available && local.models.length > 0 && (
-        <Row label="Modèle du chat local" hint="Ollama, sans outils">
-          <select className="settings-select" aria-label="Modèle du chat local" value={localModel} onChange={(event) => updateSettings({ localModel: event.target.value })}>
+        <Row label={t('settings.localModel')} hint={t('settings.localModelHint')}>
+          <select className="settings-select" aria-label={t('settings.localModel')} value={localModel} onChange={(event) => updateSettings({ localModel: event.target.value })}>
             {local.models.map((model) => <option key={model} value={model}>{localModelLabel(model)}</option>)}
           </select>
         </Row>
@@ -105,10 +112,11 @@ function ChatTab() {
 }
 
 function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<SettingsDialogProps, 'models' | 'modelsLoading' | 'modelsError' | 'onLoadModels'>) {
+  const { t } = useTranslation()
   const { hiddenModels } = useSettings()
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
-  // Une seule lecture à l’ouverture de l’onglet : la liste vient de la gateway.
+  // A single read when the tab opens: the list comes from the gateway.
   const loadRef = useRef(onLoadModels)
   useEffect(() => { loadRef.current() }, [])
 
@@ -133,24 +141,24 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<Se
 
   return (
     <>
-      <p className="settings-note">Choisis les modèles proposés dans le sélecteur, sur ce Mac et pour tous les bots. Le modèle actif et celui du profil restent toujours proposés.</p>
+      <p className="settings-note">{t('settings.modelsNote')}</p>
       <div className="settings-model-tools">
         <div className="settings-search">
           <Search size={14} />
-          <input value={query} placeholder="Rechercher un modèle" aria-label="Rechercher dans les modèles" onChange={(event) => setQuery(event.target.value)} />
-          {query && <button type="button" aria-label="Effacer la recherche" onClick={() => setQuery('')}><X size={13} /></button>}
+          <input value={query} placeholder={t('settings.searchModel')} aria-label={t('settings.searchInModels')} onChange={(event) => setQuery(event.target.value)} />
+          {query && <button type="button" aria-label={t('settings.clearSearch')} onClick={() => setQuery('')}><X size={13} /></button>}
         </div>
-        {models.length > 0 && <span className="settings-count">{visibleCount} sur {models.length}</span>}
-        {hidden.size > 0 && models.length > 0 && <button type="button" className="settings-button" onClick={() => setVisible(models, true)}>Tout afficher</button>}
+        {models.length > 0 && <span className="settings-count">{t('settings.countOf', { shown: visibleCount, total: models.length })}</span>}
+        {hidden.size > 0 && models.length > 0 && <button type="button" className="settings-button" onClick={() => setVisible(models, true)}>{t('settings.showAll')}</button>}
       </div>
-      {modelsLoading && models.length === 0 && <p className="settings-note">Chargement des modèles…</p>}
-      {modelsError && <p className="settings-note is-error">{modelsError} <button type="button" className="settings-link" onClick={onLoadModels}>Réessayer</button></p>}
-      {!modelsLoading && !modelsError && filtered.length === 0 && <p className="settings-note">Aucun modèle trouvé.</p>}
+      {modelsLoading && models.length === 0 && <p className="settings-note">{t('settings.loadingModels')}</p>}
+      {modelsError && <p className="settings-note is-error">{modelsError} <button type="button" className="settings-link" onClick={onLoadModels}>{t('settings.retry')}</button></p>}
+      {!modelsLoading && !modelsError && filtered.length === 0 && <p className="settings-note">{t('settings.noModel')}</p>}
       <div className="settings-model-groups">
         {groups.map((group) => {
           const open = searching || openGroups.has(group.slug)
           const shown = group.models.filter((option) => !hidden.has(hiddenModelKey(option))).length
-          const label = `Proposer les modèles ${group.name}`
+          const label = t('settings.offerProvider', { name: group.name })
           return (
             <section key={group.slug} className="settings-model-group">
               <div className="settings-model-head">
@@ -187,25 +195,27 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<Se
 }
 
 function AccountTab({ connected, reconnecting, onReconnect, onLogout }: Pick<SettingsDialogProps, 'connected' | 'reconnecting' | 'onReconnect' | 'onLogout'>) {
+  const { t } = useTranslation()
   return (
     <>
-      <Row label="Connexion à Hermes" hint={reconnecting ? 'Reconnexion…' : connected ? 'Connecté' : 'Déconnecté'}>
-        <button type="button" className="settings-button" disabled={reconnecting} onClick={onReconnect}>Reconnecter</button>
+      <Row label={t('settings.connection')} hint={reconnecting ? t('settings.reconnecting') : connected ? t('settings.connected') : t('settings.disconnected')}>
+        <button type="button" className="settings-button" disabled={reconnecting} onClick={onReconnect}>{t('settings.reconnect')}</button>
       </Row>
-      <Row label="Session" hint="Oublie les identifiants enregistrés sur ce Mac">
-        <button type="button" className="settings-button is-danger" onClick={onLogout}>Se déconnecter</button>
+      <Row label={t('settings.session')} hint={t('settings.sessionHint')}>
+        <button type="button" className="settings-button is-danger" onClick={onLogout}>{t('settings.logout')}</button>
       </Row>
-      <Row label="Version"><span className="settings-value">HermesBot {version}</span></Row>
+      <Row label={t('settings.version')}><span className="settings-value">HermesBot {version}</span></Row>
     </>
   )
 }
 
-/** Réglages de l’app, propres à ce Mac. Rien ici n’écrit dans un profil Hermes. */
+/** App settings, specific to this Mac. Nothing here writes to a Hermes profile. */
 export function SettingsDialog(props: SettingsDialogProps) {
+  const { t } = useTranslation()
   const { tab, onSelectTab, onClose } = props
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => dialogRef.current?.focus(), [])
-  const title = TABS.find((item) => item.id === tab)?.label
+  const title = t(`settings.tabs.${tab}`)
   return (
     <div className="settings-backdrop" onMouseDown={onClose}>
       <div
@@ -213,23 +223,23 @@ export function SettingsDialog(props: SettingsDialogProps) {
         className="settings"
         role="dialog"
         aria-modal="true"
-        aria-label="Réglages"
+        aria-label={t('settings.title')}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}
       >
-        <nav className="settings-nav" aria-label="Sections des réglages">
-          <h2>Réglages</h2>
+        <nav className="settings-nav" aria-label={t('settings.sections')}>
+          <h2>{t('settings.title')}</h2>
           {TABS.map((item) => (
             <button key={item.id} type="button" className={item.id === tab ? 'is-active' : ''} aria-current={item.id === tab ? 'page' : undefined} onClick={() => onSelectTab(item.id)}>
-              <item.icon size={15} />{item.label}
+              <item.icon size={15} />{t(`settings.tabs.${item.id}`)}
             </button>
           ))}
         </nav>
         <section className="settings-body">
           <header className="settings-head">
             <h3>{title}</h3>
-            <button type="button" className="plain-icon" aria-label="Fermer les réglages" onClick={onClose}><X size={16} /></button>
+            <button type="button" className="plain-icon" aria-label={t('settings.close')} onClick={onClose}><X size={16} /></button>
           </header>
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}

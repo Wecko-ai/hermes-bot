@@ -1,11 +1,12 @@
 /**
- * Chat local isolé : un modèle installé dans Ollama, sans outils et sans passer par Hermes.
- * Le serveur n’accepte qu’un modèle installé et ne transmet que les messages, jamais d’outil.
- * L’historique reste en mémoire.
+ * Isolated local chat: a model installed in Ollama, without tools and without going through Hermes.
+ * The server only accepts an installed model and only forwards messages, never a tool.
+ * History stays in memory.
  */
 import type { Bot } from '../types'
+import { i18n } from '../i18n'
 
-// Le deux-points rend le profil invalide pour /api/media : un `MEDIA:` inventé par le modèle ne lit aucun fichier.
+// The colon makes the profile invalid for /api/media: a `MEDIA:` invented by the model reads no file.
 export const LOCAL_CHAT_SLUG = 'local:ollama'
 
 /** `qwen3:8b` → `qwen3 8b`, `library/llama3.2:latest` → `llama3.2`. */
@@ -18,12 +19,12 @@ export function localChatBot(model: string, name = ''): Bot {
   return {
     slug: LOCAL_CHAT_SLUG,
     name: name || localModelLabel(model),
-    role: 'Modèle local, sans outils. Il répond seulement.',
+    role: i18n.t('localChat.role'),
     section: 'Local',
     sectionId: 'local',
     model,
     status: 'idle',
-    preview: 'Ollama, sans outils',
+    preview: i18n.t('localChat.preview'),
     timestamp: null,
     unread: 0,
     hidden: false,
@@ -32,10 +33,10 @@ export function localChatBot(model: string, name = ''): Bot {
 }
 
 export interface LocalModels {
-  /** `false` : Ollama ne répond pas. */
+  /** `false`: Ollama is not responding. */
   available: boolean
   models: string[]
-  /** Modèle proposé par la configuration de l’installation, s’il y en a un. */
+  /** Model suggested by the installation’s configuration, if any. */
   defaultModel: string
 }
 
@@ -51,7 +52,7 @@ export async function loadLocalModels(): Promise<LocalModels> {
   }
 }
 
-/** Le choix des réglages s’il est installé, sinon celui de la configuration, sinon le premier. Vide : pas de chat local. */
+/** The model chosen in settings if installed, else the configuration’s, else the first. Empty: no local chat. */
 export function chooseLocalModel(local: LocalModels | null, preferred: string) {
   if (!local?.available || local.models.length === 0) return ''
   if (preferred && local.models.includes(preferred)) return preferred
@@ -65,7 +66,7 @@ export interface LocalChatFrame {
   done: boolean
 }
 
-/** Découpe un flux NDJSON : renvoie les trames complètes et le morceau de ligne à garder. */
+/** Splits an NDJSON stream: returns the complete frames and the partial line to keep. */
 export function readLocalChatFrames(buffer: string) {
   const lines = buffer.split('\n')
   const rest = lines.pop() ?? ''
@@ -79,21 +80,21 @@ export function readLocalChatFrames(buffer: string) {
         thinking: typeof frame.message?.thinking === 'string' ? frame.message.thinking : '',
         done: frame.done === true,
       })
-    } catch { /* ligne illisible : le reste du flux reste valable */ }
+    } catch { /* unreadable line: the rest of the stream stays valid */ }
   }
   return { frames, rest }
 }
 
-/** Le raisonnement `<think>` n’est pas la réponse, même quand le gabarit du modèle le laisse dans le texte. */
+/** `<think>` reasoning is not the answer, even when the model’s template leaves it in the text. */
 export function visibleAnswer(text: string) {
   return text.replace(/<think>[\s\S]*?(?:<\/think>\s*|$)/g, '').trimStart()
 }
 
-const FAILURES: Record<number, string> = {
-  401: 'Session Hermes expirée : reconnecte-toi.',
-  404: 'Le modèle n’est pas encore installé dans Ollama.',
-  503: 'Ollama ne répond pas.',
-}
+const failureMessage = (status: number) =>
+  status === 401 ? i18n.t('localChat.sessionExpired')
+    : status === 404 ? i18n.t('localChat.notInstalled')
+      : status === 503 ? i18n.t('localChat.ollamaDown')
+        : i18n.t('localChat.failed')
 
 export async function streamLocalChat(
   model: string,
@@ -108,7 +109,7 @@ export async function streamLocalChat(
     body: JSON.stringify({ model, messages }),
     signal,
   })
-  if (!response.ok || !response.body) throw new Error(FAILURES[response.status] ?? 'Le modèle local a échoué.')
+  if (!response.ok || !response.body) throw new Error(failureMessage(response.status))
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
   for (;;) {

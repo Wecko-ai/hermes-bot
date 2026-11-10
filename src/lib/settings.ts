@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { ModelOption, ModelOverride } from '../types'
+import { LANGUAGES, type LanguageChoice } from '../i18n'
 
 export const THEMES = ['system', 'light', 'dark'] as const
 export const TEXT_SIZES = ['small', 'normal', 'large'] as const
@@ -10,6 +11,8 @@ export type TextSize = (typeof TEXT_SIZES)[number]
 export type SendKey = (typeof SEND_KEYS)[number]
 
 export interface AppSettings {
+  /** Interface language. `system` follows macOS: French if it is French, English otherwise. */
+  language: LanguageChoice
   theme: ThemeChoice
   textSize: TextSize
   reduceMotion: boolean
@@ -38,6 +41,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
   } catch { /* réglages illisibles : valeurs par défaut */ }
   const flag = (field: unknown, fallback: boolean) => typeof field === 'boolean' ? field : fallback
   return {
+    language: oneOf(value.language, LANGUAGES, 'system'),
     theme: oneOf(value.theme, THEMES, oneOf(legacy('hermesbot-theme'), THEMES, 'system')),
     textSize: oneOf(value.textSize, TEXT_SIZES, 'normal'),
     reduceMotion: flag(value.reduceMotion, false),
@@ -73,6 +77,8 @@ function subscribe(listener: () => void) {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }
+
+export const subscribeSettings = subscribe
 
 export const useSettings = () => useSyncExternalStore(subscribe, getSettings)
 

@@ -1,3 +1,5 @@
+import { i18n } from '../i18n'
+
 export interface BrowserVaultRequest {
   id: string
   kind: 'save' | 'code'
@@ -13,35 +15,38 @@ export function subscribeBrowserVaultRequests(onRequests: (requests: BrowserVaul
     try {
       const value = JSON.parse(event.data)
       if (Array.isArray(value)) onRequests(value)
-    } catch { /* une trame incomplète est remplacée par le prochain snapshot */ }
+    } catch { /* a partial frame is replaced by the next snapshot */ }
   }
   return () => source.close()
 }
 
-const ERRORS: Record<string, string> = {
-  request_not_found: 'Cette demande a expiré.',
-  request_busy: 'Cette demande est déjà en cours.',
-  origin_mismatch: 'Le site affiché a changé. Remplissage refusé.',
-  origin_not_found: 'Aucun identifiant enregistré pour ce site.',
-  invalid_origin: 'Adresse du site invalide : https://exemple.com',
-  invalid_credentials: 'Identifiant ou mot de passe invalide.',
-  invalid_bots: 'Choisis au moins un bot.',
-  vault_unavailable: 'Le trousseau de la machine des bots est inaccessible.',
-  vault_write_failed: 'Le trousseau de la machine des bots a refusé l’écriture.',
-  vault_service_unavailable: 'Le coffre de la machine des bots ne répond pas. Depuis un autre Mac, ↻ relance le tunnel.',
-  admin_forbidden: 'Le coffre de la machine des bots refuse l’app : jeton absent. Depuis un autre Mac, ↻ le récupère.',
-  user_session_required: 'Session Hermes expirée : reconnecte-toi pour modifier le coffre.',
-  login_fields_not_found: 'Aucun champ de connexion trouvé.',
-  code_field_not_found: 'Aucun champ de code trouvé.',
-  cdp_unavailable: 'Le Chrome des bots ne répond pas.',
-}
+// Messages live in the catalog under browserVault.errors.<code>.
+const ERROR_CODES = new Set([
+  'request_not_found',
+  'request_busy',
+  'origin_mismatch',
+  'origin_not_found',
+  'invalid_origin',
+  'invalid_credentials',
+  'invalid_bots',
+  'vault_unavailable',
+  'vault_write_failed',
+  'vault_service_unavailable',
+  'admin_forbidden',
+  'user_session_required',
+  'login_fields_not_found',
+  'code_field_not_found',
+  'cdp_unavailable',
+])
 
-/** Identifiant du coffre, sans mot de passe : celui-ci reste dans le trousseau de la machine des bots. */
+const errorMessage = (code: string) => i18n.t(ERROR_CODES.has(code) ? `browserVault.errors.${code}` : 'browserVault.errors.default')
+
+/** Vault credentials, without the password: it stays in the bots machine’s keychain. */
 export interface VaultEntry {
   id: string
   origin: string
   identifier: string
-  /** Bots autorisés à l’utiliser ; `*` pour tous. */
+  /** Bots allowed to use it; `*` for all. */
   bots: string[]
   createdAt: string | null
   updatedAt: string | null
@@ -57,7 +62,7 @@ async function vaultRequest<T>(path: string, body?: Record<string, unknown>): Pr
   const result = await response.json().catch(() => ({}))
   if (!response.ok) {
     const code = typeof result.error === 'string' ? result.error : ''
-    throw new Error(ERRORS[code] || 'Le coffre a refusé la demande.')
+    throw new Error(errorMessage(code))
   }
   return result as T
 }
@@ -71,7 +76,7 @@ export async function listVaultEntries() {
   return Array.isArray(result.entries) ? result.entries : []
 }
 
-/** Sans `password`, le mot de passe enregistré est gardé. */
+/** Without `password`, the saved password is kept. */
 export async function saveVaultEntry(entry: { origin: string; identifier: string; password?: string; bots: string[] }) {
   await vaultRequest('/api/browser-vault/entries', entry)
 }

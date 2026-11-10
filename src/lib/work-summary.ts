@@ -1,17 +1,18 @@
 import { isSilentMessage } from './hermes'
 import { cleanPreview } from './time'
+import { i18n } from '../i18n'
 
 type Json = Record<string, unknown>
 
-/** Ce qu’un bot est en train de faire, assemblé sans appel de modèle depuis les événements de la gateway. */
+/** What a bot is currently doing, assembled without any model call from the gateway events. */
 export interface WorkSummary {
-  /** Tâche en cours de sa liste, avec sa progression. */
+  /** Current task of its list, with its progress. */
   task?: string
   done?: number
   total?: number
-  /** Dernière phrase écrite par le bot pendant le tour. */
+  /** Last sentence written by the bot during the turn. */
   note?: string
-  /** Outil ou action en cours. */
+  /** Tool or action in progress. */
   step?: string
 }
 
@@ -19,39 +20,23 @@ const MAX_LENGTH = 140
 const shorten = (text: string) => (text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH - 1).trimEnd()}…` : text)
 const baseName = (value: string) => value.split('/').filter(Boolean).pop() || value
 
-const FILE_TOOLS: Record<string, string> = { read_file: 'Lit', write_file: 'Écrit', patch: 'Modifie' }
-const TOOL_LABELS: Record<string, string> = {
-  search_files: 'Cherche dans les fichiers',
-  terminal: 'Lance une commande',
-  execute_code: 'Exécute du code',
-  web_extract: 'Lit une page web',
-  x_search: 'Cherche sur X',
-  delegate_task: 'Délègue une tâche',
-  image_generate: 'Génère une image',
-  video_generate: 'Génère une vidéo',
-  vision_analyze: 'Analyse une image',
-  video_analyze: 'Analyse une vidéo',
-  skill_view: 'Consulte une compétence',
-  skills_list: 'Parcourt ses compétences',
-  memory: 'Met à jour sa mémoire',
-  session_search: 'Cherche dans ses conversations',
-  todo_list: 'Organise ses tâches',
-  browser_exec: 'Utilise le navigateur',
-  browser_cdp: 'Utilise le navigateur',
-  computer_use: 'Utilise l’ordinateur',
-  clarify: 'Pose une question',
-  text_to_speech: 'Génère de l’audio',
-  cronjob_manage: 'Gère ses routines',
+// Tool name -> catalog key for the file tools (with a file name, without one). The other tools are labelled by `work.tools.<name>`.
+const FILE_TOOLS: Record<string, [string, string]> = {
+  read_file: ['work.fileRead', 'work.fileReadBare'],
+  write_file: ['work.fileWrite', 'work.fileWriteBare'],
+  patch: ['work.filePatch', 'work.filePatchBare'],
 }
 
-/** Seuls un nom de fichier ou une recherche sont montrés : une commande peut contenir un secret. */
+/** Only a file name or a search is shown: a command may contain a secret. */
 function toolStep(payload: Json) {
   const name = typeof payload.name === 'string' ? payload.name : ''
   if (!name) return undefined
   const detail = typeof payload.context === 'string' ? payload.context.trim() : ''
-  if (FILE_TOOLS[name]) return detail ? `${FILE_TOOLS[name]} ${shorten(baseName(detail))}` : FILE_TOOLS[name]
-  if (name === 'web_search') return detail ? `Cherche « ${shorten(detail)} »` : 'Cherche sur le web'
-  return TOOL_LABELS[name] || name.replaceAll('_', ' ')
+  const file = FILE_TOOLS[name]
+  if (file) return detail ? i18n.t(file[0], { name: shorten(baseName(detail)) }) : i18n.t(file[1])
+  if (name === 'web_search') return detail ? i18n.t('work.webSearch', { query: shorten(detail) }) : i18n.t('work.webSearchBare')
+  const label = `work.tools.${name}`
+  return i18n.exists(label) ? i18n.t(label) : name.replaceAll('_', ' ')
 }
 
 function withTodos(current: WorkSummary, todos: unknown): WorkSummary {
@@ -73,7 +58,7 @@ function firstSentence(text: string) {
   return shorten(end >= 20 ? line.slice(0, end + 1) : line)
 }
 
-/** Fait avancer le résumé d’un bot. `undefined` : le tour est fini, il n’y a plus rien à résumer. */
+/** Advances a bot’s summary. `undefined`: the turn is over, nothing left to summarize. */
 export function applyWorkEvent(current: WorkSummary | undefined, event: { type?: string; payload?: Json }): WorkSummary | undefined {
   const payload = event.payload ?? {}
   const base = current ?? {}
@@ -89,7 +74,7 @@ export function applyWorkEvent(current: WorkSummary | undefined, event: { type?:
       return text.trim() && !isSilentMessage(text) ? { ...base, note: firstSentence(text) } : current
     }
     case 'message.delta':
-      return typeof payload.text === 'string' && payload.text ? { ...base, step: 'Rédige sa réponse' } : current
+      return typeof payload.text === 'string' && payload.text ? { ...base, step: i18n.t('work.writing') } : current
     case 'tool.start':
       return { ...base, step: toolStep(payload) ?? base.step }
     case 'tool.complete':
@@ -99,7 +84,7 @@ export function applyWorkEvent(current: WorkSummary | undefined, event: { type?:
   }
 }
 
-/** La ligne courte du roster et de l’en-tête. */
+/** The short line shown in the roster and the header. */
 export function workLine(summary: WorkSummary | undefined, fallback = '') {
   if (summary?.task) {
     const total = summary.total ?? 0

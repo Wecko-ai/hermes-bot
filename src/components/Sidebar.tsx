@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Moon, Plus, RefreshCw, Search, Settings, Sun, User, X } from 'lucide-react'
 import type { Bot } from '../types'
 import { avatarColor, statusLabel } from './BotAvatar'
@@ -8,9 +9,12 @@ import { compareBotActivity, latestActivity } from '../lib/activity'
 import { workLine, type WorkSummary } from '../lib/work-summary'
 import { updateSettings, useSettings } from '../lib/settings'
 import { compareSections, useAppConfig } from '../lib/app-config'
+import { locale } from '../i18n'
 
-// « Non classés », puis le chat local, ferment la liste sauf si la configuration les place ailleurs.
+// “Non classés” (the roster’s name for unsorted bots), then the local chat, close the list unless the configuration places them elsewhere.
 const TRAILING_SECTIONS = ['Non classés', 'Local']
+// These two names are sort keys from the roster data; only their label follows the language.
+const SECTION_LABELS: Record<string, string> = { 'Non classés': 'sidebar.sectionUnassigned', Local: 'sidebar.sectionLocal' }
 
 interface SidebarProps {
   bots: Bot[]
@@ -30,6 +34,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme, onOpenSettings }: SidebarProps) {
+  const { t } = useTranslation()
   const { activitySort, showHidden } = useSettings()
   const { ui } = useAppConfig()
   const [searchOpen, setSearchOpen] = useState(false)
@@ -46,15 +51,15 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
   }
 
   const groups = useMemo<[string, Bot[]][]>(() => {
-    const needle = search.trim().toLocaleLowerCase('fr')
+    const needle = search.trim().toLocaleLowerCase(locale())
     const visible = bots.filter((bot) => {
       if (!showHidden && bot.hidden) return false
       if (unreadOnly && bot.unread === 0) return false
       if (workingOnly && avatarPhase(bot) !== 'working') return false
-      if (needle && !`${bot.name} ${bot.role} ${bot.preview}`.toLocaleLowerCase('fr').includes(needle)) return false
+      if (needle && !`${bot.name} ${bot.role} ${bot.preview}`.toLocaleLowerCase(locale()).includes(needle)) return false
       return true
     })
-    // Par activité : une seule liste, sans sections.
+    // By activity: a single list, no sections.
     if (activitySort) return visible.length ? [['', visible.sort(compareBotActivity)]] : []
     const map = new Map<string, Bot[]>()
     visible.forEach((bot) => map.set(bot.section, [...(map.get(bot.section) || []), bot]))
@@ -74,15 +79,15 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
 
   return (
     <>
-      {mobileOpen && <button className="sidebar-scrim" aria-label="Fermer la navigation" onClick={onCloseMobile} />}
-      <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Bots">
+      {mobileOpen && <button className="sidebar-scrim" aria-label={t('sidebar.closeNav')} onClick={onCloseMobile} />}
+      <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`} aria-label={t('sidebar.bots')}>
         <div className="sidebar-topbar">
           <div className="window-drag-space" />
           <div className="sidebar-actions">
-            <button className={`round-icon-button ${searchOpen ? 'is-active' : ''}`} aria-label="Rechercher un bot" onClick={() => setSearchOpen((open) => !open)}>
+            <button className={`round-icon-button ${searchOpen ? 'is-active' : ''}`} aria-label={t('sidebar.searchBot')} onClick={() => setSearchOpen((open) => !open)}>
               {searchOpen ? <X size={17} /> : <Search size={17} />}
             </button>
-            <button className="round-icon-button" aria-label="Écrire à un bot" onClick={onNewMessage}><Plus size={19} /></button>
+            <button className="round-icon-button" aria-label={t('sidebar.writeToBot')} onClick={onNewMessage}><Plus size={19} /></button>
           </div>
         </div>
 
@@ -93,11 +98,11 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
               className="sidebar-search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Rechercher"
-              aria-label="Rechercher dans les bots"
+              placeholder={t('sidebar.search')}
+              aria-label={t('sidebar.searchIn')}
               autoFocus
             />
-            {search && <button className="plain-icon" aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button>}
+            {search && <button className="plain-icon" aria-label={t('sidebar.clearSearch')} onClick={() => setSearch('')}><X size={14} /></button>}
           </div>
         )}
 
@@ -106,24 +111,24 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
           onClick={() => setWorkingOnly((value) => !value)}
           disabled={busyBots.length === 0}
           aria-pressed={workingOnly}
-          aria-label={busyBots.length ? `${busyBots.length} bot${busyBots.length > 1 ? 's' : ''} au travail : ${workingOnly ? 'tout afficher' : 'afficher seulement eux'}` : 'Aucun bot au travail'}
+          aria-label={busyBots.length ? t('sidebar.workingAria', { count: busyBots.length, action: workingOnly ? t('sidebar.actionShowAll') : t('sidebar.actionOnlyThem') }) : t('sidebar.noneWorkingAria')}
         >
           <span className="working-strip-pulse" aria-hidden="true" />
           {busyBots.length > 0 && <span className="working-strip-avatars">{busyBots.slice(0, 4).map((bot) => <LiveAvatar key={bot.slug} bot={bot} size={20} />)}</span>}
-          <span className="working-strip-text">{busyBots.length ? `${busyBots.length} au travail` : 'Tous les bots sont disponibles'}</span>
-          {busyBots.length > 0 && <span className="working-strip-action">{workingOnly ? 'Tout afficher' : 'Voir'}</span>}
+          <span className="working-strip-text">{busyBots.length ? t('sidebar.workingCount', { count: busyBots.length }) : t('sidebar.allAvailable')}</span>
+          {busyBots.length > 0 && <span className="working-strip-action">{workingOnly ? t('sidebar.showAll') : t('sidebar.view')}</span>}
         </button>
 
         <div className="sidebar-filter-row">
-          <span>{bots.filter((bot) => !bot.hidden).length} bots</span>
+          <span>{t('sidebar.botCount', { count: bots.filter((bot) => !bot.hidden).length })}</span>
           <div className="sidebar-filter-actions">
-            <div className="sort-switch" role="group" aria-label="Classer les bots">
-              <button className={activitySort ? '' : 'is-active'} aria-pressed={!activitySort} onClick={() => chooseSort(false)}>Groupes</button>
-              <button className={activitySort ? 'is-active' : ''} aria-pressed={activitySort} onClick={() => chooseSort(true)}>Activité</button>
+            <div className="sort-switch" role="group" aria-label={t('sidebar.sortBots')}>
+              <button className={activitySort ? '' : 'is-active'} aria-pressed={!activitySort} onClick={() => chooseSort(false)}>{t('sidebar.groups')}</button>
+              <button className={activitySort ? 'is-active' : ''} aria-pressed={activitySort} onClick={() => chooseSort(true)}>{t('sidebar.activity')}</button>
             </div>
             <button className={`unread-filter ${unreadOnly ? 'is-active' : ''}`} onClick={() => setUnreadOnly((value) => !value)} aria-pressed={unreadOnly}>
               {unreadOnly ? <CheckCheck size={14} /> : <Bell size={14} />}
-              Non lus{unread > 0 && <span className="filter-count">{unread}</span>}
+              {t('sidebar.unread')}{unread > 0 && <span className="filter-count">{unread}</span>}
             </button>
           </div>
         </div>
@@ -134,7 +139,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
               {!activitySort && (
                 <button className="section-heading" onClick={() => toggleSection(section)} aria-expanded={!collapsed.has(section)}>
                   {collapsed.has(section) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                  <span>{section}</span>
+                  <span>{SECTION_LABELS[section] ? t(SECTION_LABELS[section]) : section}</span>
                   <span className="section-count">{sectionBots.length}</span>
                 </button>
               )}
@@ -171,24 +176,24 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
           ))}
           {groups.length === 0 && (
             <div className="sidebar-empty">
-              <span>Aucun bot trouvé.</span>
-              <button onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>Réinitialiser les filtres</button>
+              <span>{t('sidebar.noBotFound')}</span>
+              <button onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>{t('sidebar.resetFilters')}</button>
             </div>
           )}
         </nav>
 
         <div className="sidebar-footer">
           <div className="connection-status">
-            <div className="connection-label"><span className={`connection-dot ${connected ? 'is-connected' : ''}`} /><span>{reconnecting ? 'Reconnexion…' : connected ? 'Hermes connecté' : 'Hermes déconnecté'}</span></div>
-            <button className={`connection-refresh ${connected ? '' : 'is-offline'} ${reconnecting ? 'is-busy' : ''}`} aria-label="Reconnecter Hermes" title="Reconnecter Hermes" disabled={reconnecting} onClick={onReconnect}>
+            <div className="connection-label"><span className={`connection-dot ${connected ? 'is-connected' : ''}`} /><span>{reconnecting ? t('sidebar.reconnecting') : connected ? t('sidebar.connected') : t('sidebar.disconnected')}</span></div>
+            <button className={`connection-refresh ${connected ? '' : 'is-offline'} ${reconnecting ? 'is-busy' : ''}`} aria-label={t('sidebar.reconnectHermes')} title={t('sidebar.reconnectHermes')} disabled={reconnecting} onClick={onReconnect}>
               <RefreshCw size={13} />
             </button>
           </div>
           <div className="footer-actions">
-            {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? 'Masquer les bots cachés' : 'Afficher les bots cachés'} onClick={() => updateSettings({ showHidden: !showHidden })}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
-            <button className="plain-icon" aria-label="Réglages" title="Réglages (⌘,)" onClick={onOpenSettings}><Settings size={16} /></button>
-            <button className="plain-icon" aria-label={dark ? 'Passer au thème clair' : 'Passer au thème sombre'} onClick={(event) => onToggleTheme({ x: event.clientX, y: event.clientY })}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
-            <button className="user-menu" aria-label="Se déconnecter" title="Se déconnecter" onClick={onLogout}>{ui.userInitial ? <span className="user-avatar" aria-label={ui.userName || ui.userInitial}>{ui.userInitial}</span> : <span className="user-avatar" aria-hidden="true"><User size={14} /></span>}</button>
+            {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? t('sidebar.hideHidden') : t('sidebar.showHidden')} onClick={() => updateSettings({ showHidden: !showHidden })}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+            <button className="plain-icon" aria-label={t('sidebar.settings')} title={t('sidebar.settingsTitle')} onClick={onOpenSettings}><Settings size={16} /></button>
+            <button className="plain-icon" aria-label={dark ? t('sidebar.lightTheme') : t('sidebar.darkTheme')} onClick={(event) => onToggleTheme({ x: event.clientX, y: event.clientY })}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
+            <button className="user-menu" aria-label={t('sidebar.signOut')} title={t('sidebar.signOut')} onClick={onLogout}>{ui.userInitial ? <span className="user-avatar" aria-label={ui.userName || ui.userInitial}>{ui.userInitial}</span> : <span className="user-avatar" aria-hidden="true"><User size={14} /></span>}</button>
           </div>
         </div>
       </aside>

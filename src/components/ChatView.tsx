@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Menu, PanelRight, Search, Upload, X } from 'lucide-react'
 import type { Bot, ChatMessage, SessionUsage } from '../types'
 import type { MediaRef } from '../lib/media'
@@ -10,9 +11,10 @@ import { MessageList } from './MessageList'
 import { Composer, type ComposerHandle } from './Composer'
 import { PromptCard } from './PromptCard'
 import type { PendingPrompt } from '../lib/hermes'
+import { locale } from '../i18n'
 
 interface ChatViewProps {
-  /** Le chat local est à l’écran : cette vue reste montée, pour garder brouillon et position. */
+  /** The local chat is on screen: this view stays mounted, to keep its draft and position. */
   hidden?: boolean
   bot: Bot
   bots: Bot[]
@@ -38,7 +40,7 @@ interface ChatViewProps {
   showUsage: boolean
   onToggleUsage: () => void
   modelPicker?: ReactNode
-  /** Questions et accords ouverts de ce chat : le bot reste bloqué tant qu’ils attendent. */
+  /** Open questions and approvals of this chat: the bot stays blocked while they wait. */
   prompts: PendingPrompt[]
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
 }
@@ -46,19 +48,20 @@ interface ChatViewProps {
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
 
 export function ChatView(props: ChatViewProps) {
+  const { t } = useTranslation()
   const { bot } = props
-  // Une question ouverte bloque le tour : le bot attend l’utilisateur, il ne travaille pas.
+  // An open question blocks the turn: the bot is waiting for the user, not working.
   const waiting = props.prompts.length > 0
-  // Pendant un tour lancé ici, l’en-tête montre le travail même si le roster n’a pas encore suivi.
+  // During a turn started here, the header shows the work even if the roster hasn’t caught up yet.
   const liveBot = waiting ? { ...bot, status: 'waiting' as const } : props.running && avatarPhase(bot) !== 'working' ? { ...bot, status: 'working' as const } : bot
   const phase = avatarPhase(liveBot)
-  const status = waiting ? 'Attend ta réponse' : phase === 'working' ? 'Au travail' : phase === 'done' ? 'Terminé' : 'Disponible'
+  const status = t(`status.${waiting ? 'waiting' : phase === 'working' ? 'working' : phase === 'done' ? 'done' : 'idle'}`)
   const detail = phase === 'working' ? props.workText || props.activity : ''
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   const composerRef = useRef<ComposerHandle>(null)
   const [dragging, setDragging] = useState(false)
-  // Passer d’un enfant à l’autre émet entrée et sortie : seul le compte dit si on a quitté la zone.
+  // Moving from one child to another fires enter and leave: only the count tells whether we left the zone.
   const dragDepthRef = useRef(0)
   const searchRef = useRef<HTMLInputElement>(null)
   const hiddenRef = useRef(false)
@@ -86,7 +89,7 @@ export function ChatView(props: ChatViewProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const visibleMessages = query.trim()
-    ? props.messages.filter((message) => message.content.toLocaleLowerCase('fr').includes(query.trim().toLocaleLowerCase('fr')))
+    ? props.messages.filter((message) => message.content.toLocaleLowerCase(locale()).includes(query.trim().toLocaleLowerCase(locale())))
     : props.messages
   return (
     <main
@@ -117,7 +120,7 @@ export function ChatView(props: ChatViewProps) {
       }}
     >
       <header className="chat-header">
-        <div className="chat-leading"><button className="plain-icon mobile-menu" aria-label="Afficher les bots" onClick={props.onOpenMobile}><Menu size={19} /></button></div>
+        <div className="chat-leading"><button className="plain-icon mobile-menu" aria-label={t('chat.showBots')} onClick={props.onOpenMobile}><Menu size={19} /></button></div>
         <div className={`chat-identity is-${waiting ? 'waiting' : phase}`} title={bot.role}>
           <LiveAvatar bot={liveBot} size={26} />
           <div>
@@ -126,16 +129,16 @@ export function ChatView(props: ChatViewProps) {
           </div>
         </div>
         <div className="chat-header-actions">
-          <button className={`plain-icon chat-search-button ${searchOpen ? 'is-active' : ''}`} aria-label="Rechercher dans la conversation" onClick={() => { setSearchOpen((value) => !value); setQuery('') }}><Search size={17} /></button>
-          <button className={`plain-icon ${props.detailsOpen ? 'is-active' : ''}`} aria-label="Afficher les détails du bot" onClick={props.onToggleDetails}><PanelRight size={18} /></button>
+          <button className={`plain-icon chat-search-button ${searchOpen ? 'is-active' : ''}`} aria-label={t('chat.searchConversation')} onClick={() => { setSearchOpen((value) => !value); setQuery('') }}><Search size={17} /></button>
+          <button className={`plain-icon ${props.detailsOpen ? 'is-active' : ''}`} aria-label={t('chat.showDetails')} onClick={props.onToggleDetails}><PanelRight size={18} /></button>
         </div>
       </header>
       {searchOpen && (
         <div className="chat-search-bar">
           <Search size={15} />
-          <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher dans cette conversation" aria-label="Texte à rechercher" autoFocus />
-          <span>{query ? `${visibleMessages.length} résultat${visibleMessages.length > 1 ? 's' : ''}` : ''}</span>
-          <button className="plain-icon" aria-label="Fermer la recherche" onClick={() => { setSearchOpen(false); setQuery('') }}><X size={15} /></button>
+          <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('chat.searchPlaceholder')} aria-label={t('chat.searchLabel')} autoFocus />
+          <span>{query ? t('chat.results', { count: visibleMessages.length }) : ''}</span>
+          <button className="plain-icon" aria-label={t('chat.closeSearch')} onClick={() => { setSearchOpen(false); setQuery('') }}><X size={15} /></button>
         </div>
       )}
       <MessageList
@@ -173,7 +176,7 @@ export function ChatView(props: ChatViewProps) {
         showUsage={props.showUsage}
         onToggleUsage={props.onToggleUsage}
       />
-      {dragging && <div className="drop-overlay" aria-hidden="true"><div><Upload size={22} /><strong>Dépose pour joindre à {bot.name}</strong><span>Images, vidéos, PDF, documents · 200 Mo maximum</span></div></div>}
+      {dragging && <div className="drop-overlay" aria-hidden="true"><div><Upload size={22} /><strong>{t('chat.dropTo', { name: bot.name })}</strong><span>{t('chat.dropHint')}</span></div></div>}
     </main>
   )
 }

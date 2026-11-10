@@ -1,30 +1,31 @@
+import { i18n } from '../i18n'
+
 /**
- * Envoi d’un message pendant qu’un bot travaille (demande de l’utilisateur du 2026-11-10) :
- * - `wait` (défaut) : rien ne part. Le message reste en brouillon ; l’utilisateur le finit après avoir vu le résultat.
- * - `queue` : `prompt.submit` avec `queued` ; Hermes le lance quand le tour en cours est fini.
- * - `priority` : la même file, avec une consigne de reprise dans `api_text`, puis `session.interrupt` du tour
- *   en cours. Le bot lit ce message tout de suite, puis reprend la tâche interrompue.
- * Hors travail, un message part normalement.
+ * Sending a message while a bot is working (user request of 2026-11-10):
+ * - `wait` (default): nothing is sent. The message stays a draft; the user finishes it after seeing the result.
+ * - `queue`: `prompt.submit` with `queued`; Hermes runs it when the current turn is over.
+ * - `priority`: the same queue, with a resume instruction in `api_text`, then `session.interrupt` of the
+ *   current turn. The bot reads this message right away, then resumes the interrupted task.
+ * When the bot is idle, a message is sent normally.
  */
 export type DeliveryMode = 'wait' | 'queue' | 'priority'
 
 export const DELIVERY_MODES: { id: DeliveryMode; label: string; title: string }[] = [
-  { id: 'wait', label: 'Attendre', title: 'Le message reste en brouillon jusqu’à la fin du tour' },
-  { id: 'queue', label: 'File', title: 'Le message part tout seul quand le bot a fini sa tâche' },
-  { id: 'priority', label: 'Prio', title: 'Le bot s’interrompt, lit ce message, puis reprend sa tâche' },
+  // Getters: the text follows the interface language at read time.
+  { id: 'wait', get label() { return i18n.t('delivery.wait.label') }, get title() { return i18n.t('delivery.wait.title') } },
+  { id: 'queue', get label() { return i18n.t('delivery.queue.label') }, get title() { return i18n.t('delivery.queue.title') } },
+  { id: 'priority', get label() { return i18n.t('delivery.priority.label') }, get title() { return i18n.t('delivery.priority.title') } },
 ]
 
 const PRIORITY_NOTE = '[HermesBot priority: the user stopped your current task to send this message. Handle it first. Then resume the interrupted task from where it stopped, unless this message changes or cancels it.]'
 
-/** Ce que lit le modèle pour un message prioritaire : le texte du mode s’il y en a un, puis la consigne de reprise. */
+/** What the model reads for a priority message: the mode text if there is one, then the resume instruction. */
 export function priorityApiText(text: string, modeText?: string) {
   return `${modeText ?? text}\n\n${PRIORITY_NOTE}`
 }
 
 export function deliveryPlaceholder(delivery: DeliveryMode, botName: string) {
-  if (delivery === 'queue') return `Message pour ${botName}, envoyé à la fin de son tour`
-  if (delivery === 'priority') return `Message prioritaire : ${botName} s’interrompt pour le lire`
-  return `Écrire à ${botName} : le message attend la fin de son tour`
+  return i18n.t(`delivery.placeholder.${delivery}`, { name: botName })
 }
 
 const DRAFTS_KEY = 'hermesbot-drafts'
@@ -40,7 +41,7 @@ function readDrafts(): Record<string, string> {
   }
 }
 
-/** Brouillon texte d’un bot, gardé quand l’app se ferme ou qu’on change de chat. Les fichiers ne sont pas gardés. */
+/** A bot’s text draft, kept when the app closes or the chat changes. Files are not kept. */
 export function loadDraft(slug: string) {
   return readDrafts()[slug] ?? ''
 }
@@ -50,5 +51,5 @@ export function saveDraft(slug: string, text: string) {
   if ((drafts[slug] ?? '') === text) return
   if (text.trim()) drafts[slug] = text.slice(0, MAX_DRAFT)
   else delete drafts[slug]
-  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts)) } catch { /* storage indisponible : le brouillon reste en mémoire */ }
+  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts)) } catch { /* storage unavailable: the draft stays in memory */ }
 }

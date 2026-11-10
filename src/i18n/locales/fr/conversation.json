@@ -1,0 +1,142 @@
+{
+  "composer": {
+    "mentionMenu": "Bots à mentionner",
+    "remove": "Retirer {{name}}",
+    "chooseFiles": "Choisir des fichiers",
+    "addFiles": "Ajouter des fichiers",
+    "messageTo": "Message à {{name}}",
+    "stopDictation": "Arrêter la dictée",
+    "dictate": "Dicter",
+    "stopBot": "Arrêter le bot",
+    "sendPriority": "Envoyer en priorité",
+    "sendQueue": "Mettre en file",
+    "send": "Envoyer",
+    "modeGroup": "Mode de travail",
+    "deliveryGroup": "Envoi pendant le travail",
+    "notAdded": "Non ajouté : {{files}}.",
+    "hintWait": "Brouillon gardé jusqu’à la fin du tour · File ou Prio pour l’envoyer maintenant",
+    "hintQueue": "Part quand {{name}} a fini",
+    "hintPriority": "{{name}} s’interrompt, lit, puis reprend",
+    "hintEnter": "Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne",
+    "hintCmdEnter": "⌘ Entrée pour envoyer · Entrée pour une nouvelle ligne",
+    "hintExtras": " · @ pour citer un bot · /model",
+    "usageToggle": "Afficher le contexte et le débit",
+    "chooseModel": "Choisir le modèle"
+  },
+  "messages": {
+    "citedFile_one": "Fichier cité",
+    "citedFile_other": "{{count}} fichiers cités",
+    "imageFallback": "Image",
+    "sending": "Envoi…",
+    "sendFailed": "Échec de l’envoi",
+    "priority": "Prioritaire",
+    "queued": "En file",
+    "copyReply": "Copier la réponse",
+    "opening": "Ouverture de la conversation avec {{name}}…",
+    "suggestionCapabilities": "Que peux-tu faire ?",
+    "suggestionDay": "Fais-moi un point sur ta journée.",
+    "suggestionRecent": "Qu’as-tu terminé récemment ?",
+    "newMessages": "Nouveaux messages"
+  },
+  "prompt": {
+    "approvalTitle": "{{name}} demande ton accord",
+    "approvalDefault": "Cette action demande une approbation.",
+    "questionTitle": "{{name}} te pose une question",
+    "questionDefault": "Le bot attend ta réponse.",
+    "confirm": "Valider",
+    "confirmCount": "Valider ({{count}})",
+    "otherAnswer": "Autre réponse…",
+    "yourAnswer": "Ta réponse…",
+    "freeAnswer": "Réponse libre à {{name}}",
+    "sendAnswer": "Envoyer la réponse"
+  },
+  "mail": {
+    "approved": "Mail approuvé : {{subject}}",
+    "discarded": "Brouillon écarté : {{subject}}",
+    "restore": "Rétablir",
+    "cardLabel": "Brouillon de mail : {{subject}}",
+    "title": "Mail",
+    "subject": "Objet",
+    "from": "De",
+    "replyTo": "En réponse à",
+    "to": "À",
+    "cc": "Cc",
+    "ccPlaceholder": "nom@exemple.com",
+    "body": "Corps du mail",
+    "pending": "À approuver",
+    "dismiss": "Ignorer",
+    "send": "Envoyer",
+    "botBusy": "Le bot travaille encore.",
+    "drafting": "Brouillon de mail en cours…",
+    "sentTo": "{{subject}}, à {{to}}"
+  },
+  "media": {
+    "externalLink": "Lien externe",
+    "openBeside": "Ouvrir à côté",
+    "previewUnavailable": "Aperçu indisponible",
+    "localFile": "Fichier local",
+    "relativePath": "Chemin relatif",
+    "enlarge": "Agrandir {{name}}",
+    "previous": "Image précédente",
+    "next": "Image suivante",
+    "close": "Fermer",
+    "preview": {
+      "image": "Image",
+      "video": "Vidéo",
+      "audio": "Audio",
+      "document": "Document",
+      "file": "Fichier",
+      "link": "Lien"
+    }
+  },
+  "document": {
+    "reload": "Recharger {{name}}",
+    "download": "Télécharger {{name}}",
+    "loading": "Ouverture…",
+    "tooLarge": "Fichier trop lourd pour l’aperçu (16 Mo maximum).",
+    "unavailable": "Aperçu indisponible."
+  },
+  "attachments": {
+    "bytes": "{{value}} o",
+    "kilobytes": "{{value}} ko",
+    "megabytes": "{{value}} Mo",
+    "empty": "{{name}} est vide",
+    "tooLarge": "{{name}} dépasse 200 Mo",
+    "tooMany": "{{name}} : {{max}} fichiers maximum",
+    "fallbackName": "fichier",
+    "readFailed": "Lecture impossible : {{name}}",
+    "labelImage": "[Image : {{name}}]",
+    "labelFile": "[Fichier : {{name}}]",
+    "promptImage": "Analyse cette image.",
+    "promptFile": "Regarde ce fichier.",
+    "promptFiles": "Regarde ces fichiers.",
+    "fileRef": "[Fichier : {{name}}]"
+  },
+  "agentNotes": {
+    "message": "messaged",
+    "reply": "replied to",
+    "noReply": "hasn’t replied to",
+    "empty": "Message vide.",
+    "open": "Ouvrir {{name}}"
+  },
+  "delivery": {
+    "wait": { "label": "Attendre", "title": "Le message reste en brouillon jusqu’à la fin du tour" },
+    "queue": { "label": "File", "title": "Le message part tout seul quand le bot a fini sa tâche" },
+    "priority": { "label": "Prio", "title": "Le bot s’interrompt, lit ce message, puis reprend sa tâche" },
+    "placeholder": {
+      "queue": "Message pour {{name}}, envoyé à la fin de son tour",
+      "priority": "Message prioritaire : {{name}} s’interrompt pour le lire",
+      "wait": "Écrire à {{name}} : le message attend la fin de son tour"
+    }
+  },
+  "modes": {
+    "brain": { "label": "BRAIN", "title": "Réfléchit avec toi et cherche les meilleures solutions, sans rien exécuter" },
+    "plan": { "label": "PLAN", "title": "Construit un plan avec toi avant toute exécution" },
+    "exec": { "label": "EXEC", "title": "Exécute la tâche" },
+    "placeholder": {
+      "brain": "Réfléchir avec {{name}}",
+      "plan": "Préparer un plan avec {{name}}",
+      "exec": "Message {{name}}"
+    }
+  }
+}
