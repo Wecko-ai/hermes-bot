@@ -1267,7 +1267,10 @@ try {
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test de streaming')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   try {
-    await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').waitFor({ timeout: 10_000 })
+    // The simulated gateway gives every turn the same id, so this reply normally reuses the bubble of an earlier
+    // turn of this chat. When the background refresh of the chat ran first, that bubble has another id and the
+    // reply gets a bubble of its own: one or two matches are both right.
+    await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').last().waitFor({ timeout: 10_000 })
     await page.locator('[data-bot=orion] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   } catch (error) {
     console.log('chat au moment de l’échec:', await page.locator('.messages-column').innerText())
