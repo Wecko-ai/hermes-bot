@@ -525,16 +525,6 @@ export async function submitPrompt(client: HermesClient, chat: ActiveChat, text:
   })
 }
 
-/**
- * Glisse un message dans le tour en cours : l’agent le lit après son outil actuel.
- * `undelivered` : aucun agent ne l’a reçu, il peut repartir comme prochain tour sans risque de doublon.
- */
-export async function steerChat(client: HermesClient, chat: ActiveChat, text: string): Promise<'steered' | 'undelivered' | 'unknown'> {
-  const result = await client.request('session.steer', { profile: chat.profile, session_id: chat.sessionId, execution_generation: chat.executionGeneration, text })
-  if (result?.status === 'queued' || result?.status === 'redirected') return 'steered'
-  return result?.status === 'rejected' && result?.delivered === false ? 'undelivered' : 'unknown'
-}
-
 /** Un fichier lourd traverse le tunnel SSH en une seule trame : le délai habituel ne suffit pas. */
 const ATTACH_TIMEOUT_MS = 10 * 60_000
 

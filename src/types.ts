@@ -101,6 +101,8 @@ export interface ChatMessage {
   streaming?: boolean
   /** Message entre deux bots (`message_agent`) : une ligne « Orion messaged Iris » dans le fil. */
   agent?: AgentMessage
+  /** Envoyé pendant un tour : en file d’attente, ou prioritaire (le tour a été interrompu pour lui). */
+  delivery?: 'queue' | 'priority'
 }
 
 export interface AgentMessage {

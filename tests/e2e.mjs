@@ -73,6 +73,9 @@ let localModelMissing = false
 const fileAttachCalls = []
 const steerCalls = []
 const queuedPrompts = []
+const interruptCalls = []
+// Tour « Test pilotage » : il ne finit que sur interruption (message prioritaire).
+let pilotageTurn = null
 let steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
 const imageAttachCalls = []
 const analyticsProfiles = []
@@ -227,7 +230,7 @@ wss.on('connection', (socket) => {
       sessionResumeCalls += 1
       const sessionId = frame.params.session_id
       return reply({
-        session_id: sessionId, revision: 4, execution_generation: 1, running: Boolean(resumePrompts[sessionId]), subscription_id: 'sub-test',
+        session_id: sessionId, revision: 4, execution_generation: 1, running: Boolean(resumePrompts[sessionId]) || pilotageTurn?.sessionId === sessionId, subscription_id: 'sub-test',
         open_requests: openRequests, prompts: resumePrompts[sessionId] || [],
         messages: [
           ...Array.from({ length: 30 }, (_, index) => ({
@@ -328,7 +331,7 @@ wss.on('connection', (socket) => {
     if (frame.method === 'session.usage') return reply({ context_used: 41_000, context_max: 1_000_000, context_percent: 4.1, avg_tps: 62.6, total: 500 })
     if (frame.method === 'prompt.submit') {
       if (frame.params.queued === true) {
-        queuedPrompts.push(frame.params.text)
+        queuedPrompts.push({ text: frame.params.text, apiText: frame.params.api_text })
         return reply({ admission_id: 'admission-file', status: 'queued', execution_generation: 1 })
       }
       promptCalls += 1
@@ -352,7 +355,7 @@ wss.on('connection', (socket) => {
       }
       if (frame.params.text === 'Test pilotage') {
         at(30, 'message.start', { turn_id: 'turn-pilotage' })
-        at(1800, 'message.complete', { turn_id: 'turn-pilotage', text: 'Pilotage terminé.', status: 'complete' })
+        pilotageTurn = { at, sessionId }
         return
       }
       if (/^(?:Vois avec|Regarde ça|Test mode)/.test(frame.params.text)) {
@@ -382,7 +385,19 @@ wss.on('connection', (socket) => {
       setTimeout(() => send(socket, event(sessionId, 'message.complete', { turn_id: 'turn-test', text: 'Réponse Hermes simulée.', status: 'complete' })), turnMs)
       return
     }
-    if (frame.method === 'session.interrupt') return reply({ execution_state: 'idle', execution_generation: 1 })
+    if (frame.method === 'session.interrupt') {
+      interruptCalls.push(frame.params)
+      reply({ execution_state: 'idle', execution_generation: 1 })
+      // Comme Hermes : le tour interrompu finit, puis le message prioritaire mis en file passe.
+      if (pilotageTurn) {
+        const { at } = pilotageTurn
+        pilotageTurn = null
+        at(20, 'message.complete', { turn_id: 'turn-pilotage', text: '', status: 'interrupted' })
+        at(80, 'message.start', { turn_id: 'turn-prio' })
+        at(160, 'message.complete', { turn_id: 'turn-prio', text: 'Pilotage terminé.', status: 'complete' })
+      }
+      return
+    }
     if (frame.method === 'clarify.respond' || frame.method === 'approval.respond') {
       promptAnswers.push({ method: frame.method, ...frame.params })
       reply({ status: 'resolved', prompt_id: frame.params.prompt_id })
@@ -736,26 +751,49 @@ try {
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}modes.png` })
 
-  // Pendant le travail : le message rejoint le tour en cours, sinon il devient le suivant. Stop reste là.
+  // Pendant le travail : Attendre (défaut) garde le brouillon, File l’envoie après le tour, Prio interrompt le bot.
   await orionBox.fill('Test pilotage')
   await orionBox.press('Enter')
   await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 3_000 })
+  const delivery = (name) => page.getByRole('radiogroup', { name: 'Envoi pendant le travail' }).getByRole('radio', { name, exact: true })
+  if (await delivery('Attendre').getAttribute('aria-checked') !== 'true') throw new Error('Attendre doit être le mode par défaut pendant le travail.')
   await orionBox.fill('Fais plutôt la version courte')
-  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 2_000 })
   await orionBox.press('Enter')
-  await page.locator('.message-user').getByText('Fais plutôt la version courte').waitFor({ timeout: 3_000 })
-  for (let attempt = 0; attempt < 40 && !steerCalls.length; attempt += 1) await delay(25)
-  if (steerCalls[0]?.text !== 'Fais plutôt la version courte' || steerCalls[0].execution_generation !== 1 || steerCalls[0].session_id !== 'chat-orion') throw new Error(`session.steer : ${JSON.stringify(steerCalls)}`)
-  if (await orionBox.inputValue()) throw new Error('Le message envoyé reste dans le composer.')
-  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 1_000 })
-  steerVerdict = { status: 'rejected', delivered: false, execution_generation: 1, authority_epoch: 1 }
-  await orionBox.fill('Et ajoute le tableau')
+  await delay(250)
+  if (await orionBox.inputValue() !== 'Fais plutôt la version courte') throw new Error('Attendre doit garder le brouillon dans le champ.')
+  if (queuedPrompts.length || steerCalls.length || await page.locator('.message-user').getByText('Fais plutôt la version courte').count()) throw new Error('Attendre ne doit rien envoyer.')
+  if (await page.getByRole('button', { name: 'Mettre en file' }).count()) throw new Error('Pas de bouton d’envoi en mode Attendre.')
+  // Le brouillon survit au changement de chat et à la fermeture de l’app (stockage local).
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor()
+  if (await page.getByRole('textbox', { name: 'Message à Nova' }).inputValue()) throw new Error('Le brouillon de Orion est passé chez Nova.')
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor()
+  if (await orionBox.inputValue() !== 'Fais plutôt la version courte') throw new Error('Brouillon perdu au retour sur le bot.')
+  if (!(await page.evaluate(() => localStorage.getItem('hermesbot-drafts') || '')).includes('Fais plutôt la version courte')) throw new Error('Le brouillon n’est pas gardé pour la prochaine ouverture.')
+  // File : part avec `queued`, sans consigne, et reste visible comme « En file ».
+  await delivery('File').click()
   await orionBox.press('Enter')
   for (let attempt = 0; attempt < 40 && !queuedPrompts.length; attempt += 1) await delay(25)
-  if (queuedPrompts[0] !== 'Et ajoute le tableau') throw new Error('Un message refusé par le tour doit partir comme tour suivant.')
-  steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
+  if (queuedPrompts[0]?.text !== 'Fais plutôt la version courte' || queuedPrompts[0].apiText !== undefined) throw new Error(`File : ${JSON.stringify(queuedPrompts)}`)
+  await page.locator('.message-user').filter({ hasText: 'Fais plutôt la version courte' }).locator('.message-delivery').getByText('En file').waitFor({ timeout: 2_000 })
+  if (await orionBox.inputValue()) throw new Error('Le message envoyé reste dans le champ.')
+  if (await delivery('Attendre').getAttribute('aria-checked') !== 'true') throw new Error('Après un envoi, retour à Attendre.')
+  if ((await page.evaluate(() => localStorage.getItem('hermesbot-drafts') || '')).includes('Fais plutôt la version courte')) throw new Error('Le brouillon envoyé reste stocké.')
+  if (interruptCalls.length) throw new Error('File ne doit pas interrompre le bot.')
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 1_000 })
+  // Prio : même file avec consigne de reprise, puis interruption du tour en cours.
+  await delivery('Prio').click()
+  await orionBox.fill('Et ajoute le tableau')
+  await delay(250)
+  await page.screenshot({ path: `${SCREENSHOTS}delivery.png` })
+  await page.getByRole('button', { name: 'Envoyer en priorité' }).click()
+  for (let attempt = 0; attempt < 40 && !interruptCalls.length; attempt += 1) await delay(25)
+  if (queuedPrompts[1]?.text !== 'Et ajoute le tableau' || !queuedPrompts[1].apiText?.startsWith('Et ajoute le tableau\n\n[HermesBot priority:')) throw new Error(`Prio : ${JSON.stringify(queuedPrompts[1])}`)
+  if (interruptCalls[0]?.session_id !== 'chat-orion' || interruptCalls[0].execution_generation !== 1) throw new Error(`Interruption : ${JSON.stringify(interruptCalls)}`)
+  await page.locator('.message-user').filter({ hasText: 'Et ajoute le tableau' }).locator('.message-delivery').getByText('Prioritaire').waitFor({ timeout: 2_000 })
   await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
-  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ state: 'attached', timeout: 3_000 }).catch(() => {})
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ state: 'detached', timeout: 3_000 })
 
   // Question du bot en plein tour (outil clarify) : carte au-dessus du champ, « Attend ta réponse » partout.
   liveStatusByProfile.orion = 'waiting'

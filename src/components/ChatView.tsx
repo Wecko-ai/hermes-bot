@@ -4,6 +4,7 @@ import type { Bot, ChatMessage, SessionUsage } from '../types'
 import type { MediaRef } from '../lib/media'
 import { droppedFiles, type PendingAttachment } from '../lib/attachments'
 import type { ChatMode } from '../lib/modes'
+import type { DeliveryMode } from '../lib/delivery'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
 import { MessageList } from './MessageList'
 import { Composer, type ComposerHandle } from './Composer'
@@ -26,7 +27,7 @@ interface ChatViewProps {
   focusSignal: number
   onOpenMobile: () => void
   onToggleDetails: () => void
-  onSend: (text: string, attachments: PendingAttachment[], mode?: ChatMode) => Promise<boolean> | boolean | void
+  onSend: (text: string, attachments: PendingAttachment[], mode?: ChatMode, delivery?: DeliveryMode) => Promise<boolean> | boolean | void
   onStop: () => void
   onNotice: (text: string) => void
   onOpenDocument: (profile: string, media: MediaRef) => void

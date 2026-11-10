@@ -223,6 +223,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
       {!message.streaming && (
         <div className="message-meta">
           <span>{message.pending ? 'Envoi…' : message.failed ? 'Échec de l’envoi' : shortTime(message.createdAt)}</span>
+          {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? 'Prioritaire' : 'En file'}</span>}
           {message.role === 'assistant' && <button className="message-copy" aria-label="Copier la réponse" onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
         </div>
       )}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption, Routine, SessionUsage } from './types'
-import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerChat, submitPrompt, switchModel, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { applyWorkEvent, workLine, type WorkSummary } from './lib/work-summary'
 import { modelLabel } from './lib/model'
@@ -24,6 +24,7 @@ import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/atta
 import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { modeApiText, type ChatMode } from './lib/modes'
+import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_BOT, LOCAL_CHAT_SLUG } from './lib/local-chat'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
@@ -706,7 +707,7 @@ export default function App() {
   }
 
   // Sans mode explicite (carte de mail, suggestions), le tour est un tour normal : un mail validé doit partir.
-  const send = async (text: string, attachments: PendingAttachment[], mode: ChatMode = 'exec'): Promise<boolean> => {
+  const send = async (text: string, attachments: PendingAttachment[], mode: ChatMode = 'exec', delivery?: DeliveryMode): Promise<boolean> => {
     const now = new Date().toISOString()
     if (DEMO) {
       setMessages((items) => [...items,
@@ -732,25 +733,20 @@ export default function App() {
       setNotice(error instanceof Error ? error.message : 'Connexion à Hermes impossible.')
       return false
     }
+    // Pendant un tour, le composer ne laisse partir qu’un message en file ou prioritaire (Attendre garde le brouillon).
+    if (running && delivery !== 'queue' && delivery !== 'priority') return false
     const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
     clearDoneTimer(selected)
-    const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now }
+    const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(running ? { delivery: delivery as 'queue' | 'priority' } : {}) }
     setMessages((items) => [...items, userMessage])
     appendCachedMessage(selected, userMessage)
-    if (running) return steerTurn(chat, text, userMessage, mode)
+    if (running) return queueTurn(chat, text, attachments, userMessage, mode, delivery === 'priority')
     updateCachedChat(selected, { running: true })
     updateBot(selected, { preview: text, timestamp: now, status: 'working' })
     setRunning(true)
     setActivity('')
     try {
-      const images: { path: string; mime: string }[] = []
-      const fileRefs: string[] = []
-      for (const attachment of attachments) {
-        setActivity(`Envoi de ${attachment.name}…`)
-        const dataUrl = await readDataUrl(attachment.file)
-        if (attachment.kind === 'image') images.push(await attachImageBytes(client, chat, attachment.name, dataUrl))
-        else fileRefs.push(await attachFile(client, chat, attachment.name, dataUrl))
-      }
+      const { images, fileRefs } = await uploadAttachments(chat, attachments)
       setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), botsRef.current, chat.profile)
       await submitPrompt(client, chat, prompt, images, { apiText: modeApiText(prompt, mode) })
@@ -778,15 +774,39 @@ export default function App() {
     setNotice(error instanceof Error ? error.message : 'Échec de l’envoi.')
   }
 
-  /** Message écrit pendant que le bot travaille : il rejoint le tour en cours, sinon il devient le suivant. */
-  const steerTurn = async (chat: ActiveChat, text: string, userMessage: ChatMessage, mode: ChatMode) => {
+  const uploadAttachments = async (chat: ActiveChat, attachments: PendingAttachment[]) => {
+    const images: { path: string; mime: string }[] = []
+    const fileRefs: string[] = []
+    for (const attachment of attachments) {
+      setActivity(`Envoi de ${attachment.name}…`)
+      const dataUrl = await readDataUrl(attachment.file)
+      if (attachment.kind === 'image') images.push(await attachImageBytes(client, chat, attachment.name, dataUrl))
+      else fileRefs.push(await attachFile(client, chat, attachment.name, dataUrl))
+    }
+    return { images, fileRefs }
+  }
+
+  /**
+   * Message envoyé pendant un tour : en file, Hermes le lance quand le tour finit. Prioritaire, il part dans
+   * la même file avec une consigne de reprise, puis le tour en cours est interrompu : il passe donc juste après.
+   */
+  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, priority: boolean) => {
     try {
-      const prompt = withMentionNote(text, botsRef.current, chat.profile)
-      const verdict = await steerChat(client, chat, prompt)
-      if (verdict === 'undelivered') await submitPrompt(client, chat, prompt, [], { queued: true, apiText: modeApiText(prompt, mode) })
-      if (verdict === 'unknown') throw new Error('Hermes n’a pas pris ce message. Renvoie-le à la fin du tour.')
+      const { images, fileRefs } = await uploadAttachments(chat, attachments)
+      setActivity('')
+      const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), botsRef.current, chat.profile)
+      const modeText = modeApiText(prompt, mode)
+      await submitPrompt(client, chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
+      if (priority) {
+        // La génération du tour en cours, lue au dernier `message.start` : l’ancienne serait refusée.
+        const current = activeChatRef.current?.sessionId === chat.sessionId ? activeChatRef.current : chat
+        setActivity('Interruption pour le message prioritaire…')
+        // Tour déjà fini : le message en file part quand même.
+        await interruptChat(client, current).catch(() => setActivity(''))
+      }
       return true
     } catch (error) {
+      setActivity('')
       markSendFailed(chat.profile, userMessage, error)
       return false
     }

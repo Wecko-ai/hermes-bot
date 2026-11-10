@@ -845,6 +845,20 @@ button.agent-note-name:hover { background: var(--hover); }
 .mode-switch button.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text); }
 .mode-switch i { width: 6px; height: 6px; border-radius: 50%; background: var(--mode); opacity: .45; }
 .mode-switch .is-active i { opacity: 1; }
+/* Envoi pendant le travail : Attendre (brouillon), File, Prio. */
+.delivery-switch { flex: none; margin-left: 8px; display: inline-flex; align-items: center; gap: 1px; height: 22px; padding: 1px; border-radius: 8px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.delivery-switch button { height: 20px; padding: 0 8px; border-radius: 7px; color: var(--text-tertiary); font-size: 10px; font-weight: 600; transition: background 160ms var(--ease-out), color 160ms; }
+.delivery-switch button:hover { color: var(--text); }
+.delivery-switch button.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text); }
+.delivery-switch button.delivery-queue.is-active { color: var(--accent); }
+.delivery-switch button.delivery-priority.is-active { color: var(--warning); }
+.composer-send.is-priority { background: var(--warning); color: #fff; }
+.delivery-switch.is-nudged { animation: delivery-nudge 520ms var(--ease-out); }
+@keyframes delivery-nudge { 0%, 100% { transform: none; box-shadow: none; } 20%, 60% { transform: translateX(-3px); box-shadow: 0 0 0 1.5px var(--accent); } 40%, 80% { transform: translateX(3px); box-shadow: 0 0 0 1.5px var(--accent); } }
+@media (prefers-reduced-motion: reduce) { .delivery-switch.is-nudged { animation: none; box-shadow: 0 0 0 1.5px var(--accent); } }
+.message-delivery { padding: 0 5px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 600; }
+.message-delivery.is-priority { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.message-user:has(.message-delivery) .message-meta { opacity: 1; }
 .mode-brain { --mode: #9159fe; }
 .mode-plan { --mode: #ff9800; }
 .mode-exec { --mode: var(--success); }
