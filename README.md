@@ -14,6 +14,12 @@ Projet indépendant, sans lien avec Nous Research.
 - Qui travaille, d'un coup d'œil, avec un résumé de ce que fait chaque bot, rafraîchi en continu et assemblé sans appel de modèle.
 - Bot Chat en streaming, Markdown, images envoyées, recherche, arrêt du tour.
 - Médias des bots (`MEDIA:/chemin`) : galeries, vidéo, audio, visionneuse.
+- Fichiers cités par leur chemin (images, vidéos, sons, PDF) affichés sous le message, pour valider sans quitter le chat.
+- Messages entre bots (`message_agent`) : une ligne « Orion messaged Iris », le texte s’ouvre d’un clic.
+- Statut en direct de chaque bot, même réveillé par un autre bot, sans ouvrir son chat.
+- Mentions `@bot`, glisser-déposer de fichiers, documents PDF, HTML et Markdown en onglets à côté du chat.
+- Onglet Usage (contexte, tokens, 30 jours), modes BRAIN, PLAN et EXEC, réglages, palette de commandes.
+- Chat local isolé avec Ollama, sans outils (facultatif).
 - Coffre d'identifiants : quand un bot doit se connecter à un site, une fenêtre montre le site et demande les identifiants ou un code. Tout va dans le coffre local de Hermes.
 - Accords : une action soumise à approbation ouvre une fenêtre (une fois, session, toujours, refuser).
 - Carte de mail : un brouillon à faire approuver s'affiche dans le fil, modifiable avant envoi. Voir `skills/mail-approval/`.

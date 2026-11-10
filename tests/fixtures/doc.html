@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Page de bot</title></head>
+<body>
+<h1 id="titre">Script pas lancé</h1>
+<img src="https://evil.example/page.png" alt="">
+<script>
+document.getElementById('titre').textContent = 'Script local OK'
+try { void document.cookie; document.body.dataset.cookie = 'lisible' } catch { document.body.dataset.cookie = 'bloque' }
+fetch('/api/auth/me').then(() => { document.body.dataset.net = 'ouvert' }).catch(() => { document.body.dataset.net = 'bloque' })
+</script>
+</body></html>

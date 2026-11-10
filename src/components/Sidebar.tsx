@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Moon, Plus, RefreshCw, Search, Sun, User, X } from 'lucide-react'
+import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Moon, Plus, RefreshCw, Search, Settings, Sun, User, X } from 'lucide-react'
 import type { Bot } from '../types'
 import { avatarColor, statusLabel } from './BotAvatar'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
 import { cleanPreview, shortTime } from '../lib/time'
 import { compareBotActivity, latestActivity } from '../lib/activity'
 import { workLine, type WorkSummary } from '../lib/work-summary'
+import { updateSettings, useSettings } from '../lib/settings'
 
 const UNSORTED_SECTION = 'Non classés'
 
@@ -23,23 +24,21 @@ interface SidebarProps {
   onSelect: (bot: Bot) => void
   onNewMessage: () => void
   onToggleTheme: (origin?: { x: number; y: number }) => void
+  onOpenSettings: () => void
 }
 
-export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme }: SidebarProps) {
+export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme, onOpenSettings }: SidebarProps) {
+  const { activitySort, showHidden } = useSettings()
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [unreadOnly, setUnreadOnly] = useState(false)
-  const [showHidden, setShowHidden] = useState(false)
-  const [activitySort, setActivitySort] = useState(() => {
-    try { return localStorage.getItem('hermesbot-sort') === 'activity' } catch { return false }
-  })
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [workingOnly, setWorkingOnly] = useState(false)
   const busyBots = useMemo(() => bots.filter((bot) => !bot.hidden && avatarPhase(bot) === 'working'), [bots])
   useEffect(() => { if (busyBots.length === 0) setWorkingOnly(false) }, [busyBots.length])
   const listRef = useRef<HTMLElement>(null)
   const chooseSort = (activity: boolean) => {
-    setActivitySort(activity)
+    updateSettings({ activitySort: activity })
     listRef.current?.scrollTo({ top: 0 })
   }
 
@@ -58,10 +57,6 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
     visible.forEach((bot) => map.set(bot.section, [...(map.get(bot.section) || []), bot]))
     return [...map.entries()].sort(([a], [b]) => Number(a === UNSORTED_SECTION) - Number(b === UNSORTED_SECTION) || a.localeCompare(b, 'fr'))
   }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort])
-
-  useEffect(() => {
-    try { localStorage.setItem('hermesbot-sort', activitySort ? 'activity' : 'groups') } catch { /* storage indisponible */ }
-  }, [activitySort])
 
   const unread = bots.reduce((total, bot) => total + bot.unread, 0)
   const toggleSection = (section: string) => {
@@ -173,7 +168,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
           {groups.length === 0 && (
             <div className="sidebar-empty">
               <span>Aucun bot trouvé.</span>
-              <button onClick={() => { setSearch(''); setUnreadOnly(false); setShowHidden(true) }}>Réinitialiser les filtres</button>
+              <button onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>Réinitialiser les filtres</button>
             </div>
           )}
         </nav>
@@ -186,7 +181,8 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
             </button>
           </div>
           <div className="footer-actions">
-            {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? 'Masquer les bots cachés' : 'Afficher les bots cachés'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+            {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? 'Masquer les bots cachés' : 'Afficher les bots cachés'} onClick={() => updateSettings({ showHidden: !showHidden })}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+            <button className="plain-icon" aria-label="Réglages" title="Réglages (⌘,)" onClick={onOpenSettings}><Settings size={16} /></button>
             <button className="plain-icon" aria-label={dark ? 'Passer au thème clair' : 'Passer au thème sombre'} onClick={(event) => onToggleTheme({ x: event.clientX, y: event.clientY })}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
             <button className="user-menu" aria-label="Se déconnecter" title="Se déconnecter" onClick={onLogout}><span className="user-avatar" aria-hidden="true"><User size={14} /></span></button>
           </div>

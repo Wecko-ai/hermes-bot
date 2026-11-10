@@ -29,11 +29,12 @@ async function startServer() {
   process.env.HERMES_ORIGIN = HERMES_ORIGIN
   if (HERMES_BROWSER_ORIGIN) process.env.HERMES_BROWSER_ORIGIN = HERMES_BROWSER_ORIGIN
   configureSessionPersistence()
+  configureBrowserVault()
   const { listening } = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.mjs')).href)
   try {
     await listening
   } catch (error) {
-    if (error.code === 'EADDRINUSE') throw new Error('Le port 4330 est déjà pris. Quitte l’autre copie de HermesBot, puis relance.')
+    if (error.code === 'EADDRINUSE') throw new Error(`Le port ${error.port || 4330} est déjà pris. Quitte l’autre copie de HermesBot, puis relance.`)
     throw error
   }
 }
@@ -63,6 +64,27 @@ function configureSessionPersistence() {
       fs.renameSync(`${credentials}.tmp`, credentials)
     },
     clear: () => fs.rmSync(credentials, { force: true }),
+  }
+}
+
+function configureBrowserVault() {
+  const directory = app.getPath('userData')
+  fs.mkdirSync(directory, { recursive: true })
+  const audit = path.join(directory, 'browser-vault-audit.jsonl')
+  globalThis.__hermesBotBrowserVaultAudit = {
+    append: (line) => fs.appendFileSync(audit, `${line}\n`, { mode: 0o600 }),
+  }
+  if (!safeStorage.isEncryptionAvailable()) return
+  const store = path.join(directory, 'browser-vault.bin')
+  globalThis.__hermesBotBrowserVaultPersistence = {
+    load: () => {
+      try { return safeStorage.decryptString(fs.readFileSync(store)) }
+      catch (error) { if (error.code === 'ENOENT') return ''; throw error }
+    },
+    save: (json) => {
+      fs.writeFileSync(`${store}.tmp`, safeStorage.encryptString(json), { mode: 0o600 })
+      fs.renameSync(`${store}.tmp`, store)
+    },
   }
 }
 
@@ -145,6 +167,8 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Le lecteur PDF de Chromium est un plugin : sans ce réglage, l’onglet document reste vide.
+      plugins: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   })
@@ -152,6 +176,10 @@ async function createWindow() {
     if (/^https:\/\//.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
+  // Un fichier lâché hors de la zone de dépôt, ou un lien d’une page de bot, ne doit jamais remplacer l’app.
+  const leavesApp = (url) => /^(?:https?|file):/.test(url) && !url.startsWith(`${ORIGIN}/`)
+  mainWindow.webContents.on('will-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
+  mainWindow.webContents.on('will-frame-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
   await mainWindow.loadURL(ORIGIN)
   mainWindow.on('closed', () => { mainWindow = null })
 }

@@ -60,3 +60,20 @@ export const demoRoutines: Routine[] = [
 export const demoWork: Record<string, WorkSummary> = {
   orion: { task: 'Corriger le bug de reconnexion', done: 2, total: 5, note: 'Les tests unitaires passent, je lance le parcours complet.', step: 'Lance une commande' },
 }
+
+export const demoUsageDetails = {
+  usage: { contextUsed: 214_000, contextMax: 1_000_000, contextPercent: 21.4, averageTps: 62, inputTokens: 1_840_000, outputTokens: 92_400, totalTokens: 1_932_400, cacheReadTokens: 1_610_000, cacheWriteTokens: 88_000, reasoningTokens: 12_800, apiCalls: 148, compressions: 2, cacheHitPercent: 87, averageLatency: 3.4, activeSubagents: 0 },
+  context: {
+    used: 214_000, max: 1_000_000, estimated: true,
+    categories: [{ id: 'messages', label: 'Conversation', tokens: 151_000 }, { id: 'system', label: 'Instructions', tokens: 38_000 }, { id: 'tools', label: 'Outils', tokens: 25_000 }],
+    files: [{ label: 'SOUL.md', tokens: 2_100, loaded: true }],
+  },
+  history: {
+    days: 30, inputTokens: 18_400_000, outputTokens: 910_000, cacheReadTokens: 15_200_000, reasoningTokens: 120_000, costUsd: 0, sessions: 64, apiCalls: 2_140,
+    daily: Array.from({ length: 30 }, (_, index) => {
+      const date = new Date(Date.now() - (29 - index) * 86_400_000)
+      return { day: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`, tokens: index % 7 === 3 ? 0 : 280_000 + ((index * 53) % 17) * 54_000, costUsd: 0 }
+    }),
+    models: [{ model: 'claude-opus-5-5', tokens: 16_900_000, costUsd: 0 }, { model: 'k3.1-pro', tokens: 2_410_000, costUsd: 0 }],
+  },
+}

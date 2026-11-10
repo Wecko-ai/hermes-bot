@@ -1,24 +1,44 @@
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { WebSocketServer } from 'ws'
 import { chromium } from 'playwright-core'
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const execFileAsync = promisify(execFile)
 // Fichier de session de test (cookies factices), dans le dossier temporaire.
 const SESSION_FILE = process.env.HERMESBOT_TEST_SESSION_FILE || path.join(os.tmpdir(), 'hermesbot-e2e-session.json')
 const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
+const BROWSER_VAULT_FILE = `${SESSION_FILE}.browser-vault`
+const BROWSER_VAULT_AUDIT = `${BROWSER_VAULT_FILE}-audit.jsonl`
+const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (faux mot de passe du test)
+const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
+rmSync(BROWSER_VAULT_FILE, { force: true })
+rmSync(BROWSER_VAULT_AUDIT, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
+const BROWSER_TOUR_OWNER_FILE = path.join(os.tmpdir(), 'hermesbot-e2e-browser-owner')
+const BROWSER_TOUR_FIXTURE = path.join(os.tmpdir(), 'hermesbot-e2e-browser-turn.cjs')
+rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
+writeFileSync(BROWSER_TOUR_FIXTURE, `#!/usr/bin/env node
+const fs = require('node:fs')
+let owner = 'libre'
+try { owner = fs.readFileSync(process.env.BROWSER_TOUR_OWNER_FILE, 'utf8').trim() || 'libre' } catch {}
+console.log(\`tour : \${owner} 2026-01-05T10:00:00+0000 pid=123 depuis 1 min\\nen file : 0\`)
+`, { mode: 0o700 })
 
 // Fichiers que la fausse gateway sert pour les balises MEDIA: de orion.
 const MEDIA_FIXTURES = {
   '/Users/test/visuels/slide 01.jpg': ['slide.jpg', 'image/jpeg'],
   '/Users/test/visuels/slide-02.png': ['slide.png', 'image/png'],
   '/Users/test/videos/video.mp4': ['video.mp4', 'video/mp4'],
+  '/Users/test/docs/rapport.pdf': ['doc.pdf', 'application/pdf'],
+  '/Users/test/docs/page.html': ['doc.html', 'text/html'],
+  '/Users/test/docs/note.md': ['doc.md', 'text/markdown'],
 }
 const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).length
 const mediaRequests = []
@@ -36,6 +56,23 @@ const clientResponses = new Map()
 let capabilityCalls = 0
 let openRequests = []
 let lastPromptText = ''
+// Tours vus par `session.active_list`, profil par profil : sans `profile`, la vraie gateway ne liste que `default`.
+const liveStatusByProfile = {}
+const activeListParams = []
+let lastApiText
+// Lenteur simulée de la gateway, pour voir les écrans de chargement, chat local isolé.
+let profilesDelayMs = 0
+let resumeDelayMs = 0
+let emptyRoster = false
+const localChatRequests = []
+let localModelMissing = false
+const fileAttachCalls = []
+const steerCalls = []
+const queuedPrompts = []
+let steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
+const imageAttachCalls = []
+const analyticsProfiles = []
+const remoteRequests = []
 
 function serveMediaFixture(request, response, url, route) {
   const file = url.searchParams.get('path') || ''
@@ -98,6 +135,34 @@ const mock = http.createServer((request, response) => {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'unauthenticated' })) }
     return response.end(JSON.stringify({ ticket: 'test-ticket', ttl_seconds: 30 }))
   }
+  // Ollama simulé : même serveur, aucun modèle réel.
+  if (url.pathname === '/api/chat' && request.method === 'POST') {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      localChatRequests.push(JSON.parse(Buffer.concat(chunks).toString()))
+      if (localModelMissing) { response.statusCode = 404; return response.end(JSON.stringify({ error: 'model not found' })) }
+      response.setHeader('Content-Type', 'application/x-ndjson')
+      const write = (message, done = false) => response.write(`${JSON.stringify({ message: { role: 'assistant', ...message }, done })}\n`)
+      setTimeout(() => write({ content: '<think>je réfléchis' }), 30)
+      setTimeout(() => write({ content: '</think>Réponse ' }), 60)
+      setTimeout(() => write({ content: 'du modèle local.' }), 90)
+      setTimeout(() => { write({ content: '' }, true); response.end() }, 130)
+    })
+    return
+  }
+  if (url.pathname === '/api/analytics/usage') {
+    if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
+    analyticsProfiles.push(url.searchParams.get('profile'))
+    const now = new Date()
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    return response.end(JSON.stringify({
+      daily: [{ day, input_tokens: 100_000, output_tokens: 5_000, cache_read_tokens: 1_000, reasoning_tokens: 0, estimated_cost: 0.5, actual_cost: 0, sessions: 2, api_calls: 9 }],
+      by_model: [{ model: 'claude-opus-5-5', input_tokens: 100_000, output_tokens: 5_000, estimated_cost: 0.5, sessions: 2, api_calls: 9 }],
+      totals: { total_input: 100_000, total_output: 5_000, total_cache_read: 1_000, total_reasoning: 0, total_estimated_cost: 0.5, total_actual_cost: 0, total_sessions: 2, total_api_calls: 9 },
+      period_days: Number(url.searchParams.get('days')), skills: [], tools: [],
+    }))
+  }
   if (url.pathname === '/api/cron/jobs') return response.end(JSON.stringify([{ id: 'routine-test', name: 'Nova: Routine test', enabled: true, schedule_display: '0 9 * * *', next_run_at: '2025-01-07T02:00:00Z' }]))
   if (url.pathname === '/api/fs/download' || url.pathname === '/api/files/stream') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
@@ -144,14 +209,15 @@ wss.on('connection', (socket) => {
     const frame = JSON.parse(String(raw))
     if (!frame.id) return
     if (frame.method === undefined) { clientResponses.set(frame.id, frame); return }
-    const reply = (result) => send(socket, { jsonrpc: '2.0', id: frame.id, result })
+    const delayMs = frame.method === 'profiles.list' ? profilesDelayMs : frame.method === 'session.resume' ? resumeDelayMs : 0
+    const reply = (result) => { if (delayMs) setTimeout(() => send(socket, { jsonrpc: '2.0', id: frame.id, result }), delayMs); else send(socket, { jsonrpc: '2.0', id: frame.id, result }) }
     if (frame.method === 'client.capabilities') {
       if (frame.params.server_requests === true) capabilityCalls += 1
       return reply({ server_requests: [], declines_not_shown: true })
     }
     if (frame.method === 'profiles.list') {
       profilesListCalls += 1
-      return reply({ profiles, bot_mode_protocol: true })
+      return reply({ profiles: emptyRoster ? [] : profiles, bot_mode_protocol: true })
     }
     if (frame.method === 'session.resume') {
       sessionResumeCalls += 1
@@ -167,6 +233,22 @@ wss.on('connection', (socket) => {
           { row_id: 32, role: 'assistant', content: 'Je suis ton bot Hermes de test.', timestamp: Date.now() - 50_000 },
           ...(sessionId === 'chat-orion' ? [
             { row_id: 33, role: 'assistant', content: '![preuve](https://evil.example/fuite?d=secret)', timestamp: Date.now() - 45_000 },
+            { row_id: 133, role: 'user', content: '[IMPORTANT: Background process proc_test completed normally (exit code 0).\nOutput:\nok]\n\n[INTERNAL NOTIFICATION — generated by the Hermes gateway, not written by a human user.]', timestamp: Date.now() - 44_000 },
+            { row_id: 134, role: 'user', display_kind: 'async_delegation_complete', content: 'Délégation terminée sans préfixe connu', timestamp: Date.now() - 43_000 },
+            { row_id: 136, role: 'user', content: 'Message from 🤖 Nova (@nova): demande entre bots', timestamp: Date.now() - 42_500 },
+            { role: 'tool', name: 'message_agent', tool_call_id: 'call-dm-nova', timestamp: Date.now() - 42_400, args: { target: 'nova', message: 'Peux-tu relire le **plan** ?', expecting: 'Un OK écrit' } },
+            {
+              row_id: 137, role: 'user', display_kind: 'process_complete', timestamp: Date.now() - 42_300, content: [
+                '[IMPORTANT: Background process proc_dm completed normally (exit code 0).',
+                `Command: /x/python3 /x/tools/bot_mode_dm.py --run-delivery --author '{"id":"bot:orion","name":"orion","is_bot":true}' query-file /tmp/dm.txt --profile-home /x/profiles/nova /x/bin/hermes -p nova`,
+                'Output:',
+                JSON.stringify({ outcome: '@nova answered.', reply: 'Plan relu, OK écrit. Aperçu : `/Users/test/visuels/slide-02.png`', status: 'settled', delivery_id: 'd1' }),
+                ']',
+                '',
+                '[INTERNAL NOTIFICATION — generated by the Hermes gateway, not written by a human user.]',
+              ].join('\n'),
+            },
+            { row_id: 135, role: 'user', display_kind: 'steer', content: '[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nMessage glissé pendant le tour\n[/OUT-OF-BAND USER MESSAGE]', timestamp: Date.now() - 42_000 },
             { row_id: 34, role: 'assistant', content: 'NOREPLY', timestamp: Date.now() - 40_000 },
             {
               row_id: 35, role: 'assistant', timestamp: Date.now() - 39_000, content: [
@@ -186,18 +268,29 @@ wss.on('connection', (socket) => {
                 '```',
               ].join('\n'),
             },
+            { row_id: 36, role: 'user', content: 'Regarde avec @nova\n\n@file:attachments/ancien.pdf\n\n[@mentions resolved from the Bot Mode roster — the user is referring to: @nova = agent profile "nova" ("Nova"). If they want one of these agents contacted, compose your own message.]', timestamp: Date.now() - 38_000 },
+            { row_id: 37, role: 'assistant', content: 'Les documents :\n\nMEDIA:/Users/test/docs/rapport.pdf\n\nMEDIA:/Users/test/docs/page.html\n\nMEDIA:/Users/test/docs/note.md', timestamp: Date.now() - 37_000 },
+            // Rendu cité par chemin, sans MEDIA:, comme le font certains bots.
+            { row_id: 38, role: 'assistant', content: 'Rendu prêt, rien de publié.\n\n**Fichiers** (dossier `/Users/test/visuels/`)\n- Vidéo : `/Users/test/videos/video.mp4`, 57 s.\n- Planche : `slide-02.png`\n- Manquante : `absente.png`\n\n```\nls /Users/test/videos/exemple-cite.mp4\n```', timestamp: Date.now() - 36_000 },
           ] : []),
         ],
       })
     }
     if (frame.method === 'session.history') return reply({ messages: [] })
-    if (frame.method === 'session.active_list') return reply({ sessions: [] })
+    if (frame.method === 'session.active_list') {
+      activeListParams.push(frame.params)
+      const status = liveStatusByProfile[frame.params.profile]
+      return reply({ sessions: status ? [{ id: `chat-${frame.params.profile}`, session_key: `chat-${frame.params.profile}`, status }] : [] })
+    }
     if (frame.method === 'session.events.since') return reply({ events: [], latest_seq: 0, truncated: false, count: 0, epoch: 'test', open_requests: [] })
     if (frame.method === 'model.options') {
       return reply({
         model: 'claude-opus-5-5', provider: 'anthropic',
         providers: [
           { slug: 'anthropic', name: 'Anthropic', authenticated: true, models: ['claude-opus-5-5', 'claude-sonnet-5-5'], pricing: { 'claude-sonnet-5-5': { input: '$2', output: '$10', free: false } } },
+          { slug: 'kimi-coding', name: 'Kimi / Moonshot', authenticated: true, models: ['kimi-k3', 'kimi-for-coding'] },
+          { slug: 'custom:omlx', name: 'Qwen local (oMLX)', authenticated: true, models: ['qwen-local-27b'] },
+          { slug: 'lmstudio', name: 'LM Studio', authenticated: true, models: ['gemma-local'] },
           { slug: 'absent', name: 'Non connecté', authenticated: false, models: ['modele-interdit'] },
         ],
       })
@@ -210,8 +303,30 @@ wss.on('connection', (socket) => {
       }
       return reply({ session_id: frame.params.session_id, operation: 'model', model: frame.params.payload.model, provider: frame.params.payload.provider, revision: frame.params.expected_revision + 1, execution_generation: frame.params.expected_generation })
     }
+    if (frame.method === 'session.stats') {
+      return reply({ input_tokens: 120_000, output_tokens: 8_000, cache_read_tokens: 90_000, cache_write_tokens: 5_000, prompt_tokens: 120_000, completion_tokens: 8_000, total_tokens: 128_000, reasoning_tokens: 900, api_calls: 14, last_prompt_tokens: 41_000, context_tokens: 41_000, context_length: 1_000_000, context_source: 'provider_usage', compression_count: 1, avg_latency_s: 2.5, tokens_per_s: 62.6, last_turn_tokens: 300, active_subagents: 0, model: 'claude-opus-5-5', provider: 'anthropic' })
+    }
+    if (frame.method === 'session.context_breakdown') {
+      return reply({ categories: [{ id: 'conversation', label: 'Conversation', tokens: 30_000, color: '#000' }, { id: 'system', label: 'Instructions', tokens: 11_000, color: '#111' }], context_max: 1_000_000, context_percent: 4.1, context_used: 41_000, estimated_total: 41_000, context_estimated: true, context_source: 'estimate', model: 'claude-opus-5-5', context_files: [{ label: 'SOUL.md', path: '/x/SOUL.md', chars: 100, est_tokens: 25, loaded: true, status: 'ok' }] })
+    }
+    if (frame.method === 'session.steer') {
+      steerCalls.push(frame.params)
+      return reply({ text: frame.params.text, ...steerVerdict })
+    }
+    if (frame.method === 'file.attach') {
+      fileAttachCalls.push(frame.params)
+      return reply({ attached: true, name: frame.params.name, path: `/x/${frame.params.name}`, ref_path: `attachments/${frame.params.name}`, ref_text: `@file:attachments/${frame.params.name}`, uploaded: true })
+    }
+    if (frame.method === 'image.attach_bytes') {
+      imageAttachCalls.push(frame.params)
+      return reply({ attached: true, path: `/x/${frame.params.filename}`, mime: 'image/png' })
+    }
     if (frame.method === 'session.usage') return reply({ context_used: 41_000, context_max: 1_000_000, context_percent: 4.1, avg_tps: 62.6, total: 500 })
     if (frame.method === 'prompt.submit') {
+      if (frame.params.queued === true) {
+        queuedPrompts.push(frame.params.text)
+        return reply({ admission_id: 'admission-file', status: 'queued', execution_generation: 1 })
+      }
       promptCalls += 1
       const sessionId = frame.params.session_id
       reply({ admission_id: 'admission-test', status: 'started', execution_generation: 1 })
@@ -225,6 +340,17 @@ wss.on('connection', (socket) => {
         return
       }
       lastPromptText = frame.params.text
+      lastApiText = frame.params.api_text
+      if (frame.params.text === 'Test pilotage') {
+        at(30, 'message.start', { turn_id: 'turn-pilotage' })
+        at(1800, 'message.complete', { turn_id: 'turn-pilotage', text: 'Pilotage terminé.', status: 'complete' })
+        return
+      }
+      if (/^(?:Vois avec|Regarde ça|Test mode)/.test(frame.params.text)) {
+        at(30, 'message.start', { turn_id: 'turn-piece' })
+        at(90, 'message.complete', { turn_id: 'turn-piece', text: 'Bien reçu.', status: 'complete' })
+        return
+      }
       if (frame.params.text.startsWith('Test mail')) {
         const id = frame.params.text.split(' ').pop()
         const draft = ['````hermes-mail', `Id: ${id}`, 'Draft-Id: 77', 'From: Bot <bot@exemple.test>', 'To: contact@exemple.test', 'Cc:', 'Subject: Re: Votre demande', 'Reply-Label: « Votre demande » de Contact', '', 'Bonjour,', '', 'Voici notre réponse.', '````'].join('\n')
@@ -257,15 +383,57 @@ mock.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (client) => wss.emit('connection', client, request))
 })
 
+// Chrome CDP simulé : aucune navigation réelle et aucun bot payant.
+let cdpUrl = 'https://store.steampowered.com/login/'
+const cdpExpressions = []
+const cdpInjections = []
+const cdpMock = http.createServer((request, response) => {
+  if (request.url !== '/json/list') { response.statusCode = 404; return response.end() }
+  response.setHeader('Content-Type', 'application/json')
+  response.end(JSON.stringify([
+    { id: 'onglet-leurre', type: 'page', url: cdpUrl, webSocketDebuggerUrl: 'ws://127.0.0.1:9223/devtools/page/onglet-leurre' },
+    { id: 'onglet-steam', type: 'page', url: cdpUrl, webSocketDebuggerUrl: 'ws://127.0.0.1:9223/devtools/page/onglet-steam' },
+  ]))
+})
+const cdpWss = new WebSocketServer({ noServer: true })
+cdpWss.on('connection', (socket, request) => {
+  const target = request.url.split('/').pop()
+  socket.on('message', (raw) => {
+    const frame = JSON.parse(String(raw))
+    const { id, method, params } = frame
+    if (method === 'Runtime.evaluate') {
+      cdpExpressions.push(params.expression)
+      if (params.expression === 'window.location.origin') {
+        return send(socket, { id, result: { result: { type: 'string', value: new URL(cdpUrl).origin } } })
+      }
+      return send(socket, { id, result: { result: { type: 'object', objectId: 'champs-actifs' } } })
+    }
+    if (method === 'Runtime.callFunctionOn') {
+      const values = params.arguments.map((argument) => argument.value)
+      cdpInjections.push({ target, origin: new URL(cdpUrl).origin, values })
+      const filled = values.length === 2 ? ['identifier', 'password'] : ['code']
+      return send(socket, { id, result: { result: { type: 'object', value: { filled } } } })
+    }
+    send(socket, { id, error: { message: 'unsupported' } })
+  })
+})
+cdpMock.on('upgrade', (request, socket, head) => {
+  if (!/^\/devtools\/page\/(onglet-leurre|onglet-steam)$/.test(request.url)) return socket.destroy()
+  cdpWss.handleUpgrade(request, socket, head, (client) => cdpWss.emit('connection', client, request))
+})
+
 let child
 let browser
 try {
   await new Promise((resolve) => mock.listen(9121, '127.0.0.1', resolve))
+  await new Promise((resolve) => cdpMock.listen(9223, '127.0.0.1', resolve))
   child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121',
+      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
+      BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
     },
@@ -287,13 +455,32 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
+  // Chromium annonce la requête avant que la CSP la bloque : seul un refus CSP la retire de la liste.
+  page.on('request', (request) => { if (request.url().includes('evil.example')) remoteRequests.push(request.url()) })
+  page.on('requestfailed', (request) => {
+    if (request.failure()?.errorText === 'csp') remoteRequests.splice(remoteRequests.indexOf(request.url()), 1)
+  })
   await page.goto('http://127.0.0.1:4332/', { waitUntil: 'domcontentloaded' })
   await page.locator('.login-card').waitFor({ timeout: 15_000 })
   await page.getByLabel('Identifiant Hermes').fill('test')
   await page.getByLabel('Mot de passe').fill('test')
+  // Gateway lente : écran d’attente, jamais « Aucun bot », puis squelette de la conversation.
+  profilesDelayMs = 900
+  resumeDelayMs = 900
   await page.getByRole('button', { name: 'Ouvrir mes bots' }).click()
+  await page.locator('.app-loading').getByText('Chargement de tes bots…').waitFor({ timeout: 5_000 })
+  await page.locator('.loading-bar i').waitFor({ timeout: 1_000 })
+  if (await page.getByText('Aucun bot à afficher').count()) throw new Error('« Aucun bot » affiché pendant le chargement.')
+  await page.screenshot({ path: `${SCREENSHOTS}loading-app.png` })
+  await page.locator('.chat-skeleton span').first().waitFor({ timeout: 5_000 })
+  await page.locator('.chat-loading').getByText('Ouverture de la conversation avec Nova…').waitFor({ timeout: 1_000 })
+  await page.screenshot({ path: `${SCREENSHOTS}loading-chat.png` })
+  if (await page.getByText('Aucun bot à afficher').count()) throw new Error('« Aucun bot » affiché pendant le chargement.')
+  profilesDelayMs = 0
+  resumeDelayMs = 0
+  await page.locator('.chat-loading').waitFor({ state: 'detached', timeout: 5_000 })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
-  if (await page.locator('.bot-row').count() !== 2) throw new Error('Les profils système doivent rester hors du roster.')
+  if (await page.locator('.bot-row').count() !== 3) throw new Error('Le roster doit montrer Nova, Orion et le chat local, sans les profils système.')
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
   await page.getByRole('textbox', { name: 'Message à Nova' }).fill('Test animation')
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
@@ -309,9 +496,20 @@ try {
   await page.locator('[data-bot=nova] .bot-row-status.is-done').getByText('Terminé').waitFor({ timeout: 2_000 })
   await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 2_000 })
   await page.screenshot({ path: `${SCREENSHOTS}nova-done-ui.png` })
+  // Bot jamais ouvert, réveillé par un autre bot : seul son `session.active_list` le dit au travail.
+  liveStatusByProfile.orion = 'working'
+  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 9_000 })
+  if (!activeListParams.some((params) => params.profile === 'orion')) throw new Error('session.active_list n’est pas demandé pour le profil du bot.')
+  delete liveStatusByProfile.orion
+  await page.locator('[data-bot=orion] .bot-row-status.is-done').waitFor({ timeout: 9_000 })
+  await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 9_000 })
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor()
   if (await page.locator('.messages-scroll').getByText('NOREPLY').count()) throw new Error('NOREPLY est visible dans le chat.')
+  for (const hidden of ['Background process', 'Délégation terminée', 'demande entre bots', 'OUT-OF-BAND']) {
+    if (await page.locator('.messages-scroll').getByText(hidden).count()) throw new Error(`« ${hidden} » est visible dans le chat.`)
+  }
+  await page.locator('.messages-scroll').getByText('Message glissé pendant le tour').waitFor({ timeout: 5_000 })
   await page.locator('.message-content a[href*="evil.example"]').waitFor({ timeout: 5_000 })
   if (await page.locator('.message-content img[src*="evil.example"]').count()) throw new Error('Image distante chargée.')
   if (await page.locator('.bot-row-preview').getByText('NOREPLY').count()) throw new Error('NOREPLY est visible dans le roster.')
@@ -347,6 +545,205 @@ try {
   await page.locator('.media-viewer').waitFor({ state: 'detached', timeout: 5_000 })
   await page.locator('.media-group.is-grid').scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SCREENSHOTS}media-chat.png` })
+  // Fichiers cités par chemin, sans MEDIA: : lisibles sous le message, jamais ceux d’un bloc de code.
+  const cited = page.locator('.message-assistant .cited-files')
+  await cited.locator('.cited-files-label').getByText('3 fichiers cités').waitFor({ timeout: 5_000 })
+  await page.waitForFunction(() => {
+    const video = document.querySelector('.cited-files video.media-video')
+    return Boolean(video && video.readyState >= 1 && video.duration > 1)
+  }, null, { timeout: 10_000 })
+  await page.waitForFunction(() => { const image = document.querySelector('.cited-files img.media-image'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 5_000 })
+  await cited.locator('.media-fallback').getByText('absente.png').waitFor({ timeout: 5_000 })
+  if (mediaRequests.some((item) => item.path.includes('exemple-cite'))) throw new Error('Un chemin d’un bloc de code a été chargé.')
+  await cited.locator('.media-thumb').first().click()
+  await page.locator('.media-viewer img').waitFor({ timeout: 5_000 })
+  await page.keyboard.press('Escape')
+  await page.locator('.media-viewer').waitFor({ state: 'detached', timeout: 5_000 })
+  await page.locator('.messages-scroll').hover()
+  await page.mouse.wheel(0, -200)
+  await cited.evaluate((element) => element.scrollIntoView({ block: 'center' }))
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}cited-files.png` })
+  // Mentions : @ ouvre la liste, Entrée choisit, la note part au bot, l’utilisateur ne voit que son texte.
+  const orionBox = page.getByRole('textbox', { name: 'Message à Orion' })
+  await page.locator('.message-user').getByText('Regarde avec').waitFor({ timeout: 5_000 })
+  await page.locator('.message-user').getByText('[Fichier : ancien.pdf]').waitFor({ timeout: 2_000 })
+  if (await page.locator('.messages-scroll').getByText('Bot Mode roster').count()) throw new Error('La note de mentions est visible après rechargement.')
+  await orionBox.fill('Vois avec @to')
+  await page.locator('.mention-menu').getByText('Nova', { exact: true }).waitFor({ timeout: 3_000 })
+  if (await page.locator('.mention-menu').getByText('Orion', { exact: true }).count()) throw new Error('Le bot de la conversation est proposé.')
+  await orionBox.press('Enter')
+  await page.locator('.mention-menu').waitFor({ state: 'detached', timeout: 2_000 })
+  if (await orionBox.inputValue() !== 'Vois avec @nova ') throw new Error('Mention mal insérée.')
+  if (await page.locator('.message-user').getByText('Vois avec').count()) throw new Error('Entrée a envoyé au lieu de choisir le bot.')
+  await orionBox.press('Enter')
+  await page.locator('.message-user .mention-chip').getByText('@nova').last().waitFor({ timeout: 5_000 })
+  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 5_000 })
+  if (!lastPromptText.includes('@nova = agent profile "nova"') || !lastPromptText.includes('message_agent')) throw new Error('La note de mentions n’est pas partie.')
+  if (await page.locator('.messages-scroll').getByText('Bot Mode roster').count()) throw new Error('La note de mentions est visible.')
+
+  // Glisser-déposer : zone visible, images et fichiers joints, fichier vide refusé.
+  await page.evaluate(() => {
+    const transfer = new DataTransfer()
+    for (const [name, type, body] of [['film.mp4', 'video/mp4', 'video'], ['dossier.pdf', 'application/pdf', 'pdf'], ['vignette.png', 'image/png', 'png'], ['vide.txt', 'text/plain', '']]) transfer.items.add(new File([body], name, { type }))
+    window.__drop = transfer
+    document.querySelector('.chat-panel').dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  })
+  await page.locator('.drop-overlay').getByText('Dépose pour joindre à Orion').waitFor({ timeout: 2_000 })
+  await page.screenshot({ path: `${SCREENSHOTS}drop-overlay.png` })
+  await page.evaluate(() => document.querySelector('.chat-panel').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__drop })))
+  await page.locator('.drop-overlay').waitFor({ state: 'detached', timeout: 2_000 })
+  await page.locator('.composer-file').getByText('film.mp4').waitFor({ timeout: 2_000 })
+  await page.locator('.composer-file').getByText('dossier.pdf').waitFor({ timeout: 2_000 })
+  await page.locator('.composer-image img[alt="vignette.png"]').waitFor({ timeout: 2_000 })
+  await page.locator('.toast').getByText('vide.txt est vide').waitFor({ timeout: 2_000 })
+  await page.locator('.toast button').click()
+  // Le brouillon et ses fichiers restent sur leur bot.
+  await orionBox.fill('Regarde ça')
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor()
+  if (await page.locator('.composer-file').count()) throw new Error('Les fichiers ont suivi sur un autre bot.')
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor()
+  await page.locator('.composer-file').getByText('film.mp4').waitFor({ timeout: 2_000 })
+  if (await orionBox.inputValue() !== 'Regarde ça') throw new Error('Brouillon perdu au changement de bot.')
+  await orionBox.press('Enter')
+  await page.locator('.message-user').getByText('[Fichier : film.mp4]').last().waitFor({ timeout: 5_000 })
+  for (let attempt = 0; attempt < 40 && !lastPromptText.includes('@file:attachments/dossier.pdf'); attempt += 1) await delay(50)
+  if (fileAttachCalls.length !== 2 || imageAttachCalls.length !== 1) throw new Error(`Pièces jointes : ${fileAttachCalls.length} fichiers, ${imageAttachCalls.length} images.`)
+  if (!fileAttachCalls[0].data_url?.startsWith('data:video/mp4;base64,') || fileAttachCalls[0].session_id !== 'chat-orion') throw new Error('file.attach mal formé.')
+  if (!lastPromptText.includes('@file:attachments/film.mp4')) throw new Error('La référence du fichier n’est pas dans le prompt.')
+  if (await page.locator('.messages-scroll').getByText('@file:').count()) throw new Error('Un @file: brut est visible.')
+  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 5_000 })
+
+  // Documents : onglets à côté du chat. HTML isolé, Markdown rendu, rien de distant ne se charge.
+  await page.locator('.media-document').getByText('rapport.pdf').scrollIntoViewIfNeeded()
+  await page.locator('.media-document').getByText('rapport.pdf').click()
+  await page.locator('.rail-tab.is-active').getByText('rapport.pdf').waitFor({ timeout: 3_000 })
+  await page.locator('.details-panel.has-document iframe[src*="rapport.pdf"]').waitFor({ timeout: 5_000 })
+  await page.locator('.media-document').getByText('page.html').click()
+  await page.locator('.rail-tab.is-active').getByText('page.html').waitFor({ timeout: 3_000 })
+  const htmlFrame = page.frameLocator('iframe[sandbox="allow-scripts"]')
+  await htmlFrame.getByText('Script local OK').waitFor({ timeout: 5_000 })
+  await htmlFrame.locator('body[data-net]').waitFor({ timeout: 5_000 })
+  if (await htmlFrame.locator('body').getAttribute('data-cookie') !== 'bloque') throw new Error('La page HTML lit les cookies de l’app.')
+  if (await htmlFrame.locator('body').getAttribute('data-net') !== 'bloque') throw new Error('La page HTML a accès au réseau.')
+  await page.locator('.media-document').getByText('note.md').click()
+  await page.locator('.document-markdown h1').getByText('Note du bot').waitFor({ timeout: 5_000 })
+  await page.locator('.document-markdown a[href*="evil.example"]').waitFor({ timeout: 2_000 })
+  if (await page.locator('.rail-tab').count() !== 4) throw new Error('Il faut Le bot et trois documents en onglets.')
+  await delay(350)
+  await page.screenshot({ path: `${SCREENSHOTS}document-tabs.png` })
+  await page.getByRole('button', { name: 'Fermer note.md' }).click()
+  await page.locator('.rail-tab.is-active').getByText('page.html').waitFor({ timeout: 2_000 })
+  await page.getByRole('button', { name: 'Fermer page.html' }).click()
+  await page.getByRole('button', { name: 'Fermer rapport.pdf' }).click()
+  await page.locator('.details-panel.has-document').waitFor({ state: 'detached', timeout: 2_000 })
+  if (remoteRequests.length) throw new Error(`Chargement distant : ${remoteRequests[0]}`)
+
+  // /api/document : session obligatoire, trois formats seulement, HTML sans origine ni réseau.
+  const documentRoute = (file, profile = 'orion') => `http://127.0.0.1:4332/api/document?${new URLSearchParams({ profile, path: file })}`
+  if ((await fetch(documentRoute('/Users/test/docs/note.md'))).status !== 401) throw new Error('/api/document sans session.')
+  const documentHeaders = await page.evaluate(async (routes) => Promise.all(routes.map(async (route) => {
+    const response = await fetch(route, { credentials: 'same-origin' })
+    return { status: response.status, type: response.headers.get('content-type'), csp: response.headers.get('content-security-policy'), disposition: response.headers.get('content-disposition') }
+  })), ['/Users/test/docs/page.html', '/Users/test/docs/rapport.pdf', '/Users/test/secret.env', '/Users/test/../etc/a.md'].map((file) => documentRoute(file).replace('http://127.0.0.1:4332', '')))
+  if (documentHeaders[0].status !== 200 || !documentHeaders[0].csp.startsWith('sandbox allow-scripts;') || documentHeaders[0].csp.includes('allow-same-origin') || !documentHeaders[0].csp.includes("default-src 'none'")) throw new Error(`CSP HTML : ${JSON.stringify(documentHeaders[0])}`)
+  if (documentHeaders[0].disposition !== 'inline') throw new Error('Une page HTML doit s’afficher en ligne.')
+  if (documentHeaders[1].type !== 'application/pdf' || documentHeaders[1].csp.includes('sandbox')) throw new Error(`PDF : ${JSON.stringify(documentHeaders[1])}`)
+  if (documentHeaders[2].status !== 415 || documentHeaders[3].status !== 400) throw new Error(`Filtres /api/document : ${JSON.stringify(documentHeaders.slice(2))}`)
+
+  // Onglet Usage : compteurs de session.stats, répartition du contexte, historique du bot.
+  await page.getByRole('tab', { name: 'Usage' }).click()
+  await page.locator('.usage-context').getByText('4 %').waitFor({ timeout: 5_000 })
+  await page.locator('.usage-stat').filter({ hasText: 'Cache lu' }).first().getByText('90k').waitFor({ timeout: 2_000 })
+  await page.locator('.usage-stat').filter({ hasText: 'Appels API' }).first().getByText('14').waitFor({ timeout: 2_000 })
+  await page.locator('.usage-row').getByText('Conversation').waitFor({ timeout: 2_000 })
+  await page.locator('.usage-bars i').first().waitFor({ timeout: 2_000 })
+  await page.locator('.usage-row').getByText('Opus 5.5').waitFor({ timeout: 2_000 })
+  if (!analyticsProfiles.includes('orion')) throw new Error('L’historique n’a pas demandé le profil du bot.')
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}usage-tab.png` })
+  await page.getByRole('tab', { name: 'Routines' }).click()
+
+  // Modes : BRAIN et PLAN ajoutent une consigne pour ce tour seulement, EXEC n’ajoute rien.
+  const modeRadio = (name) => page.getByRole('radio', { name, exact: true })
+  const sendInMode = async (text) => {
+    await orionBox.fill(text)
+    await orionBox.press('Enter')
+    for (let attempt = 0; attempt < 60 && lastPromptText !== text; attempt += 1) await delay(25)
+    if (lastPromptText !== text) throw new Error(`Le texte stocké doit rester celui de l’utilisateur : ${lastPromptText}`)
+    await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 3_000 })
+  }
+  if (await modeRadio('EXEC').getAttribute('aria-checked') !== 'true') throw new Error('EXEC doit être le mode par défaut.')
+  await modeRadio('BRAIN').click()
+  if (await orionBox.getAttribute('placeholder') !== 'Réfléchir avec Orion') throw new Error('Champ de saisie non adapté au mode.')
+  await sendInMode('Test mode brain')
+  if (!lastApiText?.startsWith('Test mode brain\n\n[HermesBot mode: BRAIN.') || !lastApiText.includes('Do not change files')) throw new Error(`api_text BRAIN : ${lastApiText}`)
+  if (await page.locator('.messages-scroll').getByText('HermesBot mode').count()) throw new Error('La consigne du mode est visible.')
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor()
+  if (await modeRadio('EXEC').getAttribute('aria-checked') !== 'true') throw new Error('Le mode doit rester propre à chaque bot.')
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor()
+  if (await modeRadio('BRAIN').getAttribute('aria-checked') !== 'true') throw new Error('Mode perdu au retour sur le bot.')
+  await modeRadio('PLAN').click()
+  await sendInMode('Test mode plan')
+  if (!lastApiText?.includes('[HermesBot mode: PLAN.')) throw new Error(`api_text PLAN : ${lastApiText}`)
+  await modeRadio('EXEC').click()
+  await sendInMode('Test mode exec')
+  if (lastApiText !== undefined) throw new Error(`EXEC ne doit rien ajouter : ${lastApiText}`)
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}modes.png` })
+
+  // Pendant le travail : le message rejoint le tour en cours, sinon il devient le suivant. Stop reste là.
+  await orionBox.fill('Test pilotage')
+  await orionBox.press('Enter')
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 3_000 })
+  await orionBox.fill('Fais plutôt la version courte')
+  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 2_000 })
+  await orionBox.press('Enter')
+  await page.locator('.message-user').getByText('Fais plutôt la version courte').waitFor({ timeout: 3_000 })
+  for (let attempt = 0; attempt < 40 && !steerCalls.length; attempt += 1) await delay(25)
+  if (steerCalls[0]?.text !== 'Fais plutôt la version courte' || steerCalls[0].execution_generation !== 1 || steerCalls[0].session_id !== 'chat-orion') throw new Error(`session.steer : ${JSON.stringify(steerCalls)}`)
+  if (await orionBox.inputValue()) throw new Error('Le message envoyé reste dans le composer.')
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ timeout: 1_000 })
+  steerVerdict = { status: 'rejected', delivered: false, execution_generation: 1, authority_epoch: 1 }
+  await orionBox.fill('Et ajoute le tableau')
+  await orionBox.press('Enter')
+  for (let attempt = 0; attempt < 40 && !queuedPrompts.length; attempt += 1) await delay(25)
+  if (queuedPrompts[0] !== 'Et ajoute le tableau') throw new Error('Un message refusé par le tour doit partir comme tour suivant.')
+  steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
+  await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
+  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ state: 'attached', timeout: 3_000 }).catch(() => {})
+
+  // Raccourcis : palette ⌘K, bot suivant Alt+↓, citation ⌘L, recherche ⌘F.
+  await page.keyboard.press('Meta+k')
+  await page.getByRole('textbox', { name: 'Chercher un bot' }).fill('tof')
+  await page.locator('.palette-results').getByText('Nova', { exact: true }).waitFor({ timeout: 2_000 })
+  await page.keyboard.press('Enter')
+  await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
+  await page.locator('.palette').waitFor({ state: 'detached', timeout: 2_000 })
+  await page.keyboard.press('Alt+ArrowDown')
+  await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
+  await page.locator('.message-assistant').getByText('Pilotage terminé.').evaluate((node) => { const range = document.createRange(); range.selectNodeContents(node); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range) })
+  await page.keyboard.press('Meta+l')
+  if (await orionBox.inputValue() !== '> Pilotage terminé.\n\n') throw new Error(`Citation ⌘L : ${await orionBox.inputValue()}`)
+  await orionBox.fill('')
+  await page.keyboard.press('Meta+f')
+  await page.getByRole('textbox', { name: 'Texte à rechercher' }).waitFor({ timeout: 2_000 })
+  await page.getByRole('button', { name: 'Fermer la recherche' }).click()
+
+  // Onglet Médias : ce que le bot a envoyé, documents compris, hors exemples de code.
+  await page.getByRole('tab', { name: 'Médias' }).click()
+  await page.locator('.media-library .media-document').getByText('note.md').waitFor({ timeout: 3_000 })
+  await page.locator('.media-library img.media-image').first().waitFor({ timeout: 3_000 })
+  if (await page.locator('.media-library').getByText('exemple-de-syntaxe').count()) throw new Error('Un exemple de code est listé dans les médias.')
+  await page.locator('.media-library .media-document').getByText('rapport.pdf').click()
+  await page.locator('.rail-tab.is-active').getByText('rapport.pdf').waitFor({ timeout: 3_000 })
+  await page.getByRole('button', { name: 'Fermer rapport.pdf' }).click()
+  await page.getByRole('tab', { name: 'Routines' }).click()
+
   // Thème sombre : même verre, capture de contrôle, puis retour au clair.
   await page.getByRole('button', { name: 'Passer au thème sombre' }).click()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
@@ -440,6 +837,81 @@ try {
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
 
+  // Coffre CDP : API bots sur 4333, fenêtre locale sur 4332, gateway jamais destinataire.
+  const vaultCall = async (action) => {
+    const response = await fetch(`http://127.0.0.1:4333/v1/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet-steam' }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    const raw = await response.text()
+    return { httpStatus: response.status, body: JSON.parse(raw), raw }
+  }
+  if ((await fetch('http://127.0.0.1:4332/api/browser-vault/events')).status !== 401) throw new Error('Les demandes du coffre sont lisibles sans session.')
+  const missingTarget = await fetch('http://127.0.0.1:4333/v1/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion' }),
+  })
+  if (missingTarget.status !== 400 || (await missingTarget.json()).error !== 'target_required') throw new Error('Un appel sans targetId doit être refusé.')
+  const savingBrowser = vaultCall('save')
+  const browserSheet = page.locator('.browser-vault-dialog')
+  await browserSheet.getByText('https://store.steampowered.com', { exact: true }).waitFor({ timeout: 3_000 })
+  await browserSheet.getByText('Orion a besoin de tes identifiants').waitFor()
+  await browserSheet.getByLabel('Identifiant du site').fill('steam-test')
+  await browserSheet.getByLabel('Mot de passe du site').fill(BROWSER_SECRET)
+  await browserSheet.getByRole('button', { name: 'Enregistrer et continuer' }).click()
+  const savedBrowser = await savingBrowser
+  if (savedBrowser.httpStatus !== 200 || savedBrowser.body.status !== 'saved') throw new Error(`Enregistrement CDP refusé: ${savedBrowser.raw}`)
+  if (savedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le secret CDP est renvoyé au bot après save.')
+  await browserSheet.waitFor({ state: 'detached', timeout: 2_000 })
+  const listedBrowser = await vaultCall('list')
+  if (listedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || listedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('list du coffre CDP incorrect.')
+  const cliListed = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'list', '--bot', 'orion'], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
+  })
+  if (JSON.parse(cliListed.stdout).entries?.[0]?.identifier !== 'steam-test' || cliListed.stdout.includes(BROWSER_SECRET)) throw new Error('CLI du coffre CDP incorrect.')
+  const cliFilled = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'fill', '--bot', 'orion', '--target', 'onglet-steam'], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
+  })
+  if (JSON.parse(cliFilled.stdout).status !== 'filled' || cdpInjections.at(-1).target !== 'onglet-steam') throw new Error('CLI fill ne respecte pas le targetId.')
+
+  // Rechargement simulé : seuls les arguments CDP portent le secret, jamais le JavaScript évalué.
+  cdpUrl = 'https://store.steampowered.com/login/?reloaded=1'
+  const filledBrowser = await vaultCall('fill')
+  if (filledBrowser.httpStatus !== 200 || filledBrowser.body.fields?.join() !== 'identifier,password') throw new Error(`Remplissage CDP refusé: ${filledBrowser.raw}`)
+  const loginInjection = cdpInjections.at(-1)
+  if (loginInjection.target !== 'onglet-steam') throw new Error('Injection dans le premier onglet au lieu du targetId demandé.')
+  if (loginInjection.values.join() !== `steam-test,${BROWSER_SECRET}`) throw new Error('Les champs CDP ne reçoivent pas les identifiants.')
+  if (cdpExpressions.some((expression) => expression.includes(BROWSER_SECRET))) throw new Error('Secret interpolé dans Runtime.evaluate.')
+  if (filledBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le secret CDP est renvoyé au bot après fill.')
+
+  const injectionsBeforeRefusal = cdpInjections.length
+  cdpUrl = 'https://example.com/login'
+  const refusedBrowser = await vaultCall('fill')
+  if (refusedBrowser.httpStatus !== 404 || refusedBrowser.body.error !== 'origin_not_found') throw new Error('Origine différente non refusée.')
+  if (cdpInjections.length !== injectionsBeforeRefusal) throw new Error('Injection sur une origine différente.')
+  const crossOrigin = await fetch('http://127.0.0.1:4333/v1/fill', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: JSON.stringify({ bot: 'orion' }),
+  })
+  if (crossOrigin.status !== 403) throw new Error('Une page web peut appeler le service des bots.')
+
+  cdpUrl = 'https://store.steampowered.com/login/?code=1'
+  const codingBrowser = vaultCall('code')
+  await browserSheet.getByLabel('Code de vérification').fill(BROWSER_CODE)
+  await browserSheet.getByRole('button', { name: 'Injecter le code' }).click()
+  const codedBrowser = await codingBrowser
+  if (codedBrowser.httpStatus !== 200 || codedBrowser.body.fields?.[0] !== 'code') throw new Error(`Code CDP refusé: ${codedBrowser.raw}`)
+  if (cdpInjections.at(-1).target !== 'onglet-steam' || cdpInjections.at(-1).values[0] !== BROWSER_CODE || codedBrowser.raw.includes(BROWSER_CODE)) throw new Error('Circuit du code CDP incorrect.')
+
+  const cancellingBrowser = vaultCall('save')
+  await browserSheet.getByRole('button', { name: 'Plus tard' }).waitFor({ timeout: 3_000 })
+  await browserSheet.getByRole('button', { name: 'Plus tard' }).click()
+  if ((await cancellingBrowser).body.status !== 'cancelled') throw new Error('Annulation du coffre CDP incorrecte.')
+
+  const browserAudit = readFileSync(BROWSER_VAULT_AUDIT, 'utf8')
+  if (browserAudit.includes(BROWSER_SECRET) || browserAudit.includes(BROWSER_CODE)) throw new Error('Secret dans le journal du coffre.')
+  if (serverLog.includes(BROWSER_SECRET) || serverLog.includes(BROWSER_CODE)) throw new Error('Secret dans les logs du serveur.')
+  if (JSON.stringify([...clientResponses.values()]).includes(BROWSER_SECRET) || JSON.stringify([...clientResponses.values()]).includes(BROWSER_CODE)) throw new Error('Secret CDP passé par la gateway.')
+  if (await page.getByText(BROWSER_SECRET).count() || await page.evaluate((secret) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(secret), BROWSER_SECRET)) throw new Error('Secret CDP conservé dans le navigateur.')
+
   // Carte de mail : corrigée à la main, l’envoi au bot porte ce qui a été validé et son empreinte.
   const askMail = async (id) => {
     await page.getByRole('textbox', { name: 'Message à Orion' }).fill(`Test mail ${id}`)
@@ -459,9 +931,13 @@ try {
   await card.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SCREENSHOTS}mail-card.png` })
   const promptsBeforeMail = promptCalls
+  // Un mail validé part même si le composer est en PLAN : la consigne « ne rien envoyer » ne doit pas le suivre.
+  await page.getByRole('radio', { name: 'PLAN', exact: true }).click()
   await card.getByRole('button', { name: 'Envoyer' }).click()
   for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeMail; attempt += 1) await delay(50)
   if (promptCalls !== promptsBeforeMail + 1) throw new Error('Un clic sur Envoyer doit lancer un seul tour.')
+  if (lastApiText !== undefined) throw new Error('Un mail validé ne doit pas porter la consigne du mode.')
+  await page.getByRole('radio', { name: 'EXEC', exact: true }).click()
   const digest = createHash('sha256').update('Bot <bot@exemple.test>\n77\nautre@exemple.test\n\nRe: Votre demande\nBonjour,\n\nTexte corrigé.').digest('hex')
   for (const expected of ['````hermes-mail-approved', 'Id: m1', 'Draft-Id: 77', 'To: autre@exemple.test', 'Texte corrigé.', `Approved-Digest: ${digest}`]) {
     if (!lastPromptText.includes(expected)) throw new Error(`Mail approuvé sans « ${expected} ».`)
@@ -539,11 +1015,57 @@ try {
   await page.getByRole('tab', { name: /Activité/ }).click()
   // L’historique et « Test silence » : deux silences, tous deux rangés dans Activité.
   await page.locator('.activity-row').getByText('NOREPLY').first().waitFor()
+  await page.locator('.activity-row').getByText('Background process').first().waitFor()
+  await page.locator('.activity-row').getByText('Délégation terminée').first().waitFor()
+  if (await page.locator('.activity-row').getByText('demande entre bots').count()) throw new Error('Un message entre bots est resté dans Activité.')
   await page.getByRole('tab', { name: /Routines/ }).click()
+
+  // Messages entre bots : « Nova messaged Orion », « Orion messaged Nova », « Nova replied to Orion ».
+  const notes = page.locator('.messages-scroll .agent-note')
+  await notes.first().waitFor({ timeout: 5_000 })
+  const noteLines = await notes.locator('.agent-note-line').evaluateAll((lines) => lines.map((line) => [...line.children].filter((child) => child.tagName !== 'TIME').map((child) => child.textContent.trim()).join(' ')))
+  for (const expected of ['Nova messaged Orion', 'Orion messaged Nova', 'Nova replied to Orion']) {
+    if (!noteLines.includes(expected)) throw new Error(`Ligne « ${expected} » absente : ${JSON.stringify(noteLines)}`)
+  }
+  if (await page.locator('.messages-scroll').getByText('Peux-tu relire').count()) throw new Error('Le message entre bots doit rester fermé.')
+  const sentNote = notes.filter({ hasText: 'Orion messaged Nova' })
+  await sentNote.getByRole('button', { name: 'messaged' }).click()
+  await sentNote.locator('.agent-note-body strong').getByText('plan').waitFor()
+  await sentNote.locator('.agent-note-body').getByText('Reply needed: Un OK écrit').waitFor()
+  await notes.filter({ hasText: 'Nova replied to Orion' }).getByRole('button', { name: 'replied to' }).click()
+  await page.locator('.agent-note-body').getByText('Plan relu, OK écrit.').waitFor()
+  await page.locator('.agent-note-body .cited-files img.media-image').waitFor({ timeout: 5_000 })
+  // Un geste vers le haut décroche le fil du bas, comme l’utilisateur qui remonte.
+  await page.locator('.messages-scroll').hover()
+  await page.mouse.wheel(0, -200)
+  await notes.first().evaluate((element) => element.scrollIntoView({ block: 'start' }))
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}agent-messages.png` })
+  await sentNote.getByRole('button', { name: 'messaged' }).click()
+  await sentNote.locator('.agent-note-body').waitFor({ state: 'detached' })
+  // En direct : un appel `message_agent`, puis un tour lancé par le message d’un autre bot.
+  const notesBefore = await notes.count()
+  for (const client of wss.clients) {
+    send(client, event('chat-orion', 'tool.start', { tool_id: 'tool-live-dm', name: 'message_agent', args: { target: 'nova', message: 'Envoi en direct' } }))
+    send(client, event('chat-orion', 'tool.start', { tool_id: 'tool-live-dm', name: 'message_agent', args: { target: 'nova', message: 'Envoi en direct' } }))
+    send(client, event('chat-orion', 'tool.complete', { tool_id: 'tool-live-dm', name: 'message_agent' }))
+    send(client, event('chat-orion', 'message.start', { turn_id: 'turn-dm', display_kind: 'internal_notification', text: 'Message from 🤖 Nova (@nova): Réveil en direct' }))
+    send(client, event('chat-orion', 'message.complete', { turn_id: 'turn-dm', text: 'Bien reçu, Nova.', status: 'complete' }))
+  }
+  await page.locator('.message-assistant').getByText('Bien reçu, Nova.').waitFor({ timeout: 5_000 })
+  if (await notes.count() !== notesBefore + 2) throw new Error(`Messages entre bots en direct : ${await notes.count() - notesBefore} au lieu de 2`)
+  await notes.last().getByRole('button', { name: 'messaged' }).click()
+  await notes.last().locator('.agent-note-body').getByText('Réveil en direct').waitFor()
+  await notes.filter({ hasText: 'Orion messaged Nova' }).locator('.agent-note-name').filter({ hasText: 'Nova' }).last().click()
+  await page.locator('[data-bot=nova].is-selected').waitFor()
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor()
+  await page.locator('.message-assistant').getByText('Bien reçu, Nova.').waitFor()
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test de streaming')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   try {
     await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').waitFor({ timeout: 10_000 })
+    await page.locator('[data-bot=orion] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   } catch (error) {
     console.log('chat au moment de l’échec:', await page.locator('.messages-column').innerText())
     console.log('notice:', await page.locator('.toast').allTextContents())
@@ -557,7 +1079,7 @@ try {
   await page.locator('[data-bot=nova]').click()
   await page.locator('.message-assistant').getByText('Je suis ton bot Hermes de test.').waitFor()
   await page.locator('[data-bot=orion]').click()
-  await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').waitFor()
+  await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').first().waitFor()
   if (profilesListCalls !== rosterCallsBeforeSwitch) throw new Error('Cache: un changement de bot a relu le roster.')
 
   if (await page.locator('.usage-readout').count()) throw new Error('Contexte et tok/s doivent être masqués par défaut.')
@@ -574,6 +1096,40 @@ try {
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
   if (await page.locator('.model-option[data-model="modele-interdit"]').count()) throw new Error('Fournisseur non connecté proposé.')
   page.once('dialog', (dialog) => dialog.accept())
+  // Le groupe du modèle actif est ouvert, les autres sont pliés ; le pliage reste d'une ouverture à l'autre.
+  const kimiGroup = page.locator('.model-group', { hasText: 'Kimi' })
+  const anthropicGroup = page.locator('.model-group', { hasText: 'Anthropic' })
+  if (!await anthropicGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Le groupe du modèle actif doit être ouvert.')
+  if (await kimiGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Les autres fournisseurs doivent être pliés.')
+  // Les vrais logos passent la CSP de l'app ; tous les serveurs locaux forment un seul groupe sans logo de marque.
+  await page.waitForFunction(() => {
+    const logos = [...document.querySelectorAll('.model-group-tile.has-logo img')]
+    return logos.length === 2 && logos.every((logo) => logo.complete && logo.naturalWidth > 0)
+  }, null, { timeout: 5_000 })
+  const localGroup = page.locator('.model-group', { hasText: 'Local LLM' })
+  if (await localGroup.count() !== 1) throw new Error('Les modèles locaux doivent être réunis sous Local LLM.')
+  if (await localGroup.locator('.model-group-count').innerText() !== '2') throw new Error('Local LLM doit réunir oMLX et LM Studio.')
+  if (await localGroup.locator('.model-group-tile.is-local svg').count() !== 1 || await localGroup.locator('img').count()) throw new Error('Local LLM doit garder son icône neutre.')
+  if (await page.locator('.model-group-name', { hasText: /oMLX|LM Studio/ }).count()) throw new Error('Le nom du serveur local ne doit plus être affiché.')
+  await kimiGroup.locator('.model-group-head').click()
+  await kimiGroup.locator('.model-option[data-model="k3.1-pro"]').waitFor({ state: 'visible', timeout: 3_000 })
+  await page.waitForTimeout(400)
+  const startTheme = await page.evaluate(() => document.documentElement.dataset.theme)
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await page.screenshot({ path: `${SCREENSHOTS}model-picker-light.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: `${SCREENSHOTS}model-picker-dark.png` })
+  await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, startTheme)
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
+  await page.getByRole('button', { name: 'Choisir le modèle' }).click()
+  await page.waitForTimeout(400)
+  if (!await kimiGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Le pliage doit être mémorisé.')
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('ArrowUp')
+  await kimiGroup.locator('.model-group-head').click()
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('k3.1')
+  await kimiGroup.locator('.model-option[data-model="k3.1-pro"]').waitFor({ state: 'visible', timeout: 3_000 })
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
   await page.locator('.model-option[data-model="claude-sonnet-5-5"]').click()
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 5_000 })
   const lastMutation = modelMutations.at(-1)
@@ -581,6 +1137,67 @@ try {
   if (lastMutation?.expected_revision !== 4 || lastMutation?.expected_generation !== 1) throw new Error(`Clôtures inattendues: ${JSON.stringify(lastMutation)}`)
   if (lastMutation?.payload?.model !== 'claude-sonnet-5-5' || lastMutation?.payload?.provider !== 'anthropic' || lastMutation?.payload?.confirm !== 'confirm-test') throw new Error(`Mutation inattendue: ${JSON.stringify(lastMutation)}`)
   if (!lastMutation?.request_id || lastMutation.request_id === modelMutations[0].request_id) throw new Error('La confirmation doit avoir une nouvelle request_id.')
+
+  // Réglages : thème, texte, touche d’envoi, puis un modèle masqué quitte le sélecteur et revient d’un clic.
+  const openSettings = async () => {
+    await page.getByRole('button', { name: 'Réglages', exact: true }).click()
+    await settingsDialog.waitFor({ timeout: 3_000 })
+  }
+  const settingsDialog = page.getByRole('dialog', { name: 'Réglages' })
+  await openSettings()
+  await page.waitForTimeout(350)
+  await page.screenshot({ path: `${SCREENSHOTS}settings-general.png` })
+  await settingsDialog.getByRole('radio', { name: 'Sombre' }).click()
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
+  await settingsDialog.getByRole('radio', { name: 'Clair' }).click()
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
+  await settingsDialog.getByRole('radio', { name: 'Grande' }).click()
+  const largeText = await page.locator('.composer textarea').first().evaluate((element) => getComputedStyle(element).fontSize)
+  if (largeText !== '16px') throw new Error(`Taille du texte non appliquée : ${largeText}`)
+  await settingsDialog.getByRole('radio', { name: 'Normale' }).click()
+  await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
+  await settingsDialog.getByRole('radio', { name: '⌘ Entrée' }).click()
+  await settingsDialog.press('Escape')
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.composer-hint-keys').first().getByText('⌘ Entrée pour envoyer').waitFor({ timeout: 3_000 })
+  const promptsBeforeKeys = promptCalls
+  const composerField = page.getByRole('textbox', { name: 'Message à Orion' })
+  await composerField.fill('une ligne')
+  await composerField.press('Enter')
+  if (promptCalls !== promptsBeforeKeys || !(await composerField.inputValue()).includes('\n')) throw new Error('Avec ⌘ Entrée, Entrée doit aller à la ligne sans envoyer.')
+  await composerField.fill('')
+  await openSettings()
+  await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
+  await settingsDialog.getByRole('radio', { name: 'Entrée', exact: true }).click()
+  await settingsDialog.getByRole('button', { name: 'Modèles' }).click()
+  const settingsSearch = settingsDialog.getByRole('textbox', { name: 'Rechercher dans les modèles' })
+  await settingsSearch.fill('kimi k3')
+  await settingsDialog.locator('.settings-model[data-model="kimi-k3"] input').uncheck()
+  await settingsSearch.fill('sonnet')
+  await settingsDialog.locator('.settings-model[data-model="claude-sonnet-5-5"] input').uncheck()
+  await settingsSearch.fill('')
+  await settingsDialog.press('Escape')
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  await page.getByRole('button', { name: 'Choisir le modèle' }).click()
+  await page.locator('.model-option[data-model="claude-sonnet-5-5"]').waitFor({ timeout: 5_000 })
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('kimi')
+  await page.locator('.model-option[data-model="kimi-for-coding"]').waitFor({ timeout: 3_000 })
+  if (await page.locator('.model-option[data-model="kimi-k3"]').count()) throw new Error('Un modèle masqué reste proposé.')
+  await page.getByRole('button', { name: 'Gérer les modèles' }).click()
+  await settingsDialog.waitFor({ timeout: 3_000 })
+  await settingsDialog.locator('.settings-model-toggle', { hasText: 'Anthropic' }).click()
+  await settingsDialog.locator('.settings-model[data-model="claude-fable-5-2"]').waitFor({ timeout: 3_000 })
+  await page.waitForTimeout(350)
+  await page.screenshot({ path: `${SCREENSHOTS}settings-models.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: `${SCREENSHOTS}settings-models-dark.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await settingsDialog.getByRole('button', { name: 'Tout afficher' }).click()
+  const savedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('hermesbot-settings')))
+  if (savedSettings.hiddenModels.length !== 0 || savedSettings.sendKey !== 'enter' || savedSettings.textSize !== 'normal') throw new Error(`Réglages mal enregistrés : ${JSON.stringify(savedSettings)}`)
+  await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
   // Un vrai geste de l’utilisateur (molette vers le haut) décroche le fil ; un défilement programmé ne le ferait pas.
   const scrollBox = await page.locator('.messages-scroll').boundingBox()
@@ -675,7 +1292,7 @@ try {
   if (await page.locator('.toast').count()) throw new Error('Le message de session expirée reste affiché après connexion.')
 
   // Classement : sections par groupes, liste unique par activité avec le bot le plus récent en tête.
-  const rosterOrder = () => page.locator('.bot-row').evaluateAll((rows) => rows.map((row) => row.dataset.bot).join())
+  const rosterOrder = () => page.locator('.bot-row:not([data-bot^="local:"])').evaluateAll((rows) => rows.map((row) => row.dataset.bot).join())
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Ordre par groupes : ${await rosterOrder()}`)
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
@@ -685,13 +1302,16 @@ try {
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Retour aux groupes : ${await rosterOrder()}`)
 
+  const stoppedChild = new Promise((resolve) => child.once('exit', resolve))
   child.kill('SIGTERM')
-  await delay(300)
+  await stoppedChild
   child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121',
+      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
+      BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
     },
@@ -704,6 +1324,62 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await page.locator('.login-card').count()) throw new Error('La session n’a pas été restaurée après redémarrage.')
+  const persistedBrowser = await vaultCall('list')
+  if (persistedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || persistedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le coffre CDP ne survit pas au redémarrage.')
+
+  // Propriétaire du Chrome partagé : la route et le roster le marquent au travail, même sans tour Hermes.
+  if ((await fetch('http://127.0.0.1:4332/api/browser-turn')).status !== 401) throw new Error('Le propriétaire du Chrome est lisible sans session.')
+  writeFileSync(BROWSER_TOUR_OWNER_FILE, 'orion')
+  const browserTurn = await page.evaluate(async () => (await fetch('/api/browser-turn')).json())
+  if (browserTurn.owner !== 'orion') throw new Error('Le serveur ne lit pas le propriétaire du Chrome partagé.')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 15_000 })
+  await page.locator('[data-bot=orion]').getByText('Pilote le Chrome partagé').waitFor()
+  rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
+
+  // Chat local isolé : modèle fixé par le serveur, aucun outil, aucune requête à Hermes.
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
+  await page.locator('[data-bot="local:qwen-abliterated"]').click()
+  const localBox = page.getByRole('textbox', { name: 'Message à Qwen abliterated' })
+  await localBox.waitFor({ timeout: 3_000 })
+  if (await page.getByRole('button', { name: 'Ajouter des fichiers' }).count()) throw new Error('Le chat local ne doit pas accepter de fichiers.')
+  if (await page.getByRole('radio', { name: 'BRAIN', exact: true }).count()) throw new Error('Le chat local ne doit pas avoir de modes.')
+  if (await page.locator('.details-panel').count()) throw new Error('Pas de panneau de bot pour le chat local.')
+  const promptsBeforeLocal = promptCalls
+  await localBox.fill('Bonjour local')
+  await localBox.press('Enter')
+  await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 5_000 })
+  if (await page.locator('.local-chat').getByText('je réfléchis').count()) throw new Error('Le raisonnement du modèle est affiché.')
+  const localRequest = localChatRequests.at(-1)
+  if (localRequest.model !== 'huihui-qwen3.8-27b-abliterated:q4_k' || 'tools' in localRequest || localRequest.messages.length !== 1 || localRequest.messages[0].content !== 'Bonjour local') throw new Error(`Requête locale : ${JSON.stringify(localRequest)}`)
+  if (promptCalls !== promptsBeforeLocal) throw new Error('Le chat local a lancé un tour Hermes.')
+  await page.screenshot({ path: `${SCREENSHOTS}local-chat.png` })
+  const smuggled = await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'autre', tools: [{ type: 'function' }], messages: [{ role: 'user', content: 'x', tools: [1] }] }) })).text())
+  const smuggledRequest = localChatRequests.at(-1)
+  if (!smuggled || smuggledRequest.model !== 'huihui-qwen3.8-27b-abliterated:q4_k' || 'tools' in smuggledRequest || 'tools' in smuggledRequest.messages[0]) throw new Error('Le serveur a laissé passer autre chose que les messages.')
+  if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: 'x' }] }) })).status) !== 400) throw new Error('Rôle system accepté.')
+  // Aller sur un autre bot garde la conversation locale.
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
+  await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 3_000 })
+  await page.locator('[data-bot="local:qwen-abliterated"]').click()
+  await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 2_000 })
+  // Modèle absent : message clair, pas de plantage.
+  localModelMissing = true
+  await localBox.fill('Encore')
+  await localBox.press('Enter')
+  await page.locator('.toast').getByText('pas encore installé').waitFor({ timeout: 5_000 })
+  localModelMissing = false
+  await page.locator('.toast button').click()
+  await page.getByRole('button', { name: 'Effacer la conversation locale' }).click()
+  if (await page.locator('.local-chat .message-assistant').count()) throw new Error('Conversation locale non effacée.')
+  await page.locator('[data-bot=nova]').click()
+
+  // Une liste vraiment vide garde son message, une fois le chargement fini.
+  emptyRoster = true
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByText('Aucun bot à afficher.').waitFor({ timeout: 15_000 })
+  emptyRoster = false
 
   // Lancement avec une session Hermes expirée : pas d’écran de connexion.
   expiredBefore = cookieCounter
@@ -742,10 +1418,14 @@ try {
   await page.getByRole('button', { name: 'Passer au thème clair' }).click()
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre et accords, carte de mail, identifiants gardés.')
+  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP (save, list, fill, code, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')
   wss.close()
+  cdpWss.close()
   await new Promise((resolve) => mock.close(resolve))
+  await new Promise((resolve) => cdpMock.close(resolve))
+  rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
+  rmSync(BROWSER_TOUR_FIXTURE, { force: true })
 }

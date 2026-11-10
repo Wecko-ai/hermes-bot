@@ -15,6 +15,7 @@ interface MediaEmbedProps {
   /** Identifiant du message : une nouvelle version d’un fichier au même nom ne sort pas du cache. */
   version: string
   onOpenImage?: (media: MediaRef) => void
+  onOpenDocument?: (media: MediaRef) => void
 }
 
 // Médias introuvables : la visionneuse les saute. Un média qui finit par se charger en sort.
@@ -23,7 +24,7 @@ const failureKey = (profile: string, path: string) => `${profile}\n${path}`
 export const mediaFailed = (profile: string, media: MediaRef) => failedMedia.has(failureKey(profile, media.path))
 
 /** Un média `MEDIA:` du bot, lu par le serveur local. Rien ne charge directement le disque ni l’extérieur. */
-export function MediaEmbed({ media, profile, version, onOpenImage }: MediaEmbedProps) {
+export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocument }: MediaEmbedProps) {
   const [failed, setFailedState] = useState(false)
   const setFailed = (value: boolean) => {
     if (value) failedMedia.add(failureKey(profile, media.path))
@@ -39,11 +40,19 @@ export function MediaEmbed({ media, profile, version, onOpenImage }: MediaEmbedP
       </a>
     )
   }
+  if (media.kind === 'document' && isServablePath(media.path)) {
+    return (
+      <button type="button" className="media-card media-document" title={media.path} onClick={() => onOpenDocument?.(media)}>
+        <FileText size={15} />
+        <span className="media-card-text"><strong>{media.name}</strong><small>Ouvrir à côté</small></span>
+      </button>
+    )
+  }
   if (failed || media.kind === 'file' || !isServablePath(media.path)) {
     const detail = failed ? 'Aperçu indisponible' : media.kind === 'file' ? 'Fichier local' : 'Chemin relatif'
     return (
       <span className="media-card media-fallback" title={media.path}>
-        {media.kind === 'file' ? <FileText size={15} /> : <ImageOff size={15} />}
+        {media.kind === 'file' || media.kind === 'document' ? <FileText size={15} /> : <ImageOff size={15} />}
         <span className="media-card-text"><strong>{media.name}</strong><small>{detail}</small></span>
       </span>
     )

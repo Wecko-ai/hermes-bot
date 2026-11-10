@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { Bot } from '../types'
 import { BotAvatar, avatarColor, statusLabel } from './BotAvatar'
 import { hasAnimation } from '../lib/animations'
+import { useSettings } from '../lib/settings'
 
 export type AvatarPhase = 'working' | 'done' | 'idle'
 
@@ -10,8 +11,9 @@ export const avatarPhase = (bot: Bot): AvatarPhase =>
 
 const reducedMotionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
 
-/** « Réduire les animations » de macOS : avatar fixe, le statut reste écrit. */
+/** « Réduire les animations » de macOS ou des réglages : avatar fixe, le statut reste écrit. */
 function useReducedMotion() {
+  const { reduceMotion } = useSettings()
   const [reduced, setReduced] = useState(() => reducedMotionQuery?.matches ?? false)
   useEffect(() => {
     if (!reducedMotionQuery) return
@@ -19,7 +21,7 @@ function useReducedMotion() {
     reducedMotionQuery.addEventListener('change', update)
     return () => reducedMotionQuery.removeEventListener('change', update)
   }, [])
-  return reduced
+  return reduced || reduceMotion
 }
 
 interface LiveAvatarProps {

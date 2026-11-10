@@ -1,0 +1,47 @@
+import { describe, expect, it } from 'vitest'
+import { hiddenModelKey, parseSettings, selectableModels, withModelsVisible } from './settings'
+import type { ModelOption } from '../types'
+
+const option = (model: string, provider = 'anthropic'): ModelOption => ({ model, provider, providerName: provider })
+
+describe('réglages', () => {
+  it('reprend les anciennes préférences tant que le réglage n’a jamais été écrit', () => {
+    const legacy = (key: string) => ({ 'hermesbot-theme': 'dark', 'hermesbot-show-usage': '1', 'hermesbot-sort': 'activity' } as Record<string, string>)[key] ?? null
+    expect(parseSettings(null, legacy)).toMatchObject({ theme: 'dark', showUsage: true, activitySort: true })
+    expect(parseSettings('{"theme":"light","showUsage":false,"activitySort":false}', legacy)).toMatchObject({ theme: 'light', showUsage: false, activitySort: false })
+  })
+
+  it('suit le système et garde Entrée par défaut', () => {
+    expect(parseSettings(null)).toEqual({ theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', activitySort: false, showHidden: false, hiddenModels: [] })
+  })
+
+  it('remplace une valeur invalide au lieu de la propager', () => {
+    expect(parseSettings('pas du json').theme).toBe('system')
+    expect(parseSettings('[1]').sendKey).toBe('enter')
+    expect(parseSettings('{"theme":"rose","textSize":12,"reduceMotion":"oui","hiddenModels":["a:b",3]}')).toMatchObject({ theme: 'system', textSize: 'normal', reduceMotion: false, hiddenModels: ['a:b'] })
+  })
+})
+
+describe('modèles proposés', () => {
+  const options = [option('claude-opus-5-5'), option('claude-sonnet-5-5'), option('claude-sonnet-5-5', 'openrouter'), option('claude-haiku-5-5')]
+
+  it('retire un modèle masqué chez ce fournisseur seulement', () => {
+    const hidden = [hiddenModelKey(options[1])]
+    expect(selectableModels(options, hidden, []).map(hiddenModelKey)).toEqual(['anthropic:claude-opus-5-5', 'openrouter:claude-sonnet-5-5', 'anthropic:claude-haiku-5-5'])
+  })
+
+  it('garde le modèle actif et celui du profil, même masqués', () => {
+    const hidden = options.map(hiddenModelKey)
+    expect(selectableModels(options, hidden, ['claude-opus-5-5', 'claude-haiku-5-5']).map((item) => item.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
+  })
+
+  it('laisse proposé un modèle qui vient d’apparaître', () => {
+    expect(selectableModels([...options, option('claude-fable-9')], [hiddenModelKey(options[0])], []).map((item) => item.model)).toContain('claude-fable-9')
+  })
+
+  it('masque et réaffiche sans doublon ni perte des autres', () => {
+    const hidden = withModelsVisible(['autre:x', 'anthropic:claude-opus-5-5'], [options[0], options[3]], false)
+    expect(hidden).toEqual(['autre:x', 'anthropic:claude-opus-5-5', 'anthropic:claude-haiku-5-5'])
+    expect(withModelsVisible(hidden, [options[0], options[3]], true)).toEqual(['autre:x'])
+  })
+})

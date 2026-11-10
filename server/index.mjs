@@ -5,6 +5,9 @@ import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
 import { randomBytes } from 'node:crypto'
+import { createBrowserVault } from './browser-vault/service.mjs'
+import { vaultError } from './browser-vault/errors.mjs'
+import { readBrowserOwner } from './browser-turn.mjs'
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.PORT || 4330)
@@ -53,6 +56,12 @@ const SESSION_MAX_AGE = 30 * 24 * 60 * 60
 const sessions = new Map()
 const persistence = globalThis.__hermesBotSessionPersistence
 const credentialStore = globalThis.__hermesBotCredentialStore
+const BROWSER_VAULT_PORT = Number(process.env.BROWSER_VAULT_PORT || 4331)
+if (!Number.isInteger(BROWSER_VAULT_PORT) || BROWSER_VAULT_PORT < 1 || BROWSER_VAULT_PORT > 65535) throw new Error('BROWSER_VAULT_PORT invalide')
+const browserVault = createBrowserVault({
+  port: BROWSER_VAULT_PORT,
+  cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || 'http://127.0.0.1:9222',
+})
 
 function restoreSessions() {
   if (!persistence) return
@@ -236,7 +245,7 @@ async function handleLogout(request, response) {
   return json(response, 200, { ok: true }, { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0` })
 }
 
-const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions'])
+const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
 
 async function handleReadProxy(request, response, url) {
   const route = url.pathname.slice('/api/hermes/'.length)
@@ -290,7 +299,7 @@ const MEDIA_ERRORS = {
   413: [415, 'unsupported_media'], 415: [415, 'unsupported_media'],
 }
 
-function mediaRequest(url) {
+function fileRequest(url) {
   const profile = url.searchParams.get('profile') || ''
   const file = url.searchParams.get('path') || ''
   if (!MEDIA_PROFILE.test(profile)) return { status: 400, error: 'invalid_profile' }
@@ -298,9 +307,39 @@ function mediaRequest(url) {
   // Chemin absolu de fichier : pas de dossier (`x.png/`), pas d’hôte (`//hôte/x.png`), pas de `.` ni de `..`.
   if (!(file.startsWith('/') || file.startsWith('~/')) || file.startsWith('//') || file.endsWith('/')) return { status: 400, error: 'invalid_path' }
   if (file.split('/').some((part) => part === '.' || part === '..')) return { status: 400, error: 'invalid_path' }
-  const type = MEDIA_TYPES[path.extname(file).slice(1).toLowerCase()]
+  return { profile, file, extension: path.extname(file).slice(1).toLowerCase() }
+}
+
+function mediaRequest(url) {
+  const target = fileRequest(url)
+  if (target.error) return target
+  const type = MEDIA_TYPES[target.extension]
   if (!type) return { status: 415, error: 'unsupported_media' }
-  return { profile, file, kind: type[0], contentType: type[1] }
+  return { profile: target.profile, file: target.file, kind: type[0], contentType: type[1] }
+}
+
+// Documents ouverts dans un onglet à côté du chat. Doit rester identique aux formats de `src/lib/media.ts`.
+const DOCUMENT_TYPES = {
+  pdf: 'application/pdf',
+  html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
+  md: 'text/markdown; charset=utf-8', markdown: 'text/markdown; charset=utf-8',
+}
+const DOCUMENT_TEXT_MAX_BYTES = 16 * 1024 * 1024
+// Une page écrite par un bot peut venir d’un contenu hostile : origine opaque, scripts locaux seulement,
+// et aucune sortie réseau. Les images, polices et scripts distants ne se chargent pas.
+const DOCUMENT_POLICIES = {
+  pdf: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; frame-ancestors 'self'",
+  html: "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+  markdown: "default-src 'none'; sandbox; frame-ancestors 'none'",
+}
+
+function documentRequest(url) {
+  const target = fileRequest(url)
+  if (target.error) return target
+  const contentType = DOCUMENT_TYPES[target.extension]
+  if (!contentType) return { status: 415, error: 'unsupported_media' }
+  const format = target.extension === 'pdf' ? 'pdf' : contentType.startsWith('text/html') ? 'html' : 'markdown'
+  return { profile: target.profile, file: target.file, format, contentType }
 }
 
 async function handleMedia(request, response, url) {
@@ -308,7 +347,25 @@ async function handleMedia(request, response, url) {
   if (target.error) return json(response, target.status, { error: target.error })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   // Images : route de téléchargement de la gateway. Audio et vidéo : sa route de lecture, avec Range.
-  const route = target.kind === 'image' ? '/api/fs/download' : '/api/files/stream'
+  return relayFile(request, response, target, target.kind === 'image' ? '/api/fs/download' : '/api/files/stream', {
+    // L’URL porte l’identifiant du message (`v`) : un fichier réécrit sous le même nom revient avec une URL neuve.
+    'Cache-Control': 'private, max-age=600',
+    'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
+  })
+}
+
+async function handleDocument(request, response, url) {
+  const target = documentRequest(url)
+  if (target.error) return json(response, target.status, { error: target.error })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  return relayFile(request, response, target, '/api/fs/download', {
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': DOCUMENT_POLICIES[target.format],
+  }, target.format === 'pdf' ? Infinity : DOCUMENT_TEXT_MAX_BYTES)
+}
+
+/** Relaie un fichier de la gateway. Le type et la politique viennent d’ici, jamais de la gateway. */
+async function relayFile(request, response, target, route, policyHeaders, maxBytes = Infinity) {
   const headers = { 'accept-encoding': 'identity' }
   for (const name of MEDIA_FORWARDED_HEADERS) {
     const value = request.headers[name]
@@ -333,16 +390,18 @@ async function handleMedia(request, response, url) {
     const [errorStatus, error] = MEDIA_ERRORS[status] || [502, 'media_unavailable']
     return json(response, errorStatus, { error })
   }
+  if (Number(upstream.headers.get('content-length') || 0) > maxBytes) {
+    upstream.body?.cancel().catch(() => {})
+    return json(response, 413, { error: 'document_too_large' })
+  }
   const outgoing = {
     // Le type vient de l’extension validée, jamais de la gateway : un image/svg+xml ne passe pas pour un .png.
     'Content-Type': target.contentType,
-    // L’URL porte l’identifiant du message (`v`) : un fichier réécrit sous le même nom revient avec une URL neuve.
-    'Cache-Control': 'private, max-age=600',
     'Content-Disposition': 'inline',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
+    ...policyHeaders,
   }
   for (const name of MEDIA_RELAYED_HEADERS) {
     const value = upstream.headers.get(name)
@@ -361,6 +420,74 @@ async function handleMedia(request, response, url) {
       console.warn(`Hermes media: ${error.code || error.name || 'stream_error'}`)
     }
   })
+}
+
+// Chat local isolé. Le modèle est fixé ici et seuls les messages partent : ce modèle sans refus n’a aucun
+// outil. Depuis un autre Mac, 127.0.0.1:11434 peut être un tunnel vers la machine d’Ollama.
+const OLLAMA_ORIGIN = process.env.OLLAMA_ORIGIN || 'http://127.0.0.1:11434'
+const LOCAL_CHAT_MODEL = 'huihui-qwen3.8-27b-abliterated:q4_k'
+const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
+
+function localChatMessages(body) {
+  if (!Array.isArray(body?.messages) || body.messages.length === 0 || body.messages.length > 400) return null
+  const messages = body.messages.map((message) => ({ role: message?.role, content: message?.content }))
+  return messages.every(({ role, content }) => (role === 'user' || role === 'assistant') && typeof content === 'string' && content) ? messages : null
+}
+
+async function handleLocalChat(request, response) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const messages = localChatMessages(await bodyJson(request, LOCAL_CHAT_MAX_BYTES))
+  if (!messages) return json(response, 400, { error: 'invalid_messages' })
+  const controller = new AbortController()
+  response.on('close', () => { if (!response.writableFinished) controller.abort() })
+  let upstream
+  try {
+    upstream = await fetch(`${OLLAMA_ORIGIN}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // Déchargé vite : la machine est partagée, et ce modèle occupe environ 18 Go de mémoire GPU.
+      body: JSON.stringify({ model: LOCAL_CHAT_MODEL, messages, stream: true, keep_alive: '2m', options: { num_ctx: 32768 } }),
+      signal: controller.signal,
+    })
+  } catch {
+    return json(response, 503, { error: 'local_model_unreachable' })
+  }
+  if (!upstream.ok || !upstream.body) {
+    upstream.body?.cancel().catch(() => {})
+    return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
+  }
+  response.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+  pipeline(Readable.fromWeb(upstream.body), response, (error) => {
+    if (error && !['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(error.code) && error.name !== 'AbortError') console.warn(`Chat local: ${error.code || error.name || 'stream_error'}`)
+  })
+}
+
+function handleBrowserVaultEvents(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  const unsubscribe = browserVault.subscribe((requests) => {
+    response.write(`data: ${JSON.stringify(requests)}\n\n`)
+  })
+  const heartbeat = setInterval(() => response.write(': keepalive\n\n'), 20_000)
+  heartbeat.unref()
+  response.on('close', () => { clearInterval(heartbeat); unsubscribe() })
+}
+
+async function handleBrowserVaultResponse(request, response, id) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  try {
+    await browserVault.respond(id, await bodyJson(request))
+    return json(response, 200, { ok: true })
+  } catch (error) {
+    const failure = vaultError(error)
+    return json(response, failure.status, { error: failure.code })
+  }
 }
 
 const MIME = {
@@ -419,7 +546,14 @@ const server = http.createServer(async (request, response) => {
   try {
     if (!localRequest(request)) return json(response, 403, { error: 'forbidden_origin' })
     const url = new URL(request.url || '/', `http://${HOST}:${PORT}`)
+    const browserVaultResponse = /^\/api\/browser-vault\/requests\/([A-Za-z0-9-]+)$/.exec(url.pathname)
 
+    if (url.pathname === '/api/browser-vault/events' && request.method === 'GET') {
+      return handleBrowserVaultEvents(request, response)
+    }
+    if (browserVaultResponse && request.method === 'POST') {
+      return await handleBrowserVaultResponse(request, response, browserVaultResponse[1])
+    }
     if (url.pathname === '/api/auth/providers' && request.method === 'GET') {
       return await proxyJson(response, await hermesFetch(request, '/api/auth/providers'))
     }
@@ -453,6 +587,16 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/media' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleMedia(request, response, url)
     }
+    if (url.pathname === '/api/document' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return await handleDocument(request, response, url)
+    }
+    if (url.pathname === '/api/local-chat' && request.method === 'POST') {
+      return await handleLocalChat(request, response)
+    }
+    if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
+      if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+      return json(response, 200, { owner: await readBrowserOwner() })
+    }
     if (url.pathname === '/api/health') {
       return json(response, 200, { ok: true, service: 'hermes-bot' })
     }
@@ -471,8 +615,11 @@ function isRelayableCloseCode(code) {
   return Number.isInteger(code) && ((code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999))
 }
 
+// `file.attach` envoie le fichier en base64 dans une trame : même plafond que la gateway (384 Mio).
+const WS_MAX_PAYLOAD = 384 * 1024 * 1024
 const wss = new WebSocketServer({
   noServer: true,
+  maxPayload: WS_MAX_PAYLOAD,
   handleProtocols: () => 'hermes-gateway-v1',
 })
 
@@ -499,6 +646,7 @@ server.on('upgrade', async (request, socket, head) => {
     ], {
       headers: { Origin: HERMES_BROWSER_ORIGIN },
       handshakeTimeout: 20_000,
+      maxPayload: WS_MAX_PAYLOAD,
     })
 
     wss.handleUpgrade(request, socket, head, (browser) => {
@@ -547,19 +695,24 @@ if (DEVELOPMENT) {
   })
 }
 
-export const listening = new Promise((resolve, reject) => {
+const mainListening = new Promise((resolve, reject) => {
   server.once('listening', resolve)
   server.once('error', reject)
 })
+const browserVaultListening = browserVault.listen()
+export const listening = Promise.all([mainListening, browserVaultListening]).then(() => undefined)
 
 server.listen(PORT, HOST, () => {
   console.log(`HermesBot: http://${HOST}:${PORT} (${DEVELOPMENT ? 'dev' : 'production'})`)
+  console.log(`Coffre navigateur: http://${HOST}:${BROWSER_VAULT_PORT}`)
 })
 
 async function shutdown() {
   wss.clients.forEach((client) => client.close(1001, 'server_shutdown'))
+  const vaultClosing = browserVault.close()
   if (vite) await vite.close()
-  server.close(() => process.exit(0))
+  server.close(async () => { await vaultClosing; process.exit(0) })
+  server.closeAllConnections()
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)

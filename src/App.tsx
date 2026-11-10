@@ -1,21 +1,39 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption, Routine, SessionUsage } from './types'
-import { HermesClient, interruptChat, isSilentMessage, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, openChat, parseUsage, submitPrompt, switchModel, type ActiveChat, type ServerRequest } from './lib/hermes'
+import { attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parseUsage, steerChat, submitPrompt, switchModel, type ActiveChat, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { applyWorkEvent, workLine, type WorkSummary } from './lib/work-summary'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
-import { demoBots, demoMessages, demoRoutines, demoWork } from './lib/demo'
+import { demoBots, demoMessages, demoRoutines, demoUsageDetails, demoWork } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
-import { DetailsPanel } from './components/DetailsPanel'
-import { Login, Logo } from './components/Login'
+import { CommandPalette } from './components/CommandPalette'
+import { BOT_RAIL_TAB, DetailsPanel } from './components/DetailsPanel'
+import type { OpenDocument } from './components/DocumentView'
+import type { UsageDetails } from './components/UsageTab'
+import { Login } from './components/Login'
+import { LoadingScreen } from './components/LoadingScreen'
+import { LocalChatView } from './components/LocalChatView'
 import { ServerRequestDialog } from './components/ServerRequestDialog'
-import type { PendingImage } from './components/Composer'
+import { BrowserVaultDialog } from './components/BrowserVaultDialog'
+import { respondBrowserVault, subscribeBrowserVaultRequests, type BrowserVaultRequest } from './lib/browser-vault'
+import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
+import { withMentionNote } from './lib/mentions'
+import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
+import { modeApiText, type ChatMode } from './lib/modes'
+import { LOCAL_CHAT_BOT, LOCAL_CHAT_SLUG } from './lib/local-chat'
+import type { MediaRef } from './lib/media'
+import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
+import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
+const MAX_OPEN_DOCUMENTS = 8
+/** Lecture des tours de tous les bots. Hermes Desktop relit son roster toutes les 5 s. */
+const LIVE_STATUS_MS = 6_000
+const asText = (value: unknown) => typeof value === 'string' ? value : ''
 
 interface ChatCacheEntry {
   chat: ActiveChat
@@ -27,17 +45,11 @@ function latestMessageTime(messages: ChatMessage[]) {
   return messages.reduce((latest, message) => Math.max(latest, message.createdAt ? Date.parse(message.createdAt) : 0), 0)
 }
 
-function preferredDark() {
-  try {
-    const saved = localStorage.getItem('hermesbot-theme')
-    if (saved) return saved === 'dark'
-  } catch { /* storage indisponible */ }
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
-}
+const systemPrefersDark = () => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
 
 /** Bascule de thème en révélation circulaire depuis le bouton (View Transitions), instantanée sinon. */
 function revealTheme(dark: boolean, apply: () => void, origin?: { x: number; y: number }) {
-  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  const reduced = getSettings().reduceMotion || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   const start = (document as Document & { startViewTransition?: (callback: () => void) => { ready: Promise<void> } }).startViewTransition
   const commit = () => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
@@ -69,6 +81,8 @@ export default function App() {
   const initializedRef = useRef(false)
 
   const [auth, setAuth] = useState<'checking' | 'login' | 'ready'>(DEMO ? 'ready' : 'checking')
+  // Tant que le roster n’a pas répondu, une liste vide veut dire « pas encore », pas « aucun bot ».
+  const [rosterLoaded, setRosterLoaded] = useState(DEMO)
   const [authError, setAuthError] = useState('')
   const [bots, setBots] = useState<Bot[]>(DEMO ? demoBots : [])
   const [selected, setSelected] = useState(DEMO ? 'nova' : '')
@@ -83,23 +97,33 @@ export default function App() {
   const [reconnecting, setReconnecting] = useState(false)
   const reconnectingRef = useRef(false)
   const [serverRequests, setServerRequests] = useState<ServerRequest[]>([])
+  const [browserVaultRequests, setBrowserVaultRequests] = useState<BrowserVaultRequest[]>([])
   const workRef = useRef(new Map<string, WorkSummary>())
   const workSeqRef = useRef(new Map<string, number>())
   const [workSummaries, setWorkSummaries] = useState<Record<string, WorkSummary>>(DEMO ? demoWork : {})
   const [detailsOpen, setDetailsOpen] = useState(() => window.innerWidth >= 1180)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [dark, setDark] = useState(preferredDark)
+  const settings = useSettings()
+  const { showUsage } = settings
+  const [systemDark, setSystemDark] = useState(systemPrefersDark)
+  const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
   const [focusSignal, setFocusSignal] = useState(0)
   const [notice, setNotice] = useState('')
   const [chatModel, setChatModel] = useState('')
   const [usage, setUsage] = useState<SessionUsage | null>(null)
-  const [showUsage, setShowUsage] = useState(() => {
-    try { return localStorage.getItem('hermesbot-show-usage') === '1' } catch { return false }
-  })
   const [modelQuery, setModelQuery] = useState<string | null>(null)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState('')
+  const [documents, setDocuments] = useState<OpenDocument[]>([])
+  const [railTab, setRailTab] = useState(BOT_RAIL_TAB)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [localOpen, setLocalOpen] = useState(false)
+  const localOpenRef = useRef(false)
+  // Montée à la première ouverture, puis gardée : une réponse continue pendant qu’on regarde un autre bot.
+  const [localStarted, setLocalStarted] = useState(false)
+  const [localRunning, setLocalRunning] = useState(false)
 
   const setStreaming = (value: string | ((current: string) => string)) => {
     const next = typeof value === 'function' ? value(streamingRef.current) : value
@@ -145,6 +169,11 @@ export default function App() {
     const cached = chatCacheRef.current.get(profile)
     if (cached) chatCacheRef.current.set(profile, { ...cached, messages: [...cached.messages, message] })
   }
+  /** Un tour suivi en direct sur ce socket : ses événements disent eux-mêmes quand il finit. */
+  const followedLive = (slug: string) => {
+    const cached = chatCacheRef.current.get(slug)?.chat
+    return Boolean(cached?.running && cached.socketGeneration === client.generation)
+  }
 
   useEffect(() => {
     selectedRef.current = selected
@@ -157,8 +186,22 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-    try { localStorage.setItem('hermesbot-theme', dark ? 'dark' : 'light') } catch { /* storage indisponible */ }
   }, [dark])
+
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!query) return
+    const update = () => setSystemDark(query.matches)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.textSize = settings.textSize
+    if (settings.reduceMotion) root.dataset.motion = 'reduce'
+    else delete root.dataset.motion
+  }, [settings.textSize, settings.reduceMotion])
 
   useEffect(() => {
     if (DEMO) return
@@ -173,6 +216,18 @@ export default function App() {
       }
       const workOwner = isCurrent && current ? current.profile : event.session_id ? botsRef.current.find((bot) => bot.sessionId === event.session_id)?.slug : undefined
       if (workOwner) applyWork(workOwner, event)
+      // « Orion messaged Iris » : appel `message_agent` en direct, ou tour lancé par le message d’un autre bot.
+      const agentNotes = workOwner ? agentChatMessages(
+        agentMessagesFromEvent(event.type, payload, workOwner),
+        `live-${asText(payload.tool_id) || asText(payload.turn_id) || Date.now()}`,
+        new Date().toISOString(),
+      ) : []
+      if (workOwner && agentNotes.length) {
+        const fresh = (items: ChatMessage[]) => agentNotes.filter((note) => !items.some((item) => item.id === note.id))
+        if (isCurrent) setMessages((items) => [...items, ...fresh(items)])
+        const cached = chatCacheRef.current.get(workOwner)
+        if (cached) chatCacheRef.current.set(workOwner, { ...cached, messages: [...cached.messages, ...fresh(cached.messages)] })
+      }
       // Un bot déjà ouvert qui démarre un tour en arrière-plan passe « au travail » tout de suite,
       // sans attendre la relecture du roster (30 s). Le cache n’est pas marqué : si la fin du tour
       // se perdait, la relecture suivante remettrait le bon statut au lieu de le figer.
@@ -207,10 +262,13 @@ export default function App() {
       }
       if (!isCurrent || !current) return
       if (event.type === 'session.usage') {
-        const next = parseUsage(payload.usage)
-        if (next) setUsage(next)
+        // Le cache lu n’existe que dans les compteurs de la trame, pas dans sa vue `usage`.
+        const next = parseUsage({ ...payload, ...(payload.usage as object | undefined) })
+        if (next) setUsage((value) => mergeUsage(value, next))
       }
       if (event.type === 'message.start') {
+        // `session.steer` et `session.interrupt` visent ce tour-ci, pas le précédent.
+        if (event.execution_generation) activeChatRef.current = { ...current, executionGeneration: event.execution_generation }
         setStreamKey(`turn-${typeof payload.turn_id === 'string' && payload.turn_id ? payload.turn_id : 'tour'}-${Date.now()}`)
         clearDoneTimer(current.profile)
         setRunning(true)
@@ -230,7 +288,7 @@ export default function App() {
       if (event.type === 'message.complete') {
         const status = typeof payload.status === 'string' ? payload.status : 'complete'
         const finalUsage = parseUsage(payload.usage)
-        if (finalUsage) setUsage(finalUsage)
+        if (finalUsage) setUsage((value) => mergeUsage(value, finalUsage))
         const finalText = typeof payload.text === 'string' && payload.text.trim() ? payload.text : streamingRef.current
         if (finalText.trim() && !isSilentMessage(finalText)) {
           const message: ChatMessage = {
@@ -273,6 +331,46 @@ export default function App() {
 
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
+    return subscribeBrowserVaultRequests(setBrowserVaultRequests)
+  }, [auth])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen((value) => !value)
+      } else if (event.metaKey && !event.shiftKey && !event.altKey && event.key === ',') {
+        event.preventDefault()
+        setSettingsTab((tab) => tab ? null : 'general')
+      } else if (event.altKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        // L’ordre affiché dépend du tri et des sections repliées : le roster à l’écran fait foi.
+        const rows = [...document.querySelectorAll<HTMLElement>('[data-bot]')]
+        if (!rows.length) return
+        event.preventDefault()
+        const current = localOpenRef.current ? LOCAL_CHAT_SLUG : selectedRef.current
+        const at = rows.findIndex((row) => row.dataset.bot === current)
+        const target = rows[(at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]
+        const bot = target.dataset.bot === LOCAL_CHAT_SLUG ? LOCAL_CHAT_BOT : botsRef.current.find((item) => item.slug === target.dataset.bot)
+        if (bot) selectBot(bot)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Un fichier lâché hors du chat ne doit pas remplacer l’app par son contenu.
+  useEffect(() => {
+    const keepApp = (event: DragEvent) => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault() }
+    window.addEventListener('dragover', keepApp)
+    window.addEventListener('drop', keepApp)
+    return () => {
+      window.removeEventListener('dragover', keepApp)
+      window.removeEventListener('drop', keepApp)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (DEMO || auth !== 'ready') return
     const timer = setInterval(() => {
       if (document.hidden) return
       loadRoster(client).then((roster) => {
@@ -280,6 +378,41 @@ export default function App() {
       }).catch(() => { /* la connexion est signalée par le pied de la sidebar */ })
     }, 30_000)
     return () => clearInterval(timer)
+  }, [auth, client])
+
+  // Tours de chaque bot, profil par profil : un bot réveillé par un autre bot passe « Au travail » en
+  // quelques secondes, sans attendre la relecture du roster ni l’ouverture de son chat. `sessions.changed`
+  // avance la lecture suivante.
+  useEffect(() => {
+    if (DEMO || auth !== 'ready') return
+    let busy = false
+    let lastPoll = 0
+    const poll = () => {
+      if (busy || document.hidden || botsRef.current.length === 0) return
+      busy = true
+      lastPoll = Date.now()
+      loadLiveStatuses(client, botsRef.current.filter((bot) => bot.sessionId).map((bot) => bot.slug)).then(({ statuses, answered }) => {
+        for (const bot of botsRef.current) {
+          if (!bot.sessionId || !answered.has(bot.slug)) continue
+          const live = liveTurnStatus(statuses.get(bot.sessionId))
+          const busyNow = bot.status === 'working' || bot.status === 'thinking'
+          if (live === 'working' && !busyNow) {
+            clearDoneTimer(bot.slug)
+            updateBot(bot.slug, { status: 'working' })
+          } else if (live === 'waiting' && bot.status !== 'waiting') {
+            clearDoneTimer(bot.slug)
+            updateBot(bot.slug, { status: 'waiting' })
+          } else if (live === 'idle' && (busyNow || bot.status === 'waiting') && !bot.workerActive && !bot.browserOwner && !followedLive(bot.slug)) {
+            markDone(bot.slug)
+          }
+        }
+      }).finally(() => { busy = false })
+    }
+    const timer = setInterval(poll, LIVE_STATUS_MS)
+    const unsubscribe = client.onEvent((event) => {
+      if (event.type === 'sessions.changed' && Date.now() - lastPoll > 2_000) poll()
+    })
+    return () => { clearInterval(timer); unsubscribe() }
   }, [auth, client])
 
   useEffect(() => {
@@ -311,7 +444,6 @@ export default function App() {
   }, [auth, client])
 
   useEffect(() => {
-    try { localStorage.setItem('hermesbot-show-usage', showUsage ? '1' : '0') } catch { /* storage indisponible */ }
     const chat = activeChatRef.current
     if (!showUsage || !chat || DEMO) return
     loadUsage(client, chat).then((next) => {
@@ -321,6 +453,7 @@ export default function App() {
 
   const initialize = async () => {
     setAuthError('')
+    setRosterLoaded(false)
     try {
       await client.connect()
       const roster = await loadRoster(client)
@@ -333,6 +466,8 @@ export default function App() {
     } catch (error) {
       setConnected(false)
       setNotice(error instanceof Error ? error.message : 'Connexion à Hermes impossible.')
+    } finally {
+      setRosterLoaded(true)
     }
   }
 
@@ -382,6 +517,7 @@ export default function App() {
       setAuthError(response.status === 401 ? 'Identifiant ou mot de passe incorrect.' : 'La gateway refuse la connexion.')
       return
     }
+    setRosterLoaded(false)
     setAuth('ready')
     await reconnect()
   }
@@ -460,6 +596,7 @@ export default function App() {
     } finally {
       reconnectingRef.current = false
       setReconnecting(false)
+      setRosterLoaded(true)
     }
   }
 
@@ -494,6 +631,19 @@ export default function App() {
   }, [selected, client])
 
   const selectBot = (bot: Bot) => {
+    const wasLocal = localOpenRef.current
+    localOpenRef.current = bot.slug === LOCAL_CHAT_SLUG
+    setLocalOpen(localOpenRef.current)
+    if (localOpenRef.current) {
+      setLocalStarted(true)
+      setMobileOpen(false)
+      setFocusSignal((value) => value + 1)
+      return
+    }
+    if (wasLocal && selectedRef.current === bot.slug) {
+      setMobileOpen(false)
+      return
+    }
     if (selectedRef.current === bot.slug) {
       setMobileOpen(false)
       setFocusSignal((value) => value + 1)
@@ -525,29 +675,18 @@ export default function App() {
     }
   }
 
-  const attachImage = async (chat: ActiveChat, image: PendingImage) => {
-    const [header, data] = image.dataUrl.split(',')
-    const mime = header.match(/data:([^;]+)/)?.[1] || 'image/png'
-    const result = await client.request('image.attach_bytes', {
-      profile: chat.profile,
-      session_id: chat.sessionId,
-      content_base64: data,
-      filename: image.name,
-    })
-    return { path: result.path, mime: result.mime || mime }
-  }
-
-  const send = async (text: string, images: PendingImage[]) => {
+  // Sans mode explicite (carte de mail, suggestions), le tour est un tour normal : un mail validé doit partir.
+  const send = async (text: string, attachments: PendingAttachment[], mode: ChatMode = 'exec'): Promise<boolean> => {
     const now = new Date().toISOString()
     if (DEMO) {
       setMessages((items) => [...items,
         { id: `demo-user-${Date.now()}`, role: 'user', content: text, createdAt: now },
         { id: `demo-answer-${Date.now()}`, role: 'assistant', content: 'Mode démo visuel : connecte-toi à Hermes pour recevoir une vraie réponse.', createdAt: new Date().toISOString() },
       ])
-      return
+      return true
     }
     let chat = activeChatRef.current
-    if (!chat || chat.profile !== selected || running) return
+    if (!chat || chat.profile !== selected) return false
     // Un socket neuf n’est abonné à rien : sans reprise, prompt.submit répond permission_denied.
     try {
       await client.connect()
@@ -558,35 +697,105 @@ export default function App() {
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Connexion à Hermes impossible.')
-      return
+      return false
     }
-    const content = [text, ...images.map((image) => `[Image : ${image.name}]`)].join('\n\n')
+    const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
     clearDoneTimer(selected)
     const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now }
     setMessages((items) => [...items, userMessage])
     appendCachedMessage(selected, userMessage)
+    if (running) return steerTurn(chat, text, userMessage, mode)
     updateCachedChat(selected, { running: true })
     updateBot(selected, { preview: text, timestamp: now, status: 'working' })
     setRunning(true)
     setActivity('')
     try {
-      const attachments = []
-      for (const image of images) attachments.push(await attachImage(chat, image))
-      await submitPrompt(client, chat, text, attachments)
+      const images: { path: string; mime: string }[] = []
+      const fileRefs: string[] = []
+      for (const attachment of attachments) {
+        setActivity(`Envoi de ${attachment.name}…`)
+        const dataUrl = await readDataUrl(attachment.file)
+        if (attachment.kind === 'image') images.push(await attachImageBytes(client, chat, attachment.name, dataUrl))
+        else fileRefs.push(await attachFile(client, chat, attachment.name, dataUrl))
+      }
+      setActivity('')
+      const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), botsRef.current, chat.profile)
+      await submitPrompt(client, chat, prompt, images, { apiText: modeApiText(prompt, mode) })
       activeChatRef.current = { ...chat, running: true }
+      return true
     } catch (error) {
       setRunning(false)
       updateCachedChat(selected, { running: false })
       updateBot(selected, { status: 'idle' })
-      // Un mail approuvé dont l’envoi au bot échoue doit redevenir une carte à valider.
-      const markFailed = (items: ChatMessage[]) => items.map((item) => item.id === userMessage.id ? { ...item, failed: true } : item)
-      setMessages(markFailed)
-      const cachedChat = chatCacheRef.current.get(selected)
-      if (cachedChat) chatCacheRef.current.set(selected, { ...cachedChat, messages: markFailed(cachedChat.messages) })
-      const message: ChatMessage = { id: `error-${Date.now()}`, role: 'system', content: 'Le message n’a pas été envoyé. Vérifie la connexion avant de réessayer.', createdAt: new Date().toISOString() }
-      setMessages((items) => [...items, message])
-      appendCachedMessage(selected, message)
-      setNotice(error instanceof Error ? error.message : 'Échec de l’envoi.')
+      setActivity('')
+      markSendFailed(selected, userMessage, error)
+      return false
+    }
+  }
+
+  const markSendFailed = (profile: string, userMessage: ChatMessage, error: unknown) => {
+    // Un mail approuvé dont l’envoi au bot échoue doit redevenir une carte à valider.
+    const markFailed = (items: ChatMessage[]) => items.map((item) => item.id === userMessage.id ? { ...item, failed: true } : item)
+    setMessages(markFailed)
+    const cachedChat = chatCacheRef.current.get(profile)
+    if (cachedChat) chatCacheRef.current.set(profile, { ...cachedChat, messages: markFailed(cachedChat.messages) })
+    const message: ChatMessage = { id: `error-${Date.now()}`, role: 'system', content: 'Le message n’a pas été envoyé. Vérifie la connexion avant de réessayer.', createdAt: new Date().toISOString() }
+    setMessages((items) => [...items, message])
+    appendCachedMessage(profile, message)
+    setNotice(error instanceof Error ? error.message : 'Échec de l’envoi.')
+  }
+
+  /** Message écrit pendant que le bot travaille : il rejoint le tour en cours, sinon il devient le suivant. */
+  const steerTurn = async (chat: ActiveChat, text: string, userMessage: ChatMessage, mode: ChatMode) => {
+    try {
+      const prompt = withMentionNote(text, botsRef.current, chat.profile)
+      const verdict = await steerChat(client, chat, prompt)
+      if (verdict === 'undelivered') await submitPrompt(client, chat, prompt, [], { queued: true, apiText: modeApiText(prompt, mode) })
+      if (verdict === 'unknown') throw new Error('Hermes n’a pas pris ce message. Renvoie-le à la fin du tour.')
+      return true
+    } catch (error) {
+      markSendFailed(chat.profile, userMessage, error)
+      return false
+    }
+  }
+
+  const openDocument = useCallback((profile: string, media: MediaRef) => {
+    const id = `${profile}\n${media.path}`
+    setDocuments((items) => items.some((item) => item.id === id)
+      ? items.map((item) => item.id === id ? { ...item, revision: item.revision + 1 } : item)
+      : [...items, { id, profile, path: media.path, name: media.name, revision: 0 }].slice(-MAX_OPEN_DOCUMENTS))
+    setRailTab(id)
+    setDetailsOpen(true)
+  }, [])
+
+  const closeDocument = (id: string) => {
+    const remaining = documents.filter((item) => item.id !== id)
+    setDocuments(remaining)
+    setRailTab((current) => current === id ? remaining.at(-1)?.id ?? BOT_RAIL_TAB : current)
+  }
+
+  const reloadDocument = (id: string) => {
+    setDocuments((items) => items.map((item) => item.id === id ? { ...item, revision: item.revision + 1 } : item))
+  }
+
+  const openBot = useCallback((slug: string) => {
+    const bot = botsRef.current.find((item) => item.slug === slug)
+    if (bot) selectBot(bot)
+  }, [])
+
+  /** Trois lectures indépendantes : une gateway qui n’en connaît qu’une partie affiche quand même le reste. */
+  const loadUsageDetails = async (): Promise<UsageDetails> => {
+    if (DEMO) return demoUsageDetails
+    const chat = activeChatRef.current
+    const [usageResult, contextResult, historyResult] = await Promise.allSettled([
+      chat ? loadUsage(client, chat) : Promise.resolve(null),
+      chat ? loadContextBreakdown(client, chat) : Promise.resolve(null),
+      loadUsageHistory(selectedRef.current),
+    ])
+    return {
+      usage: usageResult.status === 'fulfilled' ? usageResult.value : null,
+      context: contextResult.status === 'fulfilled' ? contextResult.value : null,
+      history: historyResult.status === 'fulfilled' ? historyResult.value : null,
     }
   }
 
@@ -604,8 +813,18 @@ export default function App() {
     }
   }
 
+  const chooseTheme = (theme: ThemeChoice, origin?: { x: number; y: number }) => {
+    const nextDark = theme === 'system' ? systemDark : theme === 'dark'
+    if (nextDark === dark) updateSettings({ theme })
+    else revealTheme(nextDark, () => updateSettings({ theme }), origin)
+  }
+
   const openModels = (query: string) => {
     setModelQuery(query)
+    refreshModels()
+  }
+
+  const refreshModels = () => {
     if (DEMO) return
     setModelsLoading(true)
     setModelsError('')
@@ -650,22 +869,31 @@ export default function App() {
     }
   }
 
+  const answerBrowserVault = async (id: string, body: Record<string, unknown>) => {
+    await respondBrowserVault(id, body)
+    setBrowserVaultRequests((items) => items.filter((item) => item.id !== id))
+  }
+
   const selectedBot = bots.find((bot) => bot.slug === selected) || bots[0]
+  const localBot: Bot = { ...LOCAL_CHAT_BOT, status: localRunning ? 'working' : 'idle' }
+  const rosterBots = DEMO ? bots : [...bots, localBot]
   const openRequest = serverRequests[0]
+  const openBrowserVaultRequest = browserVaultRequests[0]
 
   if (auth === 'checking') {
-    return <div className="app-loading"><Logo /><p>Ouverture de HermesBot…</p></div>
+    return <LoadingScreen label="Ouverture de HermesBot…" />
   }
   if (auth === 'login') return <Login onLogin={login} error={authError || notice} />
   if (!selectedBot) {
+    if (!rosterLoaded) return <LoadingScreen label="Chargement de tes bots…" />
     return <div className="app-loading"><p>Aucun bot à afficher.</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? 'Reconnexion…' : 'Reconnecter Hermes'}</button></div>
   }
 
   return (
     <div className="app-shell">
       <Sidebar
-        bots={bots}
-        selected={selectedBot.slug}
+        bots={rosterBots}
+        selected={localOpen ? LOCAL_CHAT_SLUG : selectedBot.slug}
         connected={connected}
         reconnecting={reconnecting}
         onReconnect={reconnect}
@@ -676,10 +904,13 @@ export default function App() {
         onCloseMobile={() => setMobileOpen(false)}
         onSelect={selectBot}
         onNewMessage={() => { setFocusSignal((value) => value + 1); setMobileOpen(false) }}
-        onToggleTheme={(origin) => revealTheme(!dark, () => setDark(!dark), origin)}
+        onToggleTheme={(origin) => chooseTheme(dark ? 'light' : 'dark', origin)}
+        onOpenSettings={() => setSettingsTab('general')}
       />
       <ChatView
+        hidden={localOpen}
         bot={selectedBot}
+        bots={bots}
         messages={messages}
         streaming={streaming}
         streamKey={streamKey}
@@ -693,14 +924,17 @@ export default function App() {
         onToggleDetails={() => setDetailsOpen((value) => !value)}
         onSend={send}
         onStop={stop}
+        onNotice={setNotice}
+        onOpenDocument={openDocument}
+        onOpenBot={openBot}
         modelLabel={modelLabel(chatModel || selectedBot.model)}
         onOpenModels={openModels}
         usage={usage}
         showUsage={showUsage}
-        onToggleUsage={() => setShowUsage((value) => !value)}
+        onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
-            options={modelOptions}
+            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model])}
             current={chatModel || selectedBot.model}
             profileModel={selectedBot.model}
             loading={modelsLoading}
@@ -708,11 +942,49 @@ export default function App() {
             initialQuery={modelQuery}
             onSelect={selectModel}
             onClose={() => setModelQuery(null)}
+            onManage={() => { setModelQuery(null); setSettingsTab('models') }}
           />
         ) : undefined}
       />
-      {detailsOpen && <DetailsPanel bot={selectedBot} work={workSummaries[selectedBot.slug]} routines={routines} messages={messages} loading={routinesLoading} onClose={() => setDetailsOpen(false)} />}
+      {localStarted && <LocalChatView bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} />}
+      {detailsOpen && !localOpen && (
+        <DetailsPanel
+          bot={selectedBot}
+          work={workSummaries[selectedBot.slug]}
+          routines={routines}
+          messages={messages}
+          loading={routinesLoading}
+          running={running}
+          usage={usage}
+          loadUsageDetails={loadUsageDetails}
+          onOpenDocument={openDocument}
+          documents={documents}
+          railTab={railTab}
+          onSelectRailTab={setRailTab}
+          onCloseDocument={closeDocument}
+          onReloadDocument={reloadDocument}
+          onClose={() => setDetailsOpen(false)}
+        />
+      )}
       {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={bots.find((bot) => bot.sessionId === openRequest.params.session_id)?.name || selectedBot.name} onAnswer={answerServerRequest} />}
+      {openBrowserVaultRequest && <BrowserVaultDialog key={openBrowserVaultRequest.id} request={openBrowserVaultRequest} botName={bots.find((bot) => bot.slug === openBrowserVaultRequest.bot)?.name || openBrowserVaultRequest.bot} onRespond={answerBrowserVault} />}
+      {paletteOpen && <CommandPalette bots={rosterBots} onSelect={(bot) => { setPaletteOpen(false); selectBot(bot) }} onClose={() => setPaletteOpen(false)} />}
+      {settingsTab && (
+        <SettingsDialog
+          tab={settingsTab}
+          onSelectTab={setSettingsTab}
+          onClose={() => setSettingsTab(null)}
+          onChooseTheme={chooseTheme}
+          models={modelOptions}
+          modelsLoading={modelsLoading}
+          modelsError={modelsError}
+          onLoadModels={refreshModels}
+          connected={connected}
+          reconnecting={reconnecting}
+          onReconnect={reconnect}
+          onLogout={logout}
+        />
+      )}
       {notice && <div className="toast" role="status"><AlertCircle size={17} /><span>{notice}</span><button aria-label="Fermer" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {DEMO && <div className="demo-badge">Démo visuelle</div>}
     </div>

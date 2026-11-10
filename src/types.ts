@@ -5,6 +5,7 @@ export interface ModelOverride {
 
 export interface ModelOption extends ModelOverride {
   providerName: string
+  tag?: string
   inputPrice?: string
   outputPrice?: string
 }
@@ -17,6 +18,42 @@ export interface SessionUsage {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+  // Absents de certaines trames : une valeur manquante ne remplace jamais la dernière connue.
+  reasoningTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  apiCalls?: number
+  compressions?: number
+  cacheHitPercent?: number
+  averageLatency?: number
+  activeSubagents?: number
+  lastTurnTokens?: number
+  costUsd?: number
+  contextEstimated?: boolean
+  model?: string
+  provider?: string
+  plan?: { label: string; usedPercent: number; resetsAt: number | null }
+}
+
+export interface ContextBreakdown {
+  used: number
+  max: number
+  estimated: boolean
+  categories: { id: string; label: string; tokens: number }[]
+  files: { label: string; tokens: number; loaded: boolean }[]
+}
+
+export interface UsageHistory {
+  days: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  reasoningTokens: number
+  costUsd: number
+  sessions: number
+  apiCalls: number
+  daily: { day: string; tokens: number; costUsd: number }[]
+  models: { model: string; tokens: number; costUsd: number }[]
 }
 
 export type BotStatus = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done'
@@ -41,6 +78,8 @@ export interface Bot {
   workerActive?: boolean
   /** Titre de ce worker, quand il tourne. */
   workTitle?: string
+  /** Le bot détient le Chrome partagé (arbitre local) : au travail même sans tour Hermes. */
+  browserOwner?: boolean
   unread: number
   hidden: boolean
   avatar?: {
@@ -60,6 +99,20 @@ export interface ChatMessage {
   technical?: boolean
   /** Réponse en cours d’écriture : le message final reprend le même identifiant. */
   streaming?: boolean
+  /** Message entre deux bots (`message_agent`) : une ligne « Orion messaged Iris » dans le fil. */
+  agent?: AgentMessage
+}
+
+export interface AgentMessage {
+  /** `message` : envoi ; `reply` : réponse renvoyée à l’envoyeur ; `no-reply` : pas de réponse, avec la raison. */
+  kind: 'message' | 'reply' | 'no-reply'
+  /** Profil, nom ou tag tel que Hermes l’écrit : l’interface le résout avec le roster. */
+  from: string
+  /** Nom affiché par Hermes pour l’envoyeur, si le roster ne le connaît pas. */
+  fromName?: string
+  to: string
+  /** Message, réponse, ou raison donnée par Hermes quand le bot n’a pas répondu. */
+  text: string
 }
 
 export interface Routine {
