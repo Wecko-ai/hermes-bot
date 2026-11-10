@@ -5,8 +5,6 @@ import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
 import { randomBytes } from 'node:crypto'
-import { createBrowserVault } from './browser-vault/service.mjs'
-import { vaultError } from './browser-vault/errors.mjs'
 import { readBrowserOwner } from './browser-turn.mjs'
 
 const HOST = '127.0.0.1'
@@ -56,12 +54,11 @@ const SESSION_MAX_AGE = 30 * 24 * 60 * 60
 const sessions = new Map()
 const persistence = globalThis.__hermesBotSessionPersistence
 const credentialStore = globalThis.__hermesBotCredentialStore
+// Coffre du Chrome partagé : service à part sur la machine des bots (LaunchAgent), qui seul lit le trousseau.
+// Depuis un autre Mac, l’app le joint par son tunnel SSH, sur le même port local.
 const BROWSER_VAULT_PORT = Number(process.env.BROWSER_VAULT_PORT || 4331)
 if (!Number.isInteger(BROWSER_VAULT_PORT) || BROWSER_VAULT_PORT < 1 || BROWSER_VAULT_PORT > 65535) throw new Error('BROWSER_VAULT_PORT invalide')
-const browserVault = createBrowserVault({
-  port: BROWSER_VAULT_PORT,
-  cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || 'http://127.0.0.1:9222',
-})
+const BROWSER_VAULT_ORIGIN = `http://127.0.0.1:${BROWSER_VAULT_PORT}`
 
 function restoreSessions() {
   if (!persistence) return
@@ -463,6 +460,35 @@ async function handleLocalChat(request, response) {
   })
 }
 
+/** Appel à l’API d’administration du coffre. Service absent : 503 `vault_service_unavailable`. */
+async function vaultAdmin(pathname, body) {
+  try {
+    const response = await fetch(`${BROWSER_VAULT_ORIGIN}${pathname}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      // Une demande de code attend l’injection CDP : jusqu’à une minute.
+      signal: AbortSignal.timeout(65_000),
+    })
+    const result = await response.json().catch(() => ({}))
+    return { status: response.status, body: result && typeof result === 'object' ? result : {} }
+  } catch {
+    return { status: 503, body: { error: 'vault_service_unavailable' } }
+  }
+}
+
+// Une seule lecture des demandes en attente pour toutes les fenêtres ouvertes, toutes les 1,5 s.
+const vaultListeners = new Set()
+let vaultSnapshot = '[]'
+let vaultPoll = null
+async function pollVaultRequests() {
+  const { status, body } = await vaultAdmin('/admin/v1/requests')
+  const next = JSON.stringify(status === 200 && Array.isArray(body.requests) ? body.requests : [])
+  if (next === vaultSnapshot) return
+  vaultSnapshot = next
+  vaultListeners.forEach((listener) => listener(next))
+}
+
 function handleBrowserVaultEvents(request, response) {
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   response.writeHead(200, {
@@ -470,24 +496,31 @@ function handleBrowserVaultEvents(request, response) {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
-  const unsubscribe = browserVault.subscribe((requests) => {
-    response.write(`data: ${JSON.stringify(requests)}\n\n`)
-  })
+  const listener = (snapshot) => response.write(`data: ${snapshot}\n\n`)
+  vaultListeners.add(listener)
+  listener(vaultSnapshot)
+  if (!vaultPoll) {
+    vaultPoll = setInterval(() => { pollVaultRequests().catch(() => undefined) }, 1500)
+    vaultPoll.unref()
+    pollVaultRequests().catch(() => undefined)
+  }
   const heartbeat = setInterval(() => response.write(': keepalive\n\n'), 20_000)
   heartbeat.unref()
-  response.on('close', () => { clearInterval(heartbeat); unsubscribe() })
+  response.on('close', () => {
+    clearInterval(heartbeat)
+    vaultListeners.delete(listener)
+    if (!vaultListeners.size && vaultPoll) { clearInterval(vaultPoll); vaultPoll = null }
+  })
 }
 
-async function handleBrowserVaultResponse(request, response, id) {
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+/** Fenêtre de l’app vers le coffre : session et origine locale exigées, comme pour Hermes. */
+async function handleBrowserVaultAdmin(request, response, pathname) {
+  if (request.method === 'POST' && !LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  try {
-    await browserVault.respond(id, await bodyJson(request))
-    return json(response, 200, { ok: true })
-  } catch (error) {
-    const failure = vaultError(error)
-    return json(response, failure.status, { error: failure.code })
-  }
+  const body = request.method === 'POST' ? await bodyJson(request) : undefined
+  const result = await vaultAdmin(pathname, body)
+  if (pathname.startsWith('/admin/v1/requests/')) pollVaultRequests().catch(() => undefined)
+  return json(response, result.status, result.body)
 }
 
 const MIME = {
@@ -552,7 +585,13 @@ const server = http.createServer(async (request, response) => {
       return handleBrowserVaultEvents(request, response)
     }
     if (browserVaultResponse && request.method === 'POST') {
-      return await handleBrowserVaultResponse(request, response, browserVaultResponse[1])
+      return await handleBrowserVaultAdmin(request, response, `/admin/v1/requests/${browserVaultResponse[1]}`)
+    }
+    if (url.pathname === '/api/browser-vault/entries' && (request.method === 'GET' || request.method === 'POST')) {
+      return await handleBrowserVaultAdmin(request, response, '/admin/v1/entries')
+    }
+    if (url.pathname === '/api/browser-vault/entries/remove' && request.method === 'POST') {
+      return await handleBrowserVaultAdmin(request, response, '/admin/v1/entries/remove')
     }
     if (url.pathname === '/api/auth/providers' && request.method === 'GET') {
       return await proxyJson(response, await hermesFetch(request, '/api/auth/providers'))
@@ -699,19 +738,17 @@ const mainListening = new Promise((resolve, reject) => {
   server.once('listening', resolve)
   server.once('error', reject)
 })
-const browserVaultListening = browserVault.listen()
-export const listening = Promise.all([mainListening, browserVaultListening]).then(() => undefined)
+export const listening = mainListening
 
 server.listen(PORT, HOST, () => {
   console.log(`HermesBot: http://${HOST}:${PORT} (${DEVELOPMENT ? 'dev' : 'production'})`)
-  console.log(`Coffre navigateur: http://${HOST}:${BROWSER_VAULT_PORT}`)
 })
 
 async function shutdown() {
   wss.clients.forEach((client) => client.close(1001, 'server_shutdown'))
-  const vaultClosing = browserVault.close()
+  if (vaultPoll) clearInterval(vaultPoll)
   if (vite) await vite.close()
-  server.close(async () => { await vaultClosing; process.exit(0) })
+  server.close(() => process.exit(0))
   server.closeAllConnections()
 }
 process.on('SIGINT', shutdown)

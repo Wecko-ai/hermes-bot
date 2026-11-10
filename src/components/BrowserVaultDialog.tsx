@@ -49,7 +49,7 @@ export function BrowserVaultDialog({ request, botName, onRespond }: BrowserVault
         <p className="request-origin">{request.origin}</p>
         {saving && <label>Identifiant du site<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} required autoFocus disabled={busy} /></label>}
         <label>{saving ? 'Mot de passe du site' : 'Code de vérification'}<input type={saving ? 'password' : 'text'} value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete={saving ? 'new-password' : 'one-time-code'} inputMode={saving ? undefined : 'numeric'} autoCapitalize="none" spellCheck={false} required autoFocus={!saving} disabled={busy} /></label>
-        <p className="request-note"><ShieldCheck size={13} />{saving ? 'Chiffré avec le Trousseau macOS dans HermesBot. Jamais envoyé à Hermes, à la gateway ou au bot.' : 'Aucun code ne reste dans le chat ni dans les journaux.'}</p>
+        <p className="request-note"><ShieldCheck size={13} />{saving ? `Rangé dans le trousseau de la machine des bots, réservé à ${botName}. Jamais envoyé à Hermes, à la gateway ou au bot.` : 'Aucun code ne reste dans le chat ni dans les journaux.'}</p>
         {error && <p className="request-error" role="alert">{error}</p>}
         <div className="request-actions">
           <button type="button" onClick={() => void cancel()} disabled={busy}>{saving ? 'Plus tard' : 'Passer'}</button>

@@ -13,12 +13,12 @@ const execFileAsync = promisify(execFile)
 // Fichier de session de test (cookies factices), dans le dossier temporaire.
 const SESSION_FILE = process.env.HERMESBOT_TEST_SESSION_FILE || path.join(os.tmpdir(), 'hermesbot-e2e-session.json')
 const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
-const BROWSER_VAULT_FILE = `${SESSION_FILE}.browser-vault`
-const BROWSER_VAULT_AUDIT = `${BROWSER_VAULT_FILE}-audit.jsonl`
+// Coffre CDP : service à part, sur un trousseau jetable (jamais celui de session).
+const BROWSER_VAULT_KEYCHAIN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}.keychain-db`)
+const BROWSER_VAULT_AUDIT = path.join(os.tmpdir(), 'hermesbot-e2e-browser-vault-audit.jsonl')
 const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (faux mot de passe du test)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
-rmSync(BROWSER_VAULT_FILE, { force: true })
 rmSync(BROWSER_VAULT_AUDIT, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
 const BROWSER_TOUR_OWNER_FILE = path.join(os.tmpdir(), 'hermesbot-e2e-browser-owner')
@@ -423,16 +423,33 @@ cdpMock.on('upgrade', (request, socket, head) => {
 })
 
 let child
+let vaultService
 let browser
 try {
   await new Promise((resolve) => mock.listen(9121, '127.0.0.1', resolve))
   await new Promise((resolve) => cdpMock.listen(9223, '127.0.0.1', resolve))
+  for (const args of [['create-keychain', '-p', 'e2e', BROWSER_VAULT_KEYCHAIN], ['unlock-keychain', '-p', 'e2e', BROWSER_VAULT_KEYCHAIN], ['set-keychain-settings', BROWSER_VAULT_KEYCHAIN]]) {
+    await execFileAsync('/usr/bin/security', args)
+  }
+  vaultService = spawn(process.execPath, ['server/browser-vault/standalone.mjs'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env, BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let vaultLog = ''
+  vaultService.stdout.on('data', (data) => { vaultLog += data })
+  vaultService.stderr.on('data', (data) => { vaultLog += data })
+  for (let attempt = 0; attempt < 50 && !vaultLog.includes('Coffre HermesBot'); attempt += 1) await delay(100)
+  if (!vaultLog.includes('Coffre HermesBot')) throw new Error(`Le coffre ne démarre pas : ${vaultLog}`)
   child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
       NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      BROWSER_VAULT_PORT: '4333',
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -864,6 +881,17 @@ try {
   await browserSheet.waitFor({ state: 'detached', timeout: 2_000 })
   const listedBrowser = await vaultCall('list')
   if (listedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || listedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('list du coffre CDP incorrect.')
+  // Rangé dans le trousseau (jetable ici), réservé au bot qui l’a demandé.
+  const keychainDump = await execFileAsync('/usr/bin/security', ['dump-keychain', BROWSER_VAULT_KEYCHAIN])
+  if (!keychainDump.stdout.includes('HermesBot') || !keychainDump.stdout.includes('"crtr"<uint32>="HBot"') || keychainDump.stdout.includes(BROWSER_SECRET)) throw new Error('Identifiant absent du trousseau.')
+  const otherBot = await fetch('http://127.0.0.1:4333/v1/fill', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
+  })
+  if (otherBot.status !== 403 || (await otherBot.json()).error !== 'bot_not_allowed') throw new Error('Un autre bot utilise un identifiant qui ne lui est pas réservé.')
+  const otherList = await fetch('http://127.0.0.1:4333/v1/list', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova' }),
+  })
+  if ((await otherList.json()).entries?.length !== 0) throw new Error('Un bot voit les identifiants réservés à un autre.')
   const cliListed = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'list', '--bot', 'orion'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
   })
@@ -905,6 +933,36 @@ try {
   await browserSheet.getByRole('button', { name: 'Plus tard' }).waitFor({ timeout: 3_000 })
   await browserSheet.getByRole('button', { name: 'Plus tard' }).click()
   if ((await cancellingBrowser).body.status !== 'cancelled') throw new Error('Annulation du coffre CDP incorrecte.')
+
+  // Réglages > Coffre : l’identifiant apparaît sans mot de passe, Nova y est autorisé en plus de Orion.
+  await page.keyboard.press('Meta+,')
+  await page.locator('.settings-nav').getByRole('button', { name: 'Coffre' }).click()
+  const vaultEntry = page.locator('.vault-entry').filter({ hasText: 'store.steampowered.com' })
+  await vaultEntry.getByText('steam-test · Orion').waitFor({ timeout: 5_000 })
+  if (await page.locator('.settings').getByText(BROWSER_SECRET).count()) throw new Error('Mot de passe visible dans les réglages.')
+  await vaultEntry.getByRole('button', { name: 'Modifier' }).click()
+  await page.locator('.vault-bot').filter({ hasText: 'Nova' }).locator('input').check()
+  await page.locator('.vault-form').getByRole('button', { name: 'Enregistrer' }).click()
+  await vaultEntry.getByText('steam-test · Orion, Nova').waitFor({ timeout: 5_000 })
+  await page.screenshot({ path: `${SCREENSHOTS}vault-settings.png` })
+  const allowedFill = await fetch('http://127.0.0.1:4333/v1/fill', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
+  })
+  if (allowedFill.status !== 200 || cdpInjections.at(-1).values.join() !== `steam-test,${BROWSER_SECRET}`) throw new Error('Mot de passe perdu après le changement de bots.')
+  // Ajout direct depuis les réglages, puis retrait.
+  await page.locator('.vault-tools').getByRole('button', { name: 'Ajouter un identifiant' }).click()
+  await page.locator('.vault-form').getByLabel('Site').fill('https://exemple.com/connexion')
+  await page.locator('.vault-form').getByLabel('Identifiant').fill('ajout-test')
+  await page.locator('.vault-form').getByLabel('Mot de passe').fill('mot-de-passe-ajout')
+  await page.locator('.vault-bot.is-all input').check()
+  await page.locator('.vault-form').getByRole('button', { name: 'Enregistrer' }).click()
+  const addedEntry = page.locator('.vault-entry').filter({ hasText: 'exemple.com' })
+  await addedEntry.getByText('ajout-test · Tous les bots').waitFor({ timeout: 5_000 })
+  page.once('dialog', (dialog) => dialog.accept())
+  await addedEntry.getByRole('button', { name: 'Retirer' }).click()
+  await addedEntry.waitFor({ state: 'detached', timeout: 5_000 })
+  await page.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await page.locator('.settings-backdrop').waitFor({ state: 'detached', timeout: 3_000 })
 
   const browserAudit = readFileSync(BROWSER_VAULT_AUDIT, 'utf8')
   if (browserAudit.includes(BROWSER_SECRET) || browserAudit.includes(BROWSER_CODE)) throw new Error('Secret dans le journal du coffre.')
@@ -1310,7 +1368,7 @@ try {
     env: {
       ...process.env,
       NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      BROWSER_VAULT_PORT: '4333',
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -1418,10 +1476,13 @@ try {
   await page.getByRole('button', { name: 'Passer au thème clair' }).click()
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP (save, list, fill, code, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
+  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')
+  if (vaultService) vaultService.kill('SIGTERM')
+  await execFileAsync('/usr/bin/security', ['delete-keychain', BROWSER_VAULT_KEYCHAIN]).catch(() => undefined)
+  rmSync(BROWSER_VAULT_KEYCHAIN, { force: true })
   wss.close()
   cdpWss.close()
   await new Promise((resolve) => mock.close(resolve))

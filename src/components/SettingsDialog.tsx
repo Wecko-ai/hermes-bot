@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, Cpu, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
+import { ChevronRight, Cpu, KeyRound, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
 import { version } from '../../package.json'
-import type { ModelOption } from '../types'
+import type { Bot, ModelOption } from '../types'
+import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 
-export type SettingsTab = 'general' | 'chat' | 'models' | 'account'
+export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: 'general', label: 'Général', icon: SlidersHorizontal },
   { id: 'chat', label: 'Conversations', icon: MessageSquare },
   { id: 'models', label: 'Modèles', icon: Cpu },
+  { id: 'vault', label: 'Coffre', icon: KeyRound },
   { id: 'account', label: 'Compte', icon: UserRound },
 ]
 
@@ -28,6 +30,8 @@ interface SettingsDialogProps {
   reconnecting: boolean
   onReconnect: () => void
   onLogout: () => void
+  /** Noms des bots et choix des bots autorisés dans le coffre. */
+  bots: Bot[]
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -220,6 +224,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
             {tab === 'chat' && <ChatTab />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} />}
+            {tab === 'vault' && <VaultTab bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}
           </div>
         </section>

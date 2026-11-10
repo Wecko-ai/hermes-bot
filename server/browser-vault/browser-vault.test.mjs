@@ -1,8 +1,14 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { BrowserVaultStore, normalizeOrigin } from './store.mjs'
+import { normalizeOrigin } from './store.mjs'
+import { attributeValue, botAllowed, KeychainStore, parseDump, passwordValue, runSecurity, validBots } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 
-describe('coffre navigateur — stockage', () => {
+const darwin = process.platform === 'darwin' && existsSync('/usr/bin/security')
+
+describe('coffre navigateur — trousseau', () => {
   it('normalise protocole, hôte et port', () => {
     expect(normalizeOrigin('https://Example.COM:443/login?next=x')).toBe('https://example.com')
     expect(normalizeOrigin('http://example.com:8080/login')).toBe('http://example.com:8080')
@@ -10,38 +16,63 @@ describe('coffre navigateur — stockage', () => {
     expect(() => normalizeOrigin('https://user:pass@example.com')).toThrow('invalid_origin')
   })
 
-  it('ne liste jamais le mot de passe et remplace une entrée par origine', () => {
-    let raw = ''
-    const store = new BrowserVaultStore({ load: () => raw, save: (value) => { raw = value } })
-    store.save('https://example.com/login', 'premier', 'secret-un')
-    store.save('https://example.com/autre', 'second', 'secret-deux')
-    expect(store.list()).toHaveLength(1)
-    expect(store.list()[0].identifier).toBe('second')
-    expect(store.list()[0]).not.toHaveProperty('password')
-    expect(store.get('https://example.com').password).toBe('secret-deux')
-    expect(raw).toContain('secret-deux')
-    expect(raw).not.toContain('secret-un')
+  it('lit les sorties de security : texte brut, hexadécimal, entiers', () => {
+    expect(attributeValue('<NULL>')).toBeNull()
+    expect(attributeValue('"{"bots":["orion"]}"')).toBe('{"bots":["orion"]}')
+    expect(attributeValue('0xC3A96C697365  "\\303\\251lise"')).toBe('élise')
+    expect(passwordValue('password: "deadbeef"\n')).toBe('deadbeef')
+    expect(passwordValue('password: 0xC3A9225C  "\\303\\251\\"\\134"')).toBe('é"\\')
+    expect(passwordValue('password:\n')).toBe('')
+    expect(passwordValue('autre chose')).toBeNull()
+    const items = parseDump([
+      'keychain: "/x.keychain-db"', 'class: "inet"', 'attributes:',
+      '    "acct"<blob>="orion@exemple.com"', '    "crtr"<uint32>="HBot"', '    "port"<uint32>=0x00001F90 ',
+      '    "ptcl"<uint32>="http"', '    "srvr"<blob>="app.exemple.org"',
+      'keychain: "/x.keychain-db"', 'class: "genp"', 'attributes:', '    "acct"<blob>="x"',
+    ].join('\n'))
+    expect(items).toHaveLength(1)
+    expect(items[0].attributes).toMatchObject({ acct: 'orion@exemple.com', crtr: 'HBot', port: 8080, ptcl: 'http' })
   })
 
-  it('refuse une origine inconnue et ne persiste pas de secret', () => {
-    const save = vi.fn()
-    const store = new BrowserVaultStore({ load: () => '', save })
-    expect(() => store.get('https://example.com')).toThrow('origin_not_found')
-    expect(() => store.save('https://example.com', 'identifiant', '')).toThrow('invalid_credentials')
-    expect(save).not.toHaveBeenCalled()
+  it('refuse des bots invalides et les fins de ligne, avant tout appel à security', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const store = new KeychainStore({ keychain: '/x.keychain-db', run })
+    expect(() => validBots([])).toThrow('invalid_bots')
+    expect(() => validBots(['../x'])).toThrow('invalid_bots')
+    expect(validBots(['vega', 'orion', '*'])).toEqual(['*'])
+    expect(botAllowed({ bots: ['orion'] }, 'vega')).toBe(false)
+    await expect(store.save('https://exemple.com', 'a\nb', 'secret', ['orion'])).rejects.toThrow('invalid_credentials')
+    await expect(store.save('https://exemple.com', 'a', 'se\ncret', ['orion'])).rejects.toThrow('invalid_credentials')
+    expect(run).not.toHaveBeenCalled()
   })
 
-  it('restaure les entrées si l’écriture chiffrée échoue', () => {
-    const store = new BrowserVaultStore({ load: () => '', save: () => { throw new Error('disque plein') } })
-    expect(() => store.save('https://example.com', 'identifiant', 'secret')).toThrow('vault_write_failed')
-    expect(() => store.get('https://example.com')).toThrow('origin_not_found')
-  })
-
-  it('refuse un fichier corrompu sans le réécrire', () => {
-    const save = vi.fn()
-    const store = new BrowserVaultStore({ load: () => '{cassé', save })
-    expect(() => store.list()).toThrow('vault_unavailable')
-    expect(save).not.toHaveBeenCalled()
+  it.skipIf(!darwin)('range, liste, relit et retire dans un vrai trousseau, mot de passe jamais en argument', async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-keychain-'))
+    const keychain = path.join(directory, 'test.keychain-db')
+    const calls = []
+    const run = (args, input) => { calls.push(args); return runSecurity(args, input) }
+    try {
+      for (const args of [['create-keychain', '-p', 'test', keychain], ['unlock-keychain', '-p', 'test', keychain], ['set-keychain-settings', keychain]]) {
+        expect((await runSecurity(args)).code).toBe(0)
+      }
+      const store = new KeychainStore({ keychain, run })
+      const secret = String.raw`a b"c\d$e'f é ;x`
+      await store.save('https://www.exemple.com/login', 'élise@exemple.com', secret, ['orion'])
+      await store.save('http://app.exemple.org:8080', 'u2', 'deadbeef', ['*'])
+      expect((await store.list('orion')).map((entry) => entry.origin)).toEqual(['http://app.exemple.org:8080', 'https://www.exemple.com'])
+      expect((await store.list('vega')).map((entry) => entry.origin)).toEqual(['http://app.exemple.org:8080'])
+      expect(JSON.stringify(await store.list())).not.toContain('deadbeef')
+      expect((await store.get('https://www.exemple.com')).password).toBe(secret)
+      await store.save('https://www.exemple.com', 'autre@exemple.com', undefined, ['orion', 'vega'])
+      expect(await store.get('https://www.exemple.com')).toMatchObject({ identifier: 'autre@exemple.com', password: secret, bots: ['orion', 'vega'] })
+      expect(await store.list()).toHaveLength(2)
+      await store.remove('http://app.exemple.org:8080')
+      await expect(store.get('http://app.exemple.org:8080')).rejects.toThrow('origin_not_found')
+      expect(calls.flat().some((value) => value.includes('deadbeef') || value.includes(secret))).toBe(false)
+    } finally {
+      await runSecurity(['delete-keychain', keychain])
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 

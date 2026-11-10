@@ -12,6 +12,7 @@ const HERMES_ORIGIN = process.env.HERMES_ORIGIN || config.gatewayOrigin || 'http
 const HERMES_BROWSER_ORIGIN = process.env.HERMES_BROWSER_ORIGIN || config.browserOrigin || ''
 const SSH_HOST = process.env.HERMES_SSH_HOST || config.sshHost || ''
 let hermesTunnelProcess
+let vaultTunnelProcess
 let hermesTunnelRestart
 let mainWindow
 
@@ -29,7 +30,6 @@ async function startServer() {
   process.env.HERMES_ORIGIN = HERMES_ORIGIN
   if (HERMES_BROWSER_ORIGIN) process.env.HERMES_BROWSER_ORIGIN = HERMES_BROWSER_ORIGIN
   configureSessionPersistence()
-  configureBrowserVault()
   const { listening } = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.mjs')).href)
   try {
     await listening
@@ -67,27 +67,6 @@ function configureSessionPersistence() {
   }
 }
 
-function configureBrowserVault() {
-  const directory = app.getPath('userData')
-  fs.mkdirSync(directory, { recursive: true })
-  const audit = path.join(directory, 'browser-vault-audit.jsonl')
-  globalThis.__hermesBotBrowserVaultAudit = {
-    append: (line) => fs.appendFileSync(audit, `${line}\n`, { mode: 0o600 }),
-  }
-  if (!safeStorage.isEncryptionAvailable()) return
-  const store = path.join(directory, 'browser-vault.bin')
-  globalThis.__hermesBotBrowserVaultPersistence = {
-    load: () => {
-      try { return safeStorage.decryptString(fs.readFileSync(store)) }
-      catch (error) { if (error.code === 'ENOENT') return ''; throw error }
-    },
-    save: (json) => {
-      fs.writeFileSync(`${store}.tmp`, safeStorage.encryptString(json), { mode: 0o600 })
-      fs.renameSync(`${store}.tmp`, store)
-    },
-  }
-}
-
 function hermesReady() {
   return new Promise((resolve) => {
     const request = http.get(`${HERMES_ORIGIN}/api/auth/providers`, { timeout: 1500 }, (response) => {
@@ -118,11 +97,29 @@ async function openHermesTunnel() {
   tunnel.once('error', (error) => { tunnelError = error })
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (tunnelError) throw new Error(`Tunnel SSH ${SSH_HOST}: ${tunnelError.message}`)
-    if (await hermesReady()) return
+    if (await hermesReady()) {
+      openVaultTunnel()
+      return
+    }
     if (tunnelHasExited(tunnel)) break
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error(`Hermes est absent. Le tunnel SSH ${SSH_HOST} ne répond pas.`)
+}
+
+/**
+ * Coffre du Chrome partagé : il vit sur la machine des bots, avec le trousseau. Son port 4331 passe par un ssh à
+ * part, pour qu’un port déjà pris n’empêche jamais la connexion à Hermes.
+ */
+function openVaultTunnel() {
+  if (vaultTunnelProcess && !tunnelHasExited(vaultTunnelProcess)) return
+  const tunnel = spawn('/usr/bin/ssh', [
+    '-N', '-L', '4331:127.0.0.1:4331',
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ExitOnForwardFailure=yes',
+    '-o', 'ServerAliveInterval=30', '--', SSH_HOST,
+  ], { cwd: app.getPath('userData'), stdio: 'ignore' })
+  tunnel.once('error', () => undefined)
+  vaultTunnelProcess = tunnel
 }
 
 async function ensureHermes() {
@@ -146,7 +143,10 @@ function stopHermesTunnel() {
  */
 function restartHermesTunnel() {
   hermesTunnelRestart ??= (async () => {
-    if (!hermesTunnelProcess || await hermesReady()) return
+    if (!hermesTunnelProcess) return
+    // Le ssh du coffre a pu mourir seul pendant une veille, même si Hermes répond encore.
+    openVaultTunnel()
+    if (await hermesReady()) return
     await stopHermesTunnel()
     await openHermesTunnel()
   })().finally(() => { hermesTunnelRestart = null })
@@ -205,4 +205,5 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit())
 app.on('before-quit', () => {
   if (hermesTunnelProcess && !hermesTunnelProcess.killed) hermesTunnelProcess.kill('SIGTERM')
+  if (vaultTunnelProcess && !vaultTunnelProcess.killed) vaultTunnelProcess.kill('SIGTERM')
 })

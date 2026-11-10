@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { BrowserVaultStore } from './store.mjs'
+import { KeychainStore, botAllowed, validBots } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
 import { BrowserVaultError, vaultError } from './errors.mjs'
@@ -35,11 +35,15 @@ async function readJson(request) {
   }
 }
 
+/**
+ * Coffre du Chrome partagé. API des bots sur `/v1/<list|fill|save|code>` ; API de l’app HermesBot sur
+ * `/admin/v1/…` (demandes en attente, identifiants). Aucune route ne renvoie un mot de passe.
+ * Identifiants dans le trousseau de session macOS (`keychain.mjs`).
+ */
 export function createBrowserVault(options = {}) {
   const port = options.port ?? 4331
-  const persistence = options.persistence === undefined ? globalThis.__hermesBotBrowserVaultPersistence : options.persistence
-  const auditSink = options.audit === undefined ? globalThis.__hermesBotBrowserVaultAudit : options.audit
-  const store = new BrowserVaultStore(persistence)
+  const auditSink = options.audit ?? null
+  const store = options.store ?? new KeychainStore()
   const requests = new BrowserVaultRequests()
   const cdp = new BrowserVaultCdp(options.cdpOrigin)
   const saveTimeout = options.saveTimeout ?? 300_000
@@ -65,7 +69,8 @@ export function createBrowserVault(options = {}) {
   async function command(action, body) {
     const bot = validateBot(body.bot)
     if (action === 'list') {
-      const entries = store.list()
+      // Un bot ne voit que les identifiants qu’il a le droit d’utiliser.
+      const entries = (await store.list(bot)).map(({ bots: _bots, ...entry }) => entry)
       audit(action, bot, null, 'ok')
       return { status: 'ok', entries }
     }
@@ -76,9 +81,12 @@ export function createBrowserVault(options = {}) {
       if (action === 'save' && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
       origin = await cdp.activeOrigin(targetId)
       if (action === 'fill') {
-        const entry = store.get(origin)
+        const known = await store.find(origin)
+        if (!known) throw new BrowserVaultError('origin_not_found', 404)
+        // Chaque identifiant est réservé aux bots choisis par l’utilisateur.
+        if (!botAllowed(known, bot)) throw new BrowserVaultError('bot_not_allowed', 403)
+        const entry = await store.get(origin)
         const fields = await cdp.fillCredentials(entry, targetId)
-        store.markUsed(origin)
         audit(action, bot, origin, 'filled')
         return { status: 'filled', origin, fields }
       }
@@ -105,7 +113,11 @@ export function createBrowserVault(options = {}) {
     try {
       if (request.kind === 'save') {
         if (body.action !== 'save') throw new BrowserVaultError('invalid_action', 400)
-        store.save(request.origin, body.identifier, body.password)
+        // Le bot qui demande s’ajoute aux bots déjà autorisés pour ce site.
+        const existing = await store.find(request.origin)
+        const bots = existing ? [...existing.bots, request.bot] : [request.bot]
+        await store.save(request.origin, body.identifier, body.password, bots)
+        audit('saved', request.bot, request.origin, 'ok')
         requests.complete(id, { status: 'saved', origin: request.origin })
       } else {
         if (body.action !== 'code') throw new BrowserVaultError('invalid_action', 400)
@@ -122,15 +134,39 @@ export function createBrowserVault(options = {}) {
     }
   }
 
+  /** API de l’app : métadonnées, ajout, changement, retrait. Le mot de passe n’en ressort jamais. */
+  async function admin(method, pathname, request) {
+    if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot() }
+    if (method === 'GET' && pathname === '/admin/v1/entries') return { entries: await store.list() }
+    if (method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new BrowserVaultError('invalid_request', 400)
+    const body = await readJson(request)
+    const answer = /^\/admin\/v1\/requests\/([A-Za-z0-9-]{1,64})$/.exec(pathname)
+    if (answer) return respond(answer[1], body)
+    if (pathname === '/admin/v1/entries') {
+      const password = typeof body.password === 'string' && body.password ? body.password : undefined
+      const entry = await store.save(body.origin, body.identifier, password, validBots(body.bots))
+      audit('admin_save', 'hermesbot', entry.origin, 'ok')
+      return { entry }
+    }
+    if (pathname === '/admin/v1/entries/remove') {
+      await store.remove(body.origin)
+      audit('admin_remove', 'hermesbot', body.origin, 'ok')
+      return { ok: true }
+    }
+    throw new BrowserVaultError('not_found', 404)
+  }
+
   const server = http.createServer(async (request, response) => {
     try {
       if (request.headers.host !== `127.0.0.1:${port}` || request.headers.origin) {
         throw new BrowserVaultError('forbidden_origin', 403)
       }
+      const { pathname } = new URL(request.url || '/', `http://127.0.0.1:${port}`)
+      if (pathname.startsWith('/admin/v1/')) return sendJson(response, 200, await admin(request.method, pathname, request))
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') {
         throw new BrowserVaultError('invalid_request', 400)
       }
-      const match = /^\/v1\/(list|fill|save|code)$/.exec(new URL(request.url || '/', `http://127.0.0.1:${port}`).pathname)
+      const match = /^\/v1\/(list|fill|save|code)$/.exec(pathname)
       if (!match) throw new BrowserVaultError('not_found', 404)
       const body = await readJson(request)
       return sendJson(response, 200, await command(match[1], body))
@@ -145,7 +181,7 @@ export function createBrowserVault(options = {}) {
     requests,
     respond,
     subscribe: (listener) => requests.subscribe(listener),
-    get available() { return store.available },
+    store,
     listen() {
       return new Promise((resolve, reject) => {
         server.once('listening', resolve)

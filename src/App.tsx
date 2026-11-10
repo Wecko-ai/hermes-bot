@@ -976,6 +976,7 @@ export default function App() {
           onClose={() => setSettingsTab(null)}
           onChooseTheme={chooseTheme}
           models={modelOptions}
+          bots={bots}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           onLoadModels={refreshModels}
