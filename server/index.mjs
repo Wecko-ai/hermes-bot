@@ -857,6 +857,8 @@ server.on('upgrade', async (request, socket, head) => {
     // Without a password, the socket goes to the same pinned address as the request that got its ticket.
     const local = browserSession(request)?.kind === 'local'
     const upstreamUrl = `${local ? localGateway.socketOrigin : HERMES_WS_ORIGIN}/api/ws?native_dial=browser&profile=${encodeURIComponent(profile)}`
+    // The ticket and every frame after it go on a connection checked like the request that got the ticket.
+    const checked = local ? await localGateway.connect() : null
     const upstream = new WebSocket(upstreamUrl, [
       'hermes-gateway-v1',
       `hermes-gateway-ticket.${ticket}`,
@@ -865,7 +867,9 @@ server.on('upgrade', async (request, socket, head) => {
       headers: local ? {} : { Origin: HERMES_BROWSER_ORIGIN },
       handshakeTimeout: 20_000,
       maxPayload: WS_MAX_PAYLOAD,
+      ...(checked ? { createConnection: () => checked } : {}),
     })
+    if (checked) upstream.once('close', () => checked.destroy())
 
     wss.handleUpgrade(request, socket, head, (browser) => {
       const closeBoth = () => {

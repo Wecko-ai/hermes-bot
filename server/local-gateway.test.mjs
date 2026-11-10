@@ -134,6 +134,15 @@ describe('createLocalGateway', () => {
     expect(received).toEqual([])
   })
 
+  it('opens the WebSocket’s connection under the same check', async () => {
+    const socket = await gateway().connect()
+    expect(socket.remotePort).toBe(port)
+    expect(socket.remoteAddress).toBe('127.0.0.1')
+    socket.destroy()
+    peerSeen = () => []
+    await expect(gateway().connect()).rejects.toMatchObject({ status: 401, reason: 'gateway_elsewhere' })
+  })
+
   it('sends nothing when any earlier check fails', async () => {
     identify = { ok: false }
     await expect(gateway().fetch('/api/auth/me')).rejects.toMatchObject({ status: 401, reason: 'gateway_not_running' })

@@ -13,7 +13,8 @@
 //      another account, an SSH tunnel, or whoever takes the port between two requests gets nothing;
 //   5. the token file belongs to this user, is closed to everyone else and has the expected shape.
 //
-// The token never leaves this module: callers get `fetch()`, which adds the header itself.
+// The token never leaves this module: callers get `fetch()`, which adds the header itself, and
+// `connect()`, a connection checked the same way for the WebSocket.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstat, readFile, realpath } from 'node:fs/promises'
@@ -224,6 +225,26 @@ export function createLocalGateway({ gatewayOrigin, hermesHome, uid = process.ge
     return TOKEN_SHAPE.test(token) ? { ok: true, token, pid: gateway.pid } : refused('no_token')
   }
 
+  /** A connection whose other end is the gateway's own process, and the token for it. Throws otherwise. */
+  async function checkedConnection() {
+    const unavailable = (reason) => Object.assign(new Error('local_gateway_unavailable'), { status: 401, reason })
+    const found = await verify()
+    if (!found.ok) throw unavailable(found.reason)
+    const socket = await connect(port)
+    if (!socket) throw unavailable('gateway_down')
+    // Nothing leaves before the gateway's own process is seen at the other end of this connection.
+    let peer = false
+    for (let attempt = 0; attempt < PEER_TRIES && !peer; attempt += 1) {
+      if (attempt) await delay(PEER_WAIT_MS)
+      peer = holdsPeer(await sockets(found.pid, port), port, socket.localPort)
+    }
+    if (!peer) {
+      socket.destroy()
+      throw unavailable('gateway_elsewhere')
+    }
+    return { socket, token: found.token }
+  }
+
   return {
     /** For the sign-in screen and the sign-in itself: no token is used, the listener is enough. */
     async check() {
@@ -233,29 +254,23 @@ export function createLocalGateway({ gatewayOrigin, hermesHome, uid = process.ge
     },
 
     async fetch(route, init = {}) {
-      const unavailable = (reason) => Object.assign(new Error('local_gateway_unavailable'), { status: 401, reason })
-      const found = await verify()
-      if (!found.ok) throw unavailable(found.reason)
-      const socket = await connect(port)
-      if (!socket) throw unavailable('gateway_down')
-      // The token only leaves once the gateway's own process is seen at the other end of this connection.
-      let peer = false
-      for (let attempt = 0; attempt < PEER_TRIES && !peer; attempt += 1) {
-        if (attempt) await delay(PEER_WAIT_MS)
-        peer = holdsPeer(await sockets(found.pid, port), port, socket.localPort)
-      }
-      if (!peer) {
-        socket.destroy()
-        throw unavailable('gateway_elsewhere')
-      }
+      const { socket, token } = await checkedConnection()
       const headers = new Headers(init.headers)
-      headers.set(TOKEN_HEADER, found.token)
+      headers.set(TOKEN_HEADER, token)
       try {
         return await requestOn(socket, port, route, { ...init, headers })
       } catch (error) {
         socket.destroy()
         throw error
       }
+    },
+
+    /**
+     * An open connection to the gateway, checked like the ones `fetch` uses, for the WebSocket: its
+     * ticket and the whole conversation after it travel on it. The caller closes it.
+     */
+    async connect() {
+      return (await checkedConnection()).socket
     },
 
     /** The gateway refused the token, or was restarted: ask it again whether it still needs no sign-in. */
