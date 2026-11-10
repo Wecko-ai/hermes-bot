@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption, Routine, SessionUsage } from './types'
-import { attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parseUsage, steerChat, submitPrompt, switchModel, type ActiveChat, type ServerRequest } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerChat, submitPrompt, switchModel, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { applyWorkEvent, workLine, type WorkSummary } from './lib/work-summary'
 import { modelLabel } from './lib/model'
@@ -97,6 +97,8 @@ export default function App() {
   const [reconnecting, setReconnecting] = useState(false)
   const reconnectingRef = useRef(false)
   const [serverRequests, setServerRequests] = useState<ServerRequest[]>([])
+  /** Questions et accords ouverts des sessions suivies sur ce socket (`clarify.request`, `approval.request`). */
+  const [prompts, setPrompts] = useState<PendingPrompt[]>([])
   const [browserVaultRequests, setBrowserVaultRequests] = useState<BrowserVaultRequest[]>([])
   const workRef = useRef(new Map<string, WorkSummary>())
   const workSeqRef = useRef(new Map<string, number>())
@@ -213,6 +215,31 @@ export default function App() {
       if (event.type === 'request.cancel') {
         setServerRequests((items) => items.filter((item) => item.id !== payload.id))
         return
+      }
+      // Question ou accord du bot : le tour reste bloqué jusqu’à la réponse de l’utilisateur (carte au-dessus du champ).
+      if ((event.type === 'clarify.request' || event.type === 'approval.request') && event.session_id) {
+        const prompt = parsePendingPrompt(event.session_id, payload)
+        if (prompt) {
+          setPrompts((items) => items.some((item) => item.promptId === prompt.promptId) ? items : [...items, prompt])
+          const owner = isCurrent && current ? current.profile : botsRef.current.find((bot) => bot.sessionId === event.session_id)?.slug
+          if (owner) {
+            clearDoneTimer(owner)
+            updateBot(owner, { status: 'waiting' })
+          }
+        }
+        return
+      }
+      if ((event.type === 'clarify.settled' || event.type === 'approval.settled') && event.session_id) {
+        const promptId = asText(payload.prompt_id)
+        setPrompts((items) => items.filter((item) => !(item.sessionId === event.session_id && item.promptId === promptId)))
+        const owner = botsRef.current.find((bot) => isCurrent && current ? bot.slug === current.profile : bot.sessionId === event.session_id)
+        // Réponse donnée ici ou ailleurs : le bot reprend son tour. La lecture des tours corrige s’il reste une question.
+        if (owner?.status === 'waiting') updateBot(owner.slug, { status: 'working' })
+        return
+      }
+      // Un tour fini n’attend plus rien.
+      if (event.type === 'message.complete' && event.session_id) {
+        setPrompts((items) => items.some((item) => item.sessionId === event.session_id) ? items.filter((item) => item.sessionId !== event.session_id) : items)
       }
       const workOwner = isCurrent && current ? current.profile : event.session_id ? botsRef.current.find((bot) => bot.sessionId === event.session_id)?.slug : undefined
       if (workOwner) applyWork(workOwner, event)
@@ -543,7 +570,10 @@ export default function App() {
         setChatModel(chatResult.value.chat.model || '')
         if (!preserveLive) setMessages(nextMessages)
         setRunning(chatResult.value.chat.running)
-        if (chatResult.value.chat.running) updateBot(profile, { status: 'working' })
+        const openPrompts = chatResult.value.prompts
+        const sessionId = chatResult.value.chat.sessionId
+        setPrompts((items) => [...items.filter((item) => item.sessionId !== sessionId), ...openPrompts])
+        if (chatResult.value.chat.running) updateBot(profile, { status: openPrompts.length ? 'waiting' : 'working' })
         else if (resumed) {
           setStreaming('')
           setStreamKey('')
@@ -691,7 +721,10 @@ export default function App() {
     try {
       await client.connect()
       if (chat.socketGeneration !== client.generation) {
-        chat = (await openChat(client, chat.profile, chat.sessionId)).chat
+        const reopened = await openChat(client, chat.profile, chat.sessionId)
+        chat = reopened.chat
+        const sessionId = chat.sessionId
+        setPrompts((items) => [...items.filter((item) => item.sessionId !== sessionId), ...reopened.prompts])
         activeChatRef.current = chat
         updateCachedChat(chat.profile, chat)
       }
@@ -869,6 +902,21 @@ export default function App() {
     }
   }
 
+  /** Rejette si la gateway refuse : la carte reste ouverte pour réessayer. */
+  const answerPendingPrompt = async (prompt: PendingPrompt, answer: string) => {
+    const chat = activeChatRef.current
+    if (!chat || chat.sessionId !== prompt.sessionId) throw new Error('chat_change')
+    try {
+      const status = await answerPrompt(client, chat.profile, prompt, answer)
+      setPrompts((items) => items.filter((item) => item.promptId !== prompt.promptId))
+      if (status === 'already_resolved') setNotice('Le bot n’attendait plus cette réponse : délai dépassé ou réponse déjà donnée.')
+      else updateBot(chat.profile, { status: 'working' })
+    } catch (error) {
+      setNotice(error instanceof Error ? `Réponse non transmise : ${error.message}` : 'Réponse non transmise.')
+      throw error
+    }
+  }
+
   const answerBrowserVault = async (id: string, body: Record<string, unknown>) => {
     await respondBrowserVault(id, body)
     setBrowserVaultRequests((items) => items.filter((item) => item.id !== id))
@@ -878,6 +926,8 @@ export default function App() {
   const localBot: Bot = { ...LOCAL_CHAT_BOT, status: localRunning ? 'working' : 'idle' }
   const rosterBots = DEMO ? bots : [...bots, localBot]
   const openRequest = serverRequests[0]
+  const shownSession = activeChatRef.current?.profile === selectedBot?.slug ? activeChatRef.current?.sessionId : selectedBot?.sessionId
+  const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
   const openBrowserVaultRequest = browserVaultRequests[0]
 
   if (auth === 'checking') {
@@ -932,6 +982,8 @@ export default function App() {
         usage={usage}
         showUsage={showUsage}
         onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
+        prompts={shownPrompts}
+        onAnswerPrompt={answerPendingPrompt}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
             options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model])}

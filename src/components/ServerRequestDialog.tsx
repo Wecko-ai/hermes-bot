@@ -3,7 +3,7 @@ import { KeyRound, ShieldCheck } from 'lucide-react'
 import type { ServerRequest } from '../lib/hermes'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
-const CHOICE_LABELS: Record<string, string> = {
+export const CHOICE_LABELS: Record<string, string> = {
   once: 'Autoriser une fois',
   session: 'Pour cette session',
   always: 'Toujours autoriser',

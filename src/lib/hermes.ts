@@ -294,6 +294,57 @@ function deliverOpenRequests(client: HermesClient, value: unknown) {
   }
 }
 
+/**
+ * Question (`clarify`) ou accord (`approval`) que la gateway garde ouvert pendant un tour. Il arrive par
+ * l’événement `clarify.request` / `approval.request` et par les `prompts` de `session.resume` ; c’est lui
+ * qui fait dire `waiting` à `session.active_list`. Une question à plusieurs volets arrive volet par volet.
+ */
+export interface PendingPrompt {
+  sessionId: string
+  kind: 'clarify' | 'approval'
+  promptId: string
+  generation: number
+  question: string
+  choices: string[]
+  multiSelect: boolean
+  command: string
+  description: string
+}
+
+export function parsePendingPrompt(sessionId: string, value: unknown): PendingPrompt | null {
+  const row = asObject(value)
+  const kind = row.kind === 'clarify' || row.kind === 'approval' ? row.kind : null
+  const promptId = asString(row.prompt_id)
+  const generation = row.execution_generation
+  if (!sessionId || !kind || !promptId || typeof generation !== 'number' || !Number.isInteger(generation)) return null
+  return {
+    sessionId,
+    kind,
+    promptId,
+    generation,
+    question: asString(row.question),
+    choices: Array.isArray(row.choices) ? row.choices.filter((choice): choice is string => typeof choice === 'string' && choice.trim() !== '') : [],
+    multiSelect: row.multi_select === true,
+    command: asString(row.command),
+    description: asString(row.description),
+  }
+}
+
+/**
+ * Répond à une question ou à un accord. `clarify.respond` transmet le texte tel quel au bot : libellé
+ * exact du choix, tableau JSON des libellés pour un choix multiple, ou réponse libre.
+ */
+export async function answerPrompt(client: HermesClient, profile: string, prompt: PendingPrompt, answer: string) {
+  const result = await client.request(prompt.kind === 'clarify' ? 'clarify.respond' : 'approval.respond', {
+    profile,
+    session_id: prompt.sessionId,
+    execution_generation: prompt.generation,
+    prompt_id: prompt.promptId,
+    ...(prompt.kind === 'clarify' ? { answer } : { choice: answer }),
+  })
+  return asString(asObject(result).status)
+}
+
 export interface LiveStatuses {
   /** Statut par identifiant de session : `working`, `waiting`, `starting` ou `idle`. */
   statuses: Map<string, string>
@@ -401,7 +452,7 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
   return { bots, health: { connected: true, label: 'Hermes connecté' } }
 }
 
-export async function openChat(client: HermesClient, profile: string, sessionIdHint?: string): Promise<{ chat: ActiveChat; messages: ChatMessage[] }> {
+export async function openChat(client: HermesClient, profile: string, sessionIdHint?: string): Promise<{ chat: ActiveChat; messages: ChatMessage[]; prompts: PendingPrompt[] }> {
   let sessionId = sessionIdHint || ''
   if (!sessionId) {
     const roster = await client.request('profiles.list', { include_sessions: true })
@@ -455,6 +506,9 @@ export async function openChat(client: HermesClient, profile: string, sessionIdH
       socketGeneration: client.generation,
     },
     messages,
+    prompts: (Array.isArray(snapshot?.prompts) ? snapshot.prompts as unknown[] : [])
+      .map((value) => parsePendingPrompt(sessionId, value))
+      .filter((prompt): prompt is PendingPrompt => prompt !== null),
   }
 }
 

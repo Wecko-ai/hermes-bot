@@ -56,6 +56,9 @@ let sessionResumeCalls = 0
 const clientResponses = new Map()
 let capabilityCalls = 0
 let openRequests = []
+// Questions (`clarify`) : réponses reçues par la fausse gateway, et questions ouvertes rendues à la reprise.
+const promptAnswers = []
+const resumePrompts = {}
 let lastPromptText = ''
 // Tours vus par `session.active_list`, profil par profil : sans `profile`, la vraie gateway ne liste que `default`.
 const liveStatusByProfile = {}
@@ -224,8 +227,8 @@ wss.on('connection', (socket) => {
       sessionResumeCalls += 1
       const sessionId = frame.params.session_id
       return reply({
-        session_id: sessionId, revision: 4, execution_generation: 1, running: false, subscription_id: 'sub-test',
-        open_requests: openRequests,
+        session_id: sessionId, revision: 4, execution_generation: 1, running: Boolean(resumePrompts[sessionId]), subscription_id: 'sub-test',
+        open_requests: openRequests, prompts: resumePrompts[sessionId] || [],
         messages: [
           ...Array.from({ length: 30 }, (_, index) => ({
             row_id: index + 1, role: index % 2 ? 'assistant' : 'user', content: `Message ${index + 1}`, timestamp: Date.now() - 120_000 + index * 1000,
@@ -342,6 +345,11 @@ wss.on('connection', (socket) => {
       }
       lastPromptText = frame.params.text
       lastApiText = frame.params.api_text
+      if (frame.params.text === 'Test question') {
+        at(30, 'message.start', { turn_id: 'turn-question' })
+        at(90, 'clarify.request', { kind: 'clarify', prompt_id: 'q1', execution_generation: 1, question: 'Pour quel post ?', choices: ['Post A', 'Post B'], multi_select: false, timeout_s: 3600 })
+        return
+      }
       if (frame.params.text === 'Test pilotage') {
         at(30, 'message.start', { turn_id: 'turn-pilotage' })
         at(1800, 'message.complete', { turn_id: 'turn-pilotage', text: 'Pilotage terminé.', status: 'complete' })
@@ -375,6 +383,19 @@ wss.on('connection', (socket) => {
       return
     }
     if (frame.method === 'session.interrupt') return reply({ execution_state: 'idle', execution_generation: 1 })
+    if (frame.method === 'clarify.respond' || frame.method === 'approval.respond') {
+      promptAnswers.push({ method: frame.method, ...frame.params })
+      reply({ status: 'resolved', prompt_id: frame.params.prompt_id })
+      const sessionId = frame.params.session_id
+      const at = (ms, type, payload) => setTimeout(() => send(socket, event(sessionId, type, payload)), ms)
+      at(20, frame.method === 'clarify.respond' ? 'clarify.settled' : 'approval.settled', { prompt_id: frame.params.prompt_id, execution_generation: 1 })
+      // Comme la vraie gateway : une question à plusieurs volets arrive volet par volet.
+      if (frame.params.prompt_id === 'q1') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q2', execution_generation: 1, question: 'Que doit montrer l’image ?', choices: ['Personnage', 'Accessoires', 'Décor'], multi_select: true })
+      if (frame.params.prompt_id === 'q2') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q3', execution_generation: 1, question: 'Une remarque ?', choices: [], multi_select: false })
+      if (frame.params.prompt_id === 'q3') at(80, 'message.complete', { turn_id: 'turn-question', text: 'Images prêtes.', status: 'complete' })
+      if (frame.params.prompt_id === 'q-reprise') at(80, 'message.complete', { turn_id: 'turn-reprise', text: 'Reprise terminée.', status: 'complete' })
+      return
+    }
     send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4000, message: `unknown ${frame.method}` } })
   })
 })
@@ -736,6 +757,45 @@ try {
   await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
   await page.getByRole('button', { name: 'Envoyer' }).waitFor({ state: 'attached', timeout: 3_000 }).catch(() => {})
 
+  // Question du bot en plein tour (outil clarify) : carte au-dessus du champ, « Attend ta réponse » partout.
+  liveStatusByProfile.orion = 'waiting'
+  await orionBox.fill('Test question')
+  await orionBox.press('Enter')
+  const promptCard = page.locator('.prompt-card')
+  await promptCard.getByText('Pour quel post ?').waitFor({ timeout: 3_000 })
+  await page.locator('.chat-status').getByText('Attend ta réponse').waitFor({ timeout: 2_000 })
+  await page.locator('[data-bot=orion] .bot-row-status').getByText('Attend ta réponse').waitFor({ timeout: 8_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}question.png` })
+  await promptCard.getByRole('button', { name: 'Post B', exact: true }).click()
+  await promptCard.getByText('Que doit montrer l’image ?').waitFor({ timeout: 3_000 })
+  await promptCard.getByRole('button', { name: 'Personnage', exact: true }).click()
+  await promptCard.getByRole('button', { name: 'Décor', exact: true }).click()
+  await promptCard.getByRole('button', { name: 'Valider (2)' }).click()
+  await promptCard.getByText('Une remarque ?').waitFor({ timeout: 3_000 })
+  await promptCard.getByRole('textbox').fill('Fond clair')
+  await promptCard.getByRole('textbox').press('Enter')
+  await page.locator('.message-assistant').getByText('Images prêtes.').waitFor({ timeout: 4_000 })
+  await promptCard.waitFor({ state: 'detached', timeout: 2_000 })
+  delete liveStatusByProfile.orion
+  const sentAnswers = promptAnswers.map(({ method, profile, session_id, execution_generation, prompt_id, answer }) => [method, profile, session_id, execution_generation, prompt_id, answer].join('|'))
+  if (JSON.stringify(sentAnswers) !== JSON.stringify([
+    'clarify.respond|orion|chat-orion|1|q1|Post B',
+    'clarify.respond|orion|chat-orion|1|q2|["Personnage","Décor"]',
+    'clarify.respond|orion|chat-orion|1|q3|Fond clair',
+  ])) throw new Error(`Réponses aux questions : ${JSON.stringify(sentAnswers)}`)
+  // Une question restée ouverte revient à la reprise de la session.
+  resumePrompts['chat-nova'] = [{ kind: 'clarify', prompt_id: 'q-reprise', execution_generation: 1, question: 'On continue ?', choices: ['Oui', 'Non'], multi_select: false }]
+  await page.locator('[data-bot=nova]').click()
+  await promptCard.getByText('On continue ?').waitFor({ timeout: 5_000 })
+  delete resumePrompts['chat-nova']
+  await promptCard.getByRole('button', { name: 'Oui', exact: true }).click()
+  await page.locator('.message-assistant').getByText('Reprise terminée.').waitFor({ timeout: 4_000 })
+  await promptCard.waitFor({ state: 'detached', timeout: 2_000 })
+  if (promptAnswers.at(-1)?.prompt_id !== 'q-reprise' || promptAnswers.at(-1)?.answer !== 'Oui') throw new Error('Réponse à la question reprise incorrecte.')
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
+
   // Raccourcis : palette ⌘K, bot suivant Alt+↓, citation ⌘L, recherche ⌘F.
   await page.keyboard.press('Meta+k')
   await page.getByRole('textbox', { name: 'Chercher un bot' }).fill('tof')
@@ -782,12 +842,15 @@ try {
   const novaBadge = page.locator('[data-bot=nova] .unread-badge')
   const unreadOf = async () => Number((await novaBadge.count()) ? await novaBadge.innerText() : 0)
   const unreadBeforeWork = await unreadOf()
+  // Comme la vraie gateway pendant ce tour : sinon la lecture des tours (6 s) le dit fini avant le résumé (4 s).
+  liveStatusByProfile.nova = 'working'
   for (const client of wss.clients) {
     send(client, event('chat-nova', 'message.start', { turn_id: 'turn-resume' }))
     send(client, event('chat-nova', 'todo.updated', { revision: 1, todos: [{ id: '1', content: 'Relire le plan', status: 'completed' }, { id: '2', content: 'Écrire le résumé', status: 'in_progress' }] }))
   }
   await page.locator('[data-bot=nova] .bot-row-work').getByText('2/2 · Écrire le résumé').waitFor({ timeout: 7_000 })
   if (await unreadOf() !== unreadBeforeWork) throw new Error('Un non-lu est apparu pendant le travail.')
+  delete liveStatusByProfile.nova
   for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: 'turn-resume', text: 'Résumé écrit.', status: 'complete' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   if (await unreadOf() !== unreadBeforeWork + 1) throw new Error('La fin du tour doit compter un seul non-lu.')

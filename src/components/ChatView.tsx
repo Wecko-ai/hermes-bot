@@ -7,6 +7,8 @@ import type { ChatMode } from '../lib/modes'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
 import { MessageList } from './MessageList'
 import { Composer, type ComposerHandle } from './Composer'
+import { PromptCard } from './PromptCard'
+import type { PendingPrompt } from '../lib/hermes'
 
 interface ChatViewProps {
   /** Le chat local est à l’écran : cette vue reste montée, pour garder brouillon et position. */
@@ -35,16 +37,21 @@ interface ChatViewProps {
   showUsage: boolean
   onToggleUsage: () => void
   modelPicker?: ReactNode
+  /** Questions et accords ouverts de ce chat : le bot reste bloqué tant qu’ils attendent. */
+  prompts: PendingPrompt[]
+  onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
 
 export function ChatView(props: ChatViewProps) {
   const { bot } = props
+  // Une question ouverte bloque le tour : le bot attend l’utilisateur, il ne travaille pas.
+  const waiting = props.prompts.length > 0
   // Pendant un tour lancé ici, l’en-tête montre le travail même si le roster n’a pas encore suivi.
-  const liveBot = props.running && avatarPhase(bot) !== 'working' ? { ...bot, status: 'working' as const } : bot
+  const liveBot = waiting ? { ...bot, status: 'waiting' as const } : props.running && avatarPhase(bot) !== 'working' ? { ...bot, status: 'working' as const } : bot
   const phase = avatarPhase(liveBot)
-  const status = phase === 'working' ? 'Au travail' : phase === 'done' ? 'Terminé' : 'Disponible'
+  const status = waiting ? 'Attend ta réponse' : phase === 'working' ? 'Au travail' : phase === 'done' ? 'Terminé' : 'Disponible'
   const detail = phase === 'working' ? props.workText || props.activity : ''
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -110,7 +117,7 @@ export function ChatView(props: ChatViewProps) {
     >
       <header className="chat-header">
         <div className="chat-leading"><button className="plain-icon mobile-menu" aria-label="Afficher les bots" onClick={props.onOpenMobile}><Menu size={19} /></button></div>
-        <div className={`chat-identity is-${phase}`} title={bot.role}>
+        <div className={`chat-identity is-${waiting ? 'waiting' : phase}`} title={bot.role}>
           <LiveAvatar bot={liveBot} size={26} />
           <div>
             <h1>{bot.name}</h1>
@@ -131,7 +138,7 @@ export function ChatView(props: ChatViewProps) {
         </div>
       )}
       <MessageList
-        bot={bot}
+        bot={waiting ? liveBot : bot}
         bots={props.bots}
         messages={visibleMessages}
         streaming={props.streaming}
@@ -144,6 +151,11 @@ export function ChatView(props: ChatViewProps) {
         onOpenBot={props.onOpenBot}
       />
       {props.modelPicker}
+      {props.prompts[0] && !props.hidden && (
+        <div className="prompt-dock">
+          <PromptCard key={props.prompts[0].promptId} prompt={props.prompts[0]} botName={bot.name} onAnswer={props.onAnswerPrompt} />
+        </div>
+      )}
       <Composer
         ref={composerRef}
         bot={bot}

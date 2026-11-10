@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { attachFile, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
+import { answerPrompt, attachFile, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
 
 const chat: ActiveChat = {
   profile: 'orion',
@@ -220,5 +220,34 @@ describe('pièces jointes vers Hermes', () => {
   it('échoue si Hermes ne confirme pas', async () => {
     const client = { request: vi.fn(async () => ({ attached: false })) } as unknown as HermesClient
     await expect(attachFile(client, chat, 'a.pdf', 'data:,')).rejects.toThrow('a.pdf')
+  })
+})
+
+describe('questions et accords en plein tour', () => {
+  const clarify = { kind: 'clarify', prompt_id: 'c1', execution_generation: 3, question: 'Pour quel post ?', choices: ['Post A', 'Post B', ''], multi_select: false, timeout_s: 3600 }
+
+  it('lit une question de la gateway', () => {
+    expect(parsePendingPrompt('chat-orion', clarify)).toEqual({
+      sessionId: 'chat-orion', kind: 'clarify', promptId: 'c1', generation: 3, question: 'Pour quel post ?',
+      choices: ['Post A', 'Post B'], multiSelect: false, command: '', description: '',
+    })
+  })
+
+  it('ignore une demande incomplète ou inconnue', () => {
+    expect(parsePendingPrompt('chat-orion', { ...clarify, prompt_id: '' })).toBeNull()
+    expect(parsePendingPrompt('chat-orion', { ...clarify, execution_generation: '3' })).toBeNull()
+    expect(parsePendingPrompt('chat-orion', { ...clarify, kind: 'sudo' })).toBeNull()
+    expect(parsePendingPrompt('', clarify)).toBeNull()
+  })
+
+  it('répond avec clarify.respond ou approval.respond, sur la génération de la question', async () => {
+    const request = vi.fn(async () => ({ status: 'resolved', prompt_id: 'c1' }))
+    const client = { request } as unknown as HermesClient
+    const question = parsePendingPrompt('chat-orion', clarify)!
+    await expect(answerPrompt(client, 'orion', question, 'Post B')).resolves.toBe('resolved')
+    expect(request).toHaveBeenLastCalledWith('clarify.respond', { profile: 'orion', session_id: 'chat-orion', execution_generation: 3, prompt_id: 'c1', answer: 'Post B' })
+    const approval = parsePendingPrompt('chat-orion', { kind: 'approval', prompt_id: 'a1', execution_generation: 3, choices: ['once', 'deny'], command: 'rm x' })!
+    await answerPrompt(client, 'orion', approval, 'deny')
+    expect(request).toHaveBeenLastCalledWith('approval.respond', { profile: 'orion', session_id: 'chat-orion', execution_generation: 3, prompt_id: 'a1', choice: 'deny' })
   })
 })
