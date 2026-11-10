@@ -984,3 +984,4 @@ button.agent-note-name:hover { background: var(--hover); }
 .routine-card { border-radius: 10px; }
 .login-card { border-radius: 16px; }
 .logo-mark { display: block; width: 46px; height: 46px; }
+.settings-select { min-width: 180px; max-width: 260px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 13px; }

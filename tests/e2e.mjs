@@ -1,7 +1,7 @@
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
@@ -31,6 +31,17 @@ let owner = 'libre'
 try { owner = fs.readFileSync(process.env.BROWSER_TOUR_OWNER_FILE, 'utf8').trim() || 'libre' } catch {}
 console.log(\`tour : \${owner} 2026-01-05T10:00:00+0000 pid=123 depuis 1 min\\nen file : 0\`)
 `, { mode: 0o700 })
+
+// Réglages de l’installation de test : jamais ceux de private/, bot ouvert au départ, fournisseur masqué,
+// modèle local proposé, et des animations factices (une image WebP de 1×1) pour deux bots.
+const TEST_DATA = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-e2e-'))
+const TEST_CONFIG = path.join(TEST_DATA, 'config.json')
+const TEST_ANIMATIONS = path.join(TEST_DATA, 'animations')
+writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' } }))
+mkdirSync(TEST_ANIMATIONS)
+const TINY_WEBP = Buffer.from('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', 'base64')
+for (const slug of ['nova', 'orion']) for (const phase of ['working', 'done']) writeFileSync(path.join(TEST_ANIMATIONS, `${slug}-${phase}.webp`), TINY_WEBP)
+const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS }
 
 // Fichiers que la fausse gateway sert pour les balises MEDIA: de orion.
 const MEDIA_FIXTURES = {
@@ -143,6 +154,9 @@ const mock = http.createServer((request, response) => {
     return response.end(JSON.stringify({ ticket: 'test-ticket', ttl_seconds: 30 }))
   }
   // Ollama simulé : même serveur, aucun modèle réel.
+  if (url.pathname === '/api/tags' && request.method === 'GET') {
+    return response.end(JSON.stringify({ models: localModelMissing ? [{ name: 'autre-local:1b' }] : [{ name: 'modele-local:7b' }, { name: 'autre-local:1b' }] }))
+  }
   if (url.pathname === '/api/chat' && request.method === 'POST') {
     const chunks = []
     request.on('data', (chunk) => chunks.push(chunk))
@@ -200,8 +214,8 @@ const profiles = [{
   canonical_session: { id: 'chat-default', resolved_id: 'chat-default' },
   ui_meta: {},
 }, {
-  name: 'systeme', model: 'modele-test',
-  canonical_session: { id: 'chat-systeme', resolved_id: 'chat-systeme' },
+  name: 'notify', model: 'deepseek/test',
+  canonical_session: { id: 'chat-notify', resolved_id: 'chat-notify' },
   ui_meta: {},
 }]
 
@@ -296,6 +310,7 @@ wss.on('connection', (socket) => {
         providers: [
           { slug: 'anthropic', name: 'Anthropic', authenticated: true, models: ['claude-opus-5-5', 'claude-sonnet-5-5'], pricing: { 'claude-sonnet-5-5': { input: '$2', output: '$10', free: false } } },
           { slug: 'kimi-coding', name: 'Kimi / Moonshot', authenticated: true, models: ['kimi-k3', 'kimi-for-coding'] },
+          { slug: 'hidden-provider', name: 'Fournisseur masqué', authenticated: true, models: ['hidden-model'] },
           { slug: 'custom:omlx', name: 'Qwen local (oMLX)', authenticated: true, models: ['qwen-local-27b'] },
           { slug: 'lmstudio', name: 'LM Studio', authenticated: true, models: ['gemma-local'] },
           { slug: 'absent', name: 'Non connecté', authenticated: false, models: ['modele-interdit'] },
@@ -491,6 +506,7 @@ try {
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
+      ...TEST_ENV,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -539,15 +555,16 @@ try {
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
   await page.getByRole('textbox', { name: 'Message à Nova' }).fill('Test animation')
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
-  await page.locator('.details-panel .live-avatar.is-working').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 5_000 })
+  await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 2_500 })
   // Statut visible d’un coup d’œil : bandeau, ligne du roster, en-tête du chat.
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 2_000 })
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 2_000 })
-  await page.locator('[data-bot=nova] .live-avatar.is-working').waitFor({ timeout: 2_000 })
+  await page.locator('[data-bot=nova] .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 2_000 })
   await page.locator('.chat-identity.is-working .chat-status').getByText('Au travail').waitFor({ timeout: 2_000 })
   await delay(600) // laisse finir les entrées animées : Chrome sans interface ne les avance qu’à la demande
   await page.screenshot({ path: `${SCREENSHOTS}nova-working-ui.png` })
-  await page.locator('.details-panel .live-avatar.is-done').waitFor({ timeout: 6_000 })
+  await page.locator('.details-panel .live-avatar.is-done img.live-avatar-motion').waitFor({ timeout: 6_000 })
   await page.locator('[data-bot=nova] .bot-row-status.is-done').getByText('Terminé').waitFor({ timeout: 2_000 })
   await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 2_000 })
   await page.screenshot({ path: `${SCREENSHOTS}nova-done-ui.png` })
@@ -624,7 +641,7 @@ try {
   await page.locator('.message-user').getByText('Regarde avec').waitFor({ timeout: 5_000 })
   await page.locator('.message-user').getByText('[Fichier : ancien.pdf]').waitFor({ timeout: 2_000 })
   if (await page.locator('.messages-scroll').getByText('Bot Mode roster').count()) throw new Error('La note de mentions est visible après rechargement.')
-  await orionBox.fill('Vois avec @to')
+  await orionBox.fill('Vois avec @no')
   await page.locator('.mention-menu').getByText('Nova', { exact: true }).waitFor({ timeout: 3_000 })
   if (await page.locator('.mention-menu').getByText('Orion', { exact: true }).count()) throw new Error('Le bot de la conversation est proposé.')
   await orionBox.press('Enter')
@@ -836,7 +853,7 @@ try {
 
   // Raccourcis : palette ⌘K, bot suivant Alt+↓, citation ⌘L, recherche ⌘F.
   await page.keyboard.press('Meta+k')
-  await page.getByRole('textbox', { name: 'Chercher un bot' }).fill('tof')
+  await page.getByRole('textbox', { name: 'Chercher un bot' }).fill('nov')
   await page.locator('.palette-results').getByText('Nova', { exact: true }).waitFor({ timeout: 2_000 })
   await page.keyboard.press('Enter')
   await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
@@ -1064,7 +1081,7 @@ try {
   await vaultEntry.getByRole('button', { name: 'Modifier' }).click()
   await page.locator('.vault-bot').filter({ hasText: 'Nova' }).locator('input').check()
   await page.locator('.vault-form').getByRole('button', { name: 'Enregistrer' }).click()
-  await vaultEntry.getByText('steam-test · Orion, Nova').waitFor({ timeout: 5_000 })
+  await vaultEntry.getByText('steam-test · Nova, Orion').waitFor({ timeout: 5_000 })
   await page.screenshot({ path: `${SCREENSHOTS}vault-settings.png` })
   const allowedFill = await fetch('http://127.0.0.1:4333/v1/fill', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
@@ -1274,6 +1291,7 @@ try {
   if (await page.locator('.model-option[data-model="claude-opus-5-5"]').count()) throw new Error('/model sonnet ne filtre pas.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
   if (await page.locator('.model-option[data-model="modele-interdit"]').count()) throw new Error('Fournisseur non connecté proposé.')
+  if (await page.locator('.model-option[data-model="hidden-model"]').count()) throw new Error('Un fournisseur masqué par les réglages doit être retiré du sélecteur.')
   page.once('dialog', (dialog) => dialog.accept())
   // Le groupe du modèle actif est ouvert, les autres sont pliés ; le pliage reste d'une ouverture à l'autre.
   const kimiGroup = page.locator('.model-group', { hasText: 'Kimi' })
@@ -1493,6 +1511,7 @@ try {
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
+      ...TEST_ENV,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -1516,10 +1535,10 @@ try {
   await page.locator('[data-bot=orion]').getByText('Pilote le Chrome partagé').waitFor()
   rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
 
-  // Chat local isolé : modèle fixé par le serveur, aucun outil, aucune requête à Hermes.
+  // Chat local isolé : modèle installé seulement, aucun outil, aucune requête à Hermes.
   if ((await fetch('http://127.0.0.1:4332/api/local-chat', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
-  await page.locator('[data-bot="local:qwen-abliterated"]').click()
-  const localBox = page.getByRole('textbox', { name: 'Message à Qwen abliterated' })
+  await page.locator('[data-bot="local:ollama"]').click()
+  const localBox = page.getByRole('textbox', { name: 'Message à Modèle local' })
   await localBox.waitFor({ timeout: 3_000 })
   if (await page.getByRole('button', { name: 'Ajouter des fichiers' }).count()) throw new Error('Le chat local ne doit pas accepter de fichiers.')
   if (await page.getByRole('radio', { name: 'BRAIN', exact: true }).count()) throw new Error('Le chat local ne doit pas avoir de modes.')
@@ -1530,18 +1549,20 @@ try {
   await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 5_000 })
   if (await page.locator('.local-chat').getByText('je réfléchis').count()) throw new Error('Le raisonnement du modèle est affiché.')
   const localRequest = localChatRequests.at(-1)
-  if (localRequest.model !== 'huihui-qwen3.8-27b-abliterated:q4_k' || 'tools' in localRequest || localRequest.messages.length !== 1 || localRequest.messages[0].content !== 'Bonjour local') throw new Error(`Requête locale : ${JSON.stringify(localRequest)}`)
+  if (localRequest.model !== 'modele-local:7b' || 'tools' in localRequest || localRequest.messages.length !== 1 || localRequest.messages[0].content !== 'Bonjour local') throw new Error(`Requête locale : ${JSON.stringify(localRequest)}`)
   if (promptCalls !== promptsBeforeLocal) throw new Error('Le chat local a lancé un tour Hermes.')
   await page.screenshot({ path: `${SCREENSHOTS}local-chat.png` })
-  const smuggled = await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'autre', tools: [{ type: 'function' }], messages: [{ role: 'user', content: 'x', tools: [1] }] }) })).text())
+  const smuggled = await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'autre-local:1b', tools: [{ type: 'function' }], messages: [{ role: 'user', content: 'x', tools: [1] }] }) })).text())
   const smuggledRequest = localChatRequests.at(-1)
-  if (!smuggled || smuggledRequest.model !== 'huihui-qwen3.8-27b-abliterated:q4_k' || 'tools' in smuggledRequest || 'tools' in smuggledRequest.messages[0]) throw new Error('Le serveur a laissé passer autre chose que les messages.')
+  if (!smuggled || smuggledRequest.model !== 'autre-local:1b' || 'tools' in smuggledRequest || 'tools' in smuggledRequest.messages[0]) throw new Error('Le serveur a laissé passer autre chose que les messages.')
+  const requestsBeforeUnknown = localChatRequests.length
+  if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe', messages: [{ role: 'user', content: 'x' }] }) })).status) !== 404 || localChatRequests.length !== requestsBeforeUnknown) throw new Error('Un modèle non installé a été demandé à Ollama.')
   if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: 'x' }] }) })).status) !== 400) throw new Error('Rôle system accepté.')
   // Aller sur un autre bot garde la conversation locale.
   await page.locator('[data-bot=nova]').click()
   await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
   await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 3_000 })
-  await page.locator('[data-bot="local:qwen-abliterated"]').click()
+  await page.locator('[data-bot="local:ollama"]').click()
   await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 2_000 })
   // Modèle absent : message clair, pas de plantage.
   localModelMissing = true
@@ -1582,7 +1603,7 @@ try {
   await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
   await page.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
   await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
-  await page.locator('[data-bot=orion] .live-avatar.is-working').waitFor()
+  await page.locator('[data-bot=orion] img.live-avatar-motion').waitFor()
   await delay(900)
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-light.png` })
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
@@ -1611,4 +1632,5 @@ try {
   await new Promise((resolve) => cdpMock.close(resolve))
   rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
   rmSync(BROWSER_TOUR_FIXTURE, { force: true })
+  rmSync(TEST_DATA, { recursive: true, force: true })
 }

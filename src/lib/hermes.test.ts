@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
 import { answerPrompt, attachFile, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
 
 const chat: ActiveChat = {
@@ -192,17 +193,22 @@ describe('changement de modèle', () => {
     expect(request.mock.calls[1][1].payload).toEqual({ ...option, confirm: 'confirm-test' })
   })
 
-  it('ne propose que les fournisseurs connectés', async () => {
+  it('ne propose ni les fournisseurs masqués par les réglages, ni ceux qui ne sont pas connectés', async () => {
     const request = vi.fn().mockResolvedValue({
       model: 'claude-opus-5-5',
       providers: [
+        { slug: 'masque', name: 'Masqué', authenticated: true, models: ['modele-masque'] },
         { slug: 'absent', name: 'Non connecté', authenticated: false, models: ['autre-modele'] },
         { slug: 'anthropic', name: 'Anthropic', authenticated: true, models: ['claude-opus-5-5'] },
       ],
     })
-    const result = await loadModelOptions({ request } as unknown as HermesClient, 'orion', 'chat-orion')
-
-    expect(result.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5'])
+    setAppConfig(parseAppConfig({ ui: { hiddenProviders: ['masque'] } }))
+    try {
+      const result = await loadModelOptions({ request } as unknown as HermesClient, 'orion', 'chat-orion')
+      expect(result.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5'])
+    } finally {
+      setAppConfig(DEFAULT_APP_CONFIG)
+    }
   })
 })
 

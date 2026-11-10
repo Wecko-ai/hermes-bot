@@ -1,12 +1,18 @@
-# Dépendances (sans barre finale : couvre aussi un lien symbolique)
+# Dependencies (no trailing slash: also covers a symlink)
 node_modules
 
 # Builds
 dist/
 release/
+release
+.swiftpm/
+.build/
 *.tsbuildinfo
 
-# Tests
+# Sauvegardes locales
+*.bak-claude-*
+
+# Tests et captures locales
 coverage/
 tests/screenshots/
 
@@ -17,3 +23,10 @@ tests/screenshots/
 
 # macOS
 .DS_Store
+
+
+# Local work folder
+.scratch/
+
+# Parties privées de l’installation (dépôt git à part, jamais publié)
+private/

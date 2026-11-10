@@ -7,8 +7,10 @@ import { cleanPreview, shortTime } from '../lib/time'
 import { compareBotActivity, latestActivity } from '../lib/activity'
 import { workLine, type WorkSummary } from '../lib/work-summary'
 import { updateSettings, useSettings } from '../lib/settings'
+import { compareSections, useAppConfig } from '../lib/app-config'
 
-const UNSORTED_SECTION = 'Non classés'
+// « Non classés », puis le chat local, ferment la liste sauf si la configuration les place ailleurs.
+const TRAILING_SECTIONS = ['Non classés', 'Local']
 
 interface SidebarProps {
   bots: Bot[]
@@ -29,6 +31,7 @@ interface SidebarProps {
 
 export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, dark, mobileOpen, onCloseMobile, onSelect, onNewMessage, onToggleTheme, onOpenSettings }: SidebarProps) {
   const { activitySort, showHidden } = useSettings()
+  const { ui } = useAppConfig()
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [unreadOnly, setUnreadOnly] = useState(false)
@@ -55,8 +58,9 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
     if (activitySort) return visible.length ? [['', visible.sort(compareBotActivity)]] : []
     const map = new Map<string, Bot[]>()
     visible.forEach((bot) => map.set(bot.section, [...(map.get(bot.section) || []), bot]))
-    return [...map.entries()].sort(([a], [b]) => Number(a === UNSORTED_SECTION) - Number(b === UNSORTED_SECTION) || a.localeCompare(b, 'fr'))
-  }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort])
+    const order = compareSections(ui.sectionOrder, TRAILING_SECTIONS)
+    return [...map.entries()].sort(([a], [b]) => order(a, b))
+  }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort, ui.sectionOrder])
 
   const unread = bots.reduce((total, bot) => total + bot.unread, 0)
   const toggleSection = (section: string) => {
@@ -184,7 +188,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
             {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? 'Masquer les bots cachés' : 'Afficher les bots cachés'} onClick={() => updateSettings({ showHidden: !showHidden })}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
             <button className="plain-icon" aria-label="Réglages" title="Réglages (⌘,)" onClick={onOpenSettings}><Settings size={16} /></button>
             <button className="plain-icon" aria-label={dark ? 'Passer au thème clair' : 'Passer au thème sombre'} onClick={(event) => onToggleTheme({ x: event.clientX, y: event.clientY })}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
-            <button className="user-menu" aria-label="Se déconnecter" title="Se déconnecter" onClick={onLogout}><span className="user-avatar" aria-hidden="true"><User size={14} /></span></button>
+            <button className="user-menu" aria-label="Se déconnecter" title="Se déconnecter" onClick={onLogout}>{ui.userInitial ? <span className="user-avatar" aria-label={ui.userName || ui.userInitial}>{ui.userInitial}</span> : <span className="user-avatar" aria-hidden="true"><User size={14} /></span>}</button>
           </div>
         </div>
       </aside>

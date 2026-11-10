@@ -19,6 +19,8 @@ export interface AppSettings {
   showHidden: boolean
   /** Liste de masquage, pas d’autorisation : un modèle qui vient de sortir reste proposé. */
   hiddenModels: string[]
+  /** Modèle Ollama du chat local. Vide : celui de la configuration, sinon le premier installé. */
+  localModel: string
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -44,6 +46,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     activitySort: flag(value.activitySort, legacy('hermesbot-sort') === 'activity'),
     showHidden: flag(value.showHidden, false),
     hiddenModels: Array.isArray(value.hiddenModels) ? value.hiddenModels.filter((key): key is string => typeof key === 'string') : [],
+    localModel: typeof value.localModel === 'string' ? value.localModel : '',
   }
 }
 

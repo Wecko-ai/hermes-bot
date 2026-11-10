@@ -3,9 +3,13 @@
   "productName": "HermesBot",
   "version": "0.2.0",
   "private": true,
-  "description": "Application de bureau pour piloter ses bots Hermes Agent.",
+  "description": "Desktop app to run a team of Hermes Agent bots.",
+  "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "NODE_ENV=development node server/index.mjs",
     "build": "tsc -b --noEmit && vite build",
@@ -40,6 +44,5 @@
     "typescript": "6.0.3",
     "vite": "8.3.4",
     "vitest": "4.1.12"
-  },
-  "license": "MIT"
+  }
 }

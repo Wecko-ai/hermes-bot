@@ -4,6 +4,7 @@ import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption, Routine, SessionUsage } from './types'
 import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
+import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { applyWorkEvent, workLine, type WorkSummary } from './lib/work-summary'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
@@ -25,7 +26,7 @@ import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
-import { LOCAL_CHAT_BOT, LOCAL_CHAT_SLUG } from './lib/local-chat'
+import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
@@ -107,6 +108,10 @@ export default function App() {
   const [detailsOpen, setDetailsOpen] = useState(() => window.innerWidth >= 1180)
   const [mobileOpen, setMobileOpen] = useState(false)
   const settings = useSettings()
+  const appConfig = useAppConfig()
+  // Aussi en démo : les animations installées s’y montrent.
+  useEffect(() => { void ensureAppConfig() }, [])
+  const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
@@ -127,6 +132,7 @@ export default function App() {
   // Montée à la première ouverture, puis gardée : une réponse continue pendant qu’on regarde un autre bot.
   const [localStarted, setLocalStarted] = useState(false)
   const [localRunning, setLocalRunning] = useState(false)
+  const [localModels, setLocalModels] = useState<LocalModels | null>(null)
 
   const setStreaming = (value: string | ((current: string) => string)) => {
     const next = typeof value === 'function' ? value(streamingRef.current) : value
@@ -378,7 +384,7 @@ export default function App() {
         const current = localOpenRef.current ? LOCAL_CHAT_SLUG : selectedRef.current
         const at = rows.findIndex((row) => row.dataset.bot === current)
         const target = rows[(at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]
-        const bot = target.dataset.bot === LOCAL_CHAT_SLUG ? LOCAL_CHAT_BOT : botsRef.current.find((item) => item.slug === target.dataset.bot)
+        const bot = target.dataset.bot === LOCAL_CHAT_SLUG ? localBotRef.current : botsRef.current.find((item) => item.slug === target.dataset.bot)
         if (bot) selectBot(bot)
       }
     }
@@ -483,13 +489,15 @@ export default function App() {
     setAuthError('')
     setRosterLoaded(false)
     try {
-      await client.connect()
+      const [, appConfig] = await Promise.all([client.connect(), ensureAppConfig()])
       const roster = await loadRoster(client)
       setBots(roster.bots)
       setConnected(true)
       setAuth('ready')
-      const preferred = roster.bots.find((bot) => !bot.hidden)
+      const defaultBot = appConfig.ui.defaultBot
+      const preferred = (defaultBot && roster.bots.find((bot) => bot.slug === defaultBot && !bot.hidden)) || roster.bots.find((bot) => !bot.hidden)
       if (preferred) setSelected((current) => current || preferred.slug)
+      void loadLocalModels().then(setLocalModels)
       if (roster.bots.length === 0) setNotice('Aucun bot Hermes visible. Les profils système sont volontairement masqués.')
     } catch (error) {
       setConnected(false)
@@ -943,8 +951,10 @@ export default function App() {
   }
 
   const selectedBot = bots.find((bot) => bot.slug === selected) || bots[0]
-  const localBot: Bot = { ...LOCAL_CHAT_BOT, status: localRunning ? 'working' : 'idle' }
-  const rosterBots = DEMO ? bots : [...bots, localBot]
+  const localModel = chooseLocalModel(localModels, settings.localModel)
+  const localBot: Bot | null = localModel ? { ...localChatBot(localModel, appConfig.localChat.name), status: localRunning ? 'working' : 'idle' } : null
+  localBotRef.current = localBot
+  const rosterBots = DEMO || !localBot ? bots : [...bots, localBot]
   const openRequest = serverRequests[0]
   const shownSession = activeChatRef.current?.profile === selectedBot?.slug ? activeChatRef.current?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
@@ -1018,7 +1028,7 @@ export default function App() {
           />
         ) : undefined}
       />
-      {localStarted && <LocalChatView bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} />}
+      {localStarted && localBot && <LocalChatView bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} />}
       {detailsOpen && !localOpen && (
         <DetailsPanel
           bot={selectedBot}

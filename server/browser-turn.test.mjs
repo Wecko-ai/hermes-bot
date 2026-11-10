@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { parseBrowserOwners, parseBrowserTurn } from './browser-turn.mjs'
+import { browserTurnCommand, parseBrowserOwners, parseBrowserTurn, readBrowserOwners } from './browser-turn.mjs'
+
+describe('commande de l’arbitre du Chrome', () => {
+  const setting = { command: ['/opt/arbiter', 'statut'], user: 'owner', remoteCommand: ['/usr/bin/ssh', 'host', '/opt/arbiter statut'] }
+
+  it('ne lance rien sans réglage', async () => {
+    expect(browserTurnCommand({ command: null })).toBeNull()
+    expect(browserTurnCommand(undefined)).toBeNull()
+    expect(await readBrowserOwners(null)).toEqual([])
+  })
+
+  it('lance la commande locale pour son utilisateur, la commande distante pour les autres', () => {
+    expect(browserTurnCommand(setting, 'owner')).toEqual(['/opt/arbiter', 'statut'])
+    expect(browserTurnCommand(setting, 'someone')).toEqual(['/usr/bin/ssh', 'host', '/opt/arbiter statut'])
+    expect(browserTurnCommand({ command: ['/opt/arbiter'], user: 'owner', remoteCommand: null }, 'someone')).toBeNull()
+    expect(browserTurnCommand({ command: ['/opt/arbiter'], user: '' }, 'anyone')).toEqual(['/opt/arbiter'])
+  })
+
+  it('renvoie personne quand la commande échoue', async () => {
+    expect(await readBrowserOwners(['/nonexistent/arbiter', 'statut'])).toEqual([])
+  })
+})
 
 describe('propriétaire du Chrome partagé', () => {
   it('lit seulement le propriétaire de la première ligne', () => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import type { Bot } from '../types'
 import { BotAvatar, avatarColor, statusLabel } from './BotAvatar'
-import { hasAnimation } from '../lib/animations'
+import { useAppConfig } from '../lib/app-config'
 import { useSettings } from '../lib/settings'
 
 export type AvatarPhase = 'working' | 'done' | 'idle'
@@ -38,8 +38,9 @@ export function LiveAvatar({ bot, size = 36, showStatus = false }: LiveAvatarPro
   const phase = avatarPhase(bot)
   const [failedSource, setFailedSource] = useState('')
   const reducedMotion = useReducedMotion()
+  const { animatedBots } = useAppConfig()
   const source = `/animations/${bot.slug}-${phase}.webp`
-  const animated = phase !== 'idle' && !reducedMotion && hasAnimation(bot.slug) && failedSource !== source
+  const animated = phase !== 'idle' && !reducedMotion && animatedBots.includes(bot.slug) && failedSource !== source
   const color = avatarColor(bot)
   // Un halo noir ressemblerait à une ombre ratée : les bots noir/blanc prennent la couleur d’accent.
   const glow = color === 'var(--avatar-contrast)' || color === '#000000' ? 'var(--accent)' : color

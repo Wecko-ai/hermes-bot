@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LOCAL_CHAT_SLUG, readLocalChatFrames, visibleAnswer } from './local-chat'
+import { LOCAL_CHAT_SLUG, chooseLocalModel, localChatBot, localModelLabel, readLocalChatFrames, visibleAnswer } from './local-chat'
 
 describe('chat local', () => {
   it('garde une ligne coupée pour le morceau suivant', () => {
@@ -18,6 +18,23 @@ describe('chat local', () => {
     expect(visibleAnswer('<think>je cherche</think>\n\nRéponse')).toBe('Réponse')
     expect(visibleAnswer('<think>je cherche encore')).toBe('')
     expect(visibleAnswer('Réponse simple')).toBe('Réponse simple')
+  })
+
+  it('nomme le modèle sans son étiquette latest ni son dépôt', () => {
+    expect(localModelLabel('qwen3:8b')).toBe('qwen3 8b')
+    expect(localModelLabel('library/llama3.2:latest')).toBe('llama3.2')
+    expect(localChatBot('qwen3:8b').name).toBe('qwen3 8b')
+    expect(localChatBot('qwen3:8b', 'Mon modèle').name).toBe('Mon modèle')
+  })
+
+  it('choisit le modèle des réglages, puis celui de la configuration, puis le premier installé', () => {
+    const local = { available: true, models: ['a:1b', 'b:7b', 'c:3b'], defaultModel: 'b:7b' }
+    expect(chooseLocalModel(local, 'c:3b')).toBe('c:3b')
+    expect(chooseLocalModel(local, 'absent')).toBe('b:7b')
+    expect(chooseLocalModel({ ...local, defaultModel: 'absent' }, '')).toBe('a:1b')
+    expect(chooseLocalModel({ ...local, available: false }, 'c:3b')).toBe('')
+    expect(chooseLocalModel({ available: true, models: [], defaultModel: '' }, '')).toBe('')
+    expect(chooseLocalModel(null, '')).toBe('')
   })
 
   it('utilise un profil refusé par la route des médias', () => {

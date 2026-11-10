@@ -1,11 +1,12 @@
+import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
 /**
- * Propriétaires du Chrome, un par équipe : lignes `tour[équipe] : <profil> …` ou ancienne ligne `tour : <profil> …`.
- * La file, le pid et les dates restent locaux. `libre` et les anciens verrous anonymes sont exclus.
+ * Owners of the shared Chrome, one per team: `tour[team] : <profile> …` lines, or the older single `tour : <profile> …`.
+ * The queue, pid and dates stay local. `libre` (free) and old anonymous locks are left out.
  */
 export function parseBrowserOwners(output) {
   const owners = []
@@ -17,18 +18,26 @@ export function parseBrowserOwners(output) {
   return owners
 }
 
-/** Premier propriétaire, pour les clients d’avant les équipes. */
+/** First owner, for clients older than teams. */
 export function parseBrowserTurn(output) {
   return parseBrowserOwners(output)[0] || ''
 }
 
-/** Lecture seule d’un arbitre du Chrome partagé, facultatif : `BROWSER_TOUR_COMMAND`, qui écrit « tour : <profil> ». */
-export async function readBrowserOwners() {
-  const command = process.env.BROWSER_TOUR_COMMAND
-  if (!command) return ''
-  const args = ['statut']
+/**
+ * Which command reads the arbiter, from the `browserTurn` setting. None configured: no arbiter, nobody is shown
+ * as driving the browser. With `user`, the command runs only as that macOS user and everyone else runs `remoteCommand`.
+ */
+export function browserTurnCommand(setting, username = os.userInfo().username) {
+  if (!setting?.command) return null
+  if (setting.user && username !== setting.user) return setting.remoteCommand || null
+  return setting.command
+}
+
+/** Read-only call to the arbiter. Any failure means « nobody », never an error for the window. */
+export async function readBrowserOwners(argv) {
+  if (!argv?.length) return []
   try {
-    const { stdout } = await execFileAsync(command, args, {
+    const { stdout } = await execFileAsync(argv[0], argv.slice(1), {
       timeout: 4000,
       maxBuffer: 16_384,
       windowsHide: true,
@@ -38,8 +47,4 @@ export async function readBrowserOwners() {
   } catch {
     return []
   }
-}
-
-export async function readBrowserOwner() {
-  return (await readBrowserOwners())[0] || ''
 }

@@ -49,7 +49,7 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
     setActivity('Chargement du modèle…')
     let raw = ''
     try {
-      await streamLocalChat(history.map(({ role, content }) => ({ role, content })), (frame) => {
+      await streamLocalChat(bot.model, history.map(({ role, content }) => ({ role, content })), (frame) => {
         if (frame.thinking) setActivity('Réfléchit…')
         if (!frame.content) return
         raw += frame.content

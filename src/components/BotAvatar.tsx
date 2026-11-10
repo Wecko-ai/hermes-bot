@@ -1,4 +1,5 @@
 import type { Bot, BotStatus } from '../types'
+import { getAppConfig } from '../lib/app-config'
 
 const colors = ['#7A63C9', '#E8833A', '#3FA66B', '#D9483B', '#3B82C4', '#7B8794', '#C9559A', '#2BA6A0', '#E0A526', '#9A6B4F', '#2F4858']
 const shapes = ['blob', 'pebble', 'squircle', 'tablet', 'wedge', 'hex', 'cloud', 'teardrop']
@@ -19,6 +20,7 @@ function hash(value: string) {
 
 export function avatarColor(bot: Bot) {
   if (bot.avatar?.color) return namedColors[bot.avatar.color] || bot.avatar.color
+  if (getAppConfig().ui.contrastAvatars.includes(bot.slug)) return 'var(--avatar-contrast)'
   const seed = hash(bot.slug || bot.name)
   return colors[(seed >>> 4) % colors.length]
 }

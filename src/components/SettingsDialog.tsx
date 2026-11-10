@@ -6,6 +6,7 @@ import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
+import { chooseLocalModel, loadLocalModels, localModelLabel, type LocalModels } from '../lib/local-chat'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
@@ -79,6 +80,9 @@ function GeneralTab({ onChooseTheme }: Pick<SettingsDialogProps, 'onChooseTheme'
 
 function ChatTab() {
   const settings = useSettings()
+  const [local, setLocal] = useState<LocalModels | null>(null)
+  useEffect(() => { void loadLocalModels().then(setLocal) }, [])
+  const localModel = chooseLocalModel(local, settings.localModel)
   return (
     <>
       <Row label="Envoyer un message avec">
@@ -89,6 +93,13 @@ function ChatTab() {
         <Segments<'groups' | 'activity'> label="Classer les bots" value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: 'Groupes' }, { id: 'activity', label: 'Activité' }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
       </Row>
       <Toggle label="Afficher les bots cachés" checked={settings.showHidden} onChange={(showHidden) => updateSettings({ showHidden })} />
+      {local?.available && local.models.length > 0 && (
+        <Row label="Modèle du chat local" hint="Ollama, sans outils">
+          <select className="settings-select" aria-label="Modèle du chat local" value={localModel} onChange={(event) => updateSettings({ localModel: event.target.value })}>
+            {local.models.map((model) => <option key={model} value={model}>{localModelLabel(model)}</option>)}
+          </select>
+        </Row>
+      )}
     </>
   )
 }

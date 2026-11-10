@@ -1,18 +1,21 @@
 import http from 'node:http'
 import { readFileSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
 import { randomBytes } from 'node:crypto'
-import { readBrowserOwners } from './browser-turn.mjs'
+import { browserTurnCommand, readBrowserOwners } from './browser-turn.mjs'
+import configModule from './config.cjs'
 
+const CONFIG = configModule.loadConfig()
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.PORT || 4330)
-const HERMES_ORIGIN = process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120'
-const HERMES_BROWSER_ORIGIN = process.env.HERMES_BROWSER_ORIGIN || HERMES_ORIGIN
+const HERMES_ORIGIN = CONFIG.gatewayOrigin
+const HERMES_BROWSER_ORIGIN = CONFIG.browserOrigin
+const BROWSER_TURN_COMMAND = browserTurnCommand(CONFIG.browserTurn)
 const HERMES_WS_ORIGIN = HERMES_ORIGIN.replace(/^http/, 'ws')
 const DEVELOPMENT = process.env.NODE_ENV !== 'production'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -434,11 +437,35 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
   })
 }
 
-// Chat local isolé. Le modèle est fixé ici et seuls les messages partent : ce modèle sans refus n’a aucun
-// outil. Depuis un autre Mac, 127.0.0.1:11434 peut être un tunnel vers la machine d’Ollama.
-const OLLAMA_ORIGIN = process.env.OLLAMA_ORIGIN || 'http://127.0.0.1:11434'
-const LOCAL_CHAT_MODEL = 'huihui-qwen3.8-27b-abliterated:q4_k'
+// Chat local isolé, avec un modèle Ollama installé sur la machine. Seuls les messages partent, jamais d’outil :
+// le modèle ne peut rien exécuter. Depuis un autre Mac, 127.0.0.1:11434 peut être un tunnel vers la machine d’Ollama.
+const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
 const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
+const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
+let ollamaModelsCache = { at: 0, models: null }
+
+/** Modèles installés dans Ollama (`/api/tags`), gardés 30 s. `null` : Ollama ne répond pas. */
+async function ollamaModels() {
+  if (ollamaModelsCache.models && Date.now() - ollamaModelsCache.at < 30_000) return ollamaModelsCache.models
+  try {
+    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/tags`, { signal: AbortSignal.timeout(3000) })
+    if (!upstream.ok) return null
+    const body = await upstream.json()
+    const models = (Array.isArray(body?.models) ? body.models : [])
+      .map((model) => (typeof model?.name === 'string' ? model.name : ''))
+      .filter((name) => OLLAMA_MODEL.test(name))
+    ollamaModelsCache = { at: Date.now(), models }
+    return models
+  } catch {
+    return null
+  }
+}
+
+async function handleLocalModels(request, response) {
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const models = await ollamaModels()
+  return json(response, 200, { available: models !== null, models: models || [], defaultModel: CONFIG.localChat.model })
+}
 
 function localChatMessages(body) {
   if (!Array.isArray(body?.messages) || body.messages.length === 0 || body.messages.length > 400) return null
@@ -449,8 +476,14 @@ function localChatMessages(body) {
 async function handleLocalChat(request, response) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-  const messages = localChatMessages(await bodyJson(request, LOCAL_CHAT_MAX_BYTES))
+  const body = await bodyJson(request, LOCAL_CHAT_MAX_BYTES)
+  const messages = localChatMessages(body)
   if (!messages) return json(response, 400, { error: 'invalid_messages' })
+  // Le modèle demandé doit être installé : la fenêtre ne peut viser rien d’autre qu’un modèle local.
+  const requested = typeof body.model === 'string' && body.model ? body.model : CONFIG.localChat.model
+  const installed = await ollamaModels()
+  if (installed === null) return json(response, 503, { error: 'local_model_unreachable' })
+  if (!requested || !installed.includes(requested)) return json(response, 404, { error: 'local_model_missing' })
   const controller = new AbortController()
   response.on('close', () => { if (!response.writableFinished) controller.abort() })
   let upstream
@@ -458,8 +491,8 @@ async function handleLocalChat(request, response) {
     upstream = await fetch(`${OLLAMA_ORIGIN}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // Déchargé vite : la machine est partagée, et ce modèle occupe environ 18 Go de mémoire GPU.
-      body: JSON.stringify({ model: LOCAL_CHAT_MODEL, messages, stream: true, keep_alive: '2m', options: { num_ctx: 32768 } }),
+      // Déchargé vite : la machine peut être partagée, et un grand modèle occupe beaucoup de mémoire GPU.
+      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: '2m', options: { num_ctx: 32768 } }),
       signal: controller.signal,
     })
   } catch {
@@ -573,6 +606,47 @@ const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join('; ')
 
+// Animations facultatives des bots : `<slug>-working.webp` et `<slug>-done.webp` dans le dossier `animationsDir`.
+const ANIMATION_FILE = /^\/animations\/([A-Za-z0-9][A-Za-z0-9_.-]{0,63})-(working|done)\.webp$/
+
+async function animatedBots() {
+  try {
+    const names = new Set(await readdir(CONFIG.animationsDir))
+    return [...names]
+      .map((name) => /^([A-Za-z0-9][A-Za-z0-9_.-]{0,63})-working\.webp$/.exec(name)?.[1])
+      .filter((slug) => slug && names.has(`${slug}-done.webp`))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+async function serveAnimation(response, slug, phase) {
+  const file = path.join(CONFIG.animationsDir, `${slug}-${phase}.webp`)
+  try {
+    const data = await readFile(file)
+    response.writeHead(200, {
+      'Content-Type': 'image/webp',
+      'Content-Length': data.length,
+      'Cache-Control': 'private, max-age=3600',
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    })
+    return response.end(data)
+  } catch {
+    return json(response, 404, { error: 'not_found' })
+  }
+}
+
+/** Réglages d’interface de cette installation. Rien de secret : préférences et liste des bots animés. */
+async function handleAppConfig(response) {
+  return json(response, 200, {
+    ui: CONFIG.ui,
+    animatedBots: await animatedBots(),
+    localChat: { name: CONFIG.localChat.name },
+  })
+}
+
 async function serveProduction(response, pathname) {
   const requested = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '')
   let file = path.resolve(DIST, requested)
@@ -653,10 +727,20 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/local-chat' && request.method === 'POST') {
       return await handleLocalChat(request, response)
     }
+    if (url.pathname === '/api/local-chat/models' && request.method === 'GET') {
+      return await handleLocalModels(request, response)
+    }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
       if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-      const owners = await readBrowserOwners()
+      const owners = await readBrowserOwners(BROWSER_TURN_COMMAND)
       return json(response, 200, { owner: owners[0] || '', owners })
+    }
+    if (url.pathname === '/api/app-config' && request.method === 'GET') {
+      return await handleAppConfig(response)
+    }
+    const animation = ANIMATION_FILE.exec(url.pathname)
+    if (animation && (request.method === 'GET' || request.method === 'HEAD')) {
+      return await serveAnimation(response, animation[1], animation[2])
     }
     if (url.pathname === '/api/health') {
       return json(response, 200, { ok: true, service: 'hermes-bot' })

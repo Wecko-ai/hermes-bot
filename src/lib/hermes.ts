@@ -2,6 +2,7 @@ import type { Bot, BotStatus, ChatMessage, ContextBreakdown, ModelOption, ModelO
 import { withoutFileRefs } from './attachments'
 import { withoutMentionNote } from './mentions'
 import { agentChatMessages, agentMessagesFromRow } from './inter-agent'
+import { getAppConfig } from './app-config'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -569,10 +570,12 @@ const PLAN_MODELS: Record<string, string[]> = { 'kimi-coding': ['k3.1-pro'], ant
 export async function loadModelOptions(client: HermesClient, profile: string, sessionId?: string): Promise<{ options: ModelOption[]; current: string }> {
   const result = await client.request('model.options', { profile, ...(sessionId ? { session_id: sessionId } : {}) })
   const options: ModelOption[] = []
+  const hiddenProviders = new Set(getAppConfig().ui.hiddenProviders)
   for (const value of Array.isArray(result?.providers) ? result.providers : []) {
     const provider = asObject(value)
     if (provider.authenticated === false) continue
     const slug = asString(provider.slug)
+    if (hiddenProviders.has(slug)) continue
     const unavailable = new Set(Array.isArray(provider.unavailable_models) ? provider.unavailable_models : [])
     const pricing = asObject(provider.pricing)
     const listed = Array.isArray(provider.models) ? provider.models : []

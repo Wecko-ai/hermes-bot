@@ -12,7 +12,7 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', activitySort: false, showHidden: false, hiddenModels: [] })
+    expect(parseSettings(null)).toEqual({ theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', activitySort: false, showHidden: false, hiddenModels: [], localModel: '' })
   })
 
   it('remplace une valeur invalide au lieu de la propager', () => {

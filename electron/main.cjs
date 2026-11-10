@@ -5,30 +5,21 @@ const http = require('node:http')
 const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
 
+const { loadConfig } = require('../server/config.cjs')
+
 const ORIGIN = 'http://127.0.0.1:4330'
-// Réglages facultatifs : variables d’environnement, sinon config.json dans le dossier de données de l’app.
-const config = readConfig()
-const HERMES_ORIGIN = process.env.HERMES_ORIGIN || config.gatewayOrigin || 'http://127.0.0.1:9120'
-const HERMES_BROWSER_ORIGIN = process.env.HERMES_BROWSER_ORIGIN || config.browserOrigin || ''
-const SSH_HOST = process.env.HERMES_SSH_HOST || config.sshHost || ''
+// Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
+const config = loadConfig()
+const HERMES_ORIGIN = config.gatewayOrigin
+const SSH_HOST = config.sshHost
 let hermesTunnelProcess
 let vaultTunnelProcess
 let hermesTunnelRestart
 let mainWindow
 
-function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
-  } catch {
-    return {}
-  }
-}
-
 async function startServer() {
   process.env.NODE_ENV = 'production'
   process.env.PORT = '4330'
-  process.env.HERMES_ORIGIN = HERMES_ORIGIN
-  if (HERMES_BROWSER_ORIGIN) process.env.HERMES_BROWSER_ORIGIN = HERMES_BROWSER_ORIGIN
   configureSessionPersistence()
   const { listening } = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.mjs')).href)
   try {
@@ -105,7 +96,7 @@ function tunnelHasExited(tunnel) {
 }
 
 async function openHermesTunnel() {
-  if (!SSH_HOST) throw new Error(`Hermes ne répond pas sur ${HERMES_ORIGIN}. Lance la gateway, ou renseigne sshHost pour ouvrir un tunnel SSH.`)
+  if (!SSH_HOST) throw new Error(`Hermes ne répond pas sur ${HERMES_ORIGIN}. Lance la gateway (hermes gateway), ou renseigne sshHost pour ouvrir un tunnel SSH.`)
   const port = new URL(HERMES_ORIGIN).port || '9120'
   const tunnelCwd = app.getPath('userData')
   fs.mkdirSync(tunnelCwd, { recursive: true })

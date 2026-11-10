@@ -1,0 +1,8 @@
+[
+  {"package":"https://github.com/LottieFiles/dotlottie-ios","version":"0.16.9","usage":"Animations d’avatars SwiftUI","license":"MIT"},
+  {"package":"https://github.com/gonzalezreal/MarkdownUI","version":"2.4.1","usage":"Markdown des conversations","license":"MIT"},
+  {"package":"https://github.com/sparkle-project/Sparkle","version":"2.10.1","usage":"Mises à jour macOS","license":"Permissive type MIT + licences externes"},
+  {"package":"https://github.com/kishikawakatsumi/KeychainAccess","version":"4.2.2","usage":"Trousseau macOS","license":"MIT"},
+  {"package":"https://github.com/siteline/SwiftUI-Introspect","version":"27.1.0","usage":"Intégrations AppKit","license":"MIT"},
+  {"package":"https://github.com/nalexn/ViewInspector","version":"0.10.5","usage":"Tests SwiftUI","license":"MIT"}
+]
