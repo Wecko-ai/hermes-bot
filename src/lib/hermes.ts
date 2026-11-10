@@ -398,16 +398,26 @@ export async function loadBrowserOwner(): Promise<string> {
   }
 }
 
+/** Profils techniques sans conversation (envoi de notifications seul) : jamais montrés, même sans fiche. */
+const SYSTEM_PROFILES = new Set(['notify'])
+
+function isRosterProfile(profile: Json): boolean {
+  const slug = asString(profile.name)
+  return Boolean(slug) && !profile.is_default && !SYSTEM_PROFILES.has(slug)
+}
+
 export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string> = loadBrowserOwner): Promise<RosterResponse> {
   const [result, chromeOwner] = await Promise.all([client.request('profiles.list', { include_sessions: true }), browserOwner()])
   const profiles = Array.isArray(result?.profiles) ? result.profiles : []
-  const botProfiles = profiles.map(asObject).filter((profile: Json) => asString(profile.name) && !profile.is_default && Object.keys(asObject(asObject(profile.ui_meta)['hermes-bots'])).length > 0)
+  // Un profil sans fiche `hermes-bots` (bot créé hors de l’app, sans section) reste visible, dans « Non classés ».
+  // Seuls `default` et les profils techniques sans chat (SYSTEM_PROFILES) restent hors du roster.
+  const botProfiles = profiles.map(asObject).filter((profile: Json) => isRosterProfile(profile))
   const live = (await loadLiveStatuses(client, botProfiles.map((profile: Json) => asString(profile.name)))).statuses
   const bots = profiles.flatMap((value: unknown, index: number) => {
     const profile = asObject(value)
     const slug = asString(profile.name)
     const metadata = asObject(asObject(profile.ui_meta)['hermes-bots'])
-    if (!slug || profile.is_default || Object.keys(metadata).length === 0) return []
+    if (!isRosterProfile(profile)) return []
     const canonical = asObject(profile.canonical_session)
     const worker = asObject(profile.worker_session)
     const workerActive = asNumber(worker.last_active) * 1000 > Date.now() - WORKER_ACTIVE_MS

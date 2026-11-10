@@ -86,6 +86,16 @@ describe('statut réel du roster', () => {
     expect(Object.fromEntries(bots.map((bot) => [bot.slug, bot.status]))).toEqual({ orion: 'idle', iris: 'working' })
   })
 
+  it('montre un bot sans fiche hermes-bots dans « Non classés », jamais default ni un profil technique', async () => {
+    const request = vi.fn(async (method: string) => method === 'profiles.list'
+      ? { profiles: [{ name: 'default', is_default: true, ui_meta: {} }, { name: 'notify', ui_meta: {} }, { name: 'vega', description: 'Veille', model: 'kimi' }] }
+      : { sessions: [] })
+    const { bots } = await loadRoster({ request } as unknown as HermesClient, async () => '')
+    expect(bots.map((bot) => [bot.slug, bot.name, bot.role, bot.section, bot.sectionId, bot.hidden])).toEqual([
+      ['vega', 'vega', 'Veille', 'Non classés', 'unassigned', false],
+    ])
+  })
+
   it('reste utilisable avec une gateway sans session.active_list', async () => {
     expect((await roster(new Error('unknown method'))).bots[0].status).toBe('idle')
   })
