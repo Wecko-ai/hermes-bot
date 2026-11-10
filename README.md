@@ -65,9 +65,9 @@ It is an independent project, not affiliated with Nous Research. Status: early (
 
 ## Install with your agent
 
-Give this message to an agent that can run shell commands on your Mac, with the address of this page in it:
+Give this message to an agent that can run shell commands on your Mac:
 
-> Install HermesBot on this Mac. Clone `<address of this repository>` and follow `AGENT-INSTALL.md` at its root, step by step.
+> Read https://raw.githubusercontent.com/Wecko-ai/hermes-bot/main/AGENT-INSTALL.md and follow it, step by step, to install HermesBot on this Mac.
 
 [AGENT-INSTALL.md](AGENT-INSTALL.md) is written for the agent. It checks your Mac, builds the app, tries the demo and tells you whether HermesBot can sign in to your Hermes. It asks you before it touches your Hermes or your Applications folder, and it never handles your password.
 

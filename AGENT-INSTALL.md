@@ -2,9 +2,9 @@
 
 This page is written for an agent: any assistant that can run shell commands on your Mac.
 
-**If you are a person**, give your agent this message, with the address of this repository in it:
+**If you are a person**, give your agent this message:
 
-> Install HermesBot on this Mac. Clone `<address of this repository>` and follow `AGENT-INSTALL.md` at its root, step by step.
+> Read https://raw.githubusercontent.com/Wecko-ai/hermes-bot/main/AGENT-INSTALL.md and follow it, step by step, to install HermesBot on this Mac.
 
 The agent checks your Mac, builds the app, tries it in demo mode and tells you whether HermesBot can sign in to your Hermes. It asks you before it touches your Hermes or your Applications folder. Two things stay yours: the password, which you type in the app and nowhere else, and any change to how your Hermes is reached.
 
@@ -40,7 +40,7 @@ df -h "$HOME" | tail -1   # about 1 GB free is needed
 ## 2. Get the code
 
 ```bash
-git clone <address of this repository> "$HOME/hermes-bot"
+git clone https://github.com/Wecko-ai/hermes-bot.git "$HOME/hermes-bot"
 cd "$HOME/hermes-bot"
 npm ci
 ```
