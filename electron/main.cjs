@@ -1,5 +1,5 @@
 const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain } = require('electron')
-const { spawn } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
 const { pathToFileURL } = require('node:url')
@@ -120,6 +120,19 @@ function openVaultTunnel() {
   ], { cwd: app.getPath('userData'), stdio: 'ignore' })
   tunnel.once('error', () => undefined)
   vaultTunnelProcess = tunnel
+  fetchVaultToken()
+}
+
+/** Jeton d’administration du coffre, lu sur la machine des bots par SSH et gardé en mémoire seulement. */
+function fetchVaultToken() {
+  if (/^[0-9a-f]{64}$/.test(process.env.HERMESBOT_VAULT_TOKEN || '')) return
+  execFile('/usr/bin/ssh', [
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', SSH_HOST, 'cat',
+    '"Library/Application Support/HermesBot/vault-admin.token"',
+  ], { timeout: 15_000 }, (error, stdout) => {
+    const value = String(stdout || '').trim()
+    if (!error && /^[0-9a-f]{64}$/.test(value)) process.env.HERMESBOT_VAULT_TOKEN = value
+  })
 }
 
 async function ensureHermes() {

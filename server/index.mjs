@@ -1,5 +1,7 @@
 import http from 'node:http'
+import { readFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
@@ -59,6 +61,19 @@ const credentialStore = globalThis.__hermesBotCredentialStore
 const BROWSER_VAULT_PORT = Number(process.env.BROWSER_VAULT_PORT || 4331)
 if (!Number.isInteger(BROWSER_VAULT_PORT) || BROWSER_VAULT_PORT < 1 || BROWSER_VAULT_PORT > 65535) throw new Error('BROWSER_VAULT_PORT invalide')
 const BROWSER_VAULT_ORIGIN = `http://127.0.0.1:${BROWSER_VAULT_PORT}`
+// Jeton de l’API d’administration du coffre : fichier local sur la machine du coffre, ou valeur
+// récupérée par SSH et posée en mémoire par l’app quand elle tourne ailleurs.
+const VAULT_TOKEN_FILE = process.env.HERMESBOT_VAULT_TOKEN_FILE
+  || path.join(os.homedir(), 'Library/Application Support/HermesBot/vault-admin.token')
+function vaultToken() {
+  if (/^[0-9a-f]{64}$/.test(process.env.HERMESBOT_VAULT_TOKEN || '')) return process.env.HERMESBOT_VAULT_TOKEN
+  try {
+    const value = readFileSync(VAULT_TOKEN_FILE, 'utf8').trim()
+    return /^[0-9a-f]{64}$/.test(value) ? value : ''
+  } catch {
+    return ''
+  }
+}
 
 function restoreSessions() {
   if (!persistence) return
@@ -465,7 +480,7 @@ async function vaultAdmin(pathname, body) {
   try {
     const response = await fetch(`${BROWSER_VAULT_ORIGIN}${pathname}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${vaultToken()}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),
       // Une demande de code attend l’injection CDP : jusqu’à une minute.
       signal: AbortSignal.timeout(65_000),

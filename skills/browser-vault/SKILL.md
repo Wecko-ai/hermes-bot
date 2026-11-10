@@ -21,6 +21,7 @@ node ~/projects/hermes-bot/scripts/browser-vault.mjs <list|save|fill|code> --bot
 - Ne jamais taper, lire, copier ni afficher un mot de passe : pas de `eval` sur un champ `password`, pas de `.value`, pas de capture d’un formulaire rempli envoyée dans un message.
 - Ne jamais demander un mot de passe à l’utilisateur dans le chat : le coffre lui ouvre une fenêtre sécurisée dans HermesBot.
 - Dans le Chrome partagé, utiliser ce coffre, pas l’outil `browser_vault` de Hermes : celui-ci range les mots de passe ailleurs.
+- Seulement les quatre commandes ci-dessus. Ne jamais appeler l’API `/admin` du coffre, lire son jeton, ni chercher un mot de passe dans le trousseau (`security`) : c’est réservé à l’utilisateur et à l’app HermesBot.
 - En tâche planifiée (cron) : jamais `save` ni `code`, personne n’est là pour répondre. Si `fill` ne suffit pas, s’arrêter et le signaler.
 
 ## Déroulé

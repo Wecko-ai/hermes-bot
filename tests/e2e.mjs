@@ -16,6 +16,7 @@ const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
 // Coffre CDP : service à part, sur un trousseau jetable (jamais celui de session).
 const BROWSER_VAULT_KEYCHAIN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}.keychain-db`)
 const BROWSER_VAULT_AUDIT = path.join(os.tmpdir(), 'hermesbot-e2e-browser-vault-audit.jsonl')
+const BROWSER_VAULT_TOKEN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}-vault.token`)
 const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (faux mot de passe du test)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
@@ -435,7 +436,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env, BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
-      HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT,
+      HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -449,7 +450,7 @@ try {
     env: {
       ...process.env,
       NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333',
+      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -892,6 +893,17 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova' }),
   })
   if ((await otherList.json()).entries?.length !== 0) throw new Error('Un bot voit les identifiants réservés à un autre.')
+  // Un bot ne peut pas s’autoriser lui-même par l’API de l’app : jeton exigé, fichier en 0600.
+  const selfGrant = (headers) => fetch('http://127.0.0.1:4333/admin/v1/entries', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ origin: 'https://store.steampowered.com', identifier: 'steam-test', bots: ['*'] }),
+  })
+  for (const headers of [{}, { Authorization: 'Bearer faux' }, { Authorization: `Bearer ${'0'.repeat(64)}` }]) {
+    const refused = await selfGrant(headers)
+    if (refused.status !== 403 || (await refused.json()).error !== 'admin_forbidden') throw new Error('API d’administration du coffre ouverte sans jeton.')
+  }
+  if ((await fetch('http://127.0.0.1:4333/admin/v1/entries')).status !== 403) throw new Error('Liste d’administration lisible sans jeton.')
+  if (((await import('node:fs')).statSync(BROWSER_VAULT_TOKEN).mode & 0o777) !== 0o600) throw new Error('Jeton du coffre lisible par d’autres comptes.')
   const cliListed = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'list', '--bot', 'orion'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
   })
@@ -1368,7 +1380,7 @@ try {
     env: {
       ...process.env,
       NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333',
+      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -1483,6 +1495,7 @@ try {
   if (vaultService) vaultService.kill('SIGTERM')
   await execFileAsync('/usr/bin/security', ['delete-keychain', BROWSER_VAULT_KEYCHAIN]).catch(() => undefined)
   rmSync(BROWSER_VAULT_KEYCHAIN, { force: true })
+  rmSync(BROWSER_VAULT_TOKEN, { force: true })
   wss.close()
   cdpWss.close()
   await new Promise((resolve) => mock.close(resolve))

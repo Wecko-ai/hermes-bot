@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { KeychainStore, botAllowed, validBots } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
@@ -43,6 +44,9 @@ async function readJson(request) {
 export function createBrowserVault(options = {}) {
   const port = options.port ?? 4331
   const auditSink = options.audit ?? null
+  // Jeton de l’API d’administration : sans lui, un bot pourrait s’autoriser l’identifiant d’un autre.
+  const adminToken = Buffer.from(`Bearer ${options.adminToken || ''}`)
+  if (!options.adminToken) throw new Error('adminToken requis')
   const store = options.store ?? new KeychainStore()
   const requests = new BrowserVaultRequests()
   const cdp = new BrowserVaultCdp(options.cdpOrigin)
@@ -136,6 +140,8 @@ export function createBrowserVault(options = {}) {
 
   /** API de l’app : métadonnées, ajout, changement, retrait. Le mot de passe n’en ressort jamais. */
   async function admin(method, pathname, request) {
+    const given = Buffer.from(String(request.headers.authorization || ''))
+    if (given.length !== adminToken.length || !timingSafeEqual(given, adminToken)) throw new BrowserVaultError('admin_forbidden', 403)
     if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot() }
     if (method === 'GET' && pathname === '/admin/v1/entries') return { entries: await store.list() }
     if (method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new BrowserVaultError('invalid_request', 400)

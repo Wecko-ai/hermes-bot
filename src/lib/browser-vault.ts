@@ -29,6 +29,7 @@ const ERRORS: Record<string, string> = {
   vault_unavailable: 'Le trousseau de la machine des bots est inaccessible.',
   vault_write_failed: 'Le trousseau de la machine des bots a refusé l’écriture.',
   vault_service_unavailable: 'Le coffre de la machine des bots ne répond pas. Depuis un autre Mac, ↻ relance le tunnel.',
+  admin_forbidden: 'Le coffre de la machine des bots refuse l’app : jeton absent. Depuis un autre Mac, ↻ le récupère.',
   login_fields_not_found: 'Aucun champ de connexion trouvé.',
   code_field_not_found: 'Aucun champ de code trouvé.',
   cdp_unavailable: 'Le Chrome des bots ne répond pas.',
