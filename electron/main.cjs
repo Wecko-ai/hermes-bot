@@ -1,5 +1,6 @@
-const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain } = require('electron')
+const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain, session } = require('electron')
 const { execFile, spawn } = require('node:child_process')
+const { randomBytes } = require('node:crypto')
 const path = require('node:path')
 const http = require('node:http')
 const { pathToFileURL } = require('node:url')
@@ -19,11 +20,16 @@ let hermesTunnelProcess
 let vaultTunnelProcess
 let hermesTunnelRestart
 let mainWindow
+// Proof, for this app's own server, that a sign-in without a password comes from this app's window.
+// Only set when this process runs the server: a window on another account's server has no key to give.
+let localKey = ''
 
 async function startServer() {
   process.env.NODE_ENV = 'production'
   process.env.PORT = '4330'
   configureSessionPersistence()
+  localKey = randomBytes(32).toString('base64url')
+  globalThis.__hermesBotLocalKey = localKey
   const { listening } = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.mjs')).href)
   try {
     await listening
@@ -209,6 +215,12 @@ async function createWindow() {
   const leavesApp = (url) => /^(?:https?|file):/.test(url) && !url.startsWith(`${ORIGIN}/`)
   mainWindow.webContents.on('will-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
   mainWindow.webContents.on('will-frame-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
+  // The key rides on one request only, from this window, and never reaches the page's own code.
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: [`${ORIGIN}/api/auth/local`] }, (details, callback) => {
+    const headers = { ...details.requestHeaders }
+    if (localKey && mainWindow && details.webContentsId === mainWindow.webContents.id) headers['X-HermesBot-Local-Key'] = localKey
+    callback({ requestHeaders: headers })
+  })
   await mainWindow.loadURL(ORIGIN)
   mainWindow.on('closed', () => { mainWindow = null })
 }

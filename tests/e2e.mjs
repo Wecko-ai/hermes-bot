@@ -1,11 +1,12 @@
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
-import { WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 import { chromium } from 'playwright-core'
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -41,7 +42,23 @@ writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProv
 mkdirSync(TEST_ANIMATIONS)
 const TINY_WEBP = Buffer.from('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', 'base64')
 for (const slug of ['nova', 'orion']) for (const phase of ['working', 'done']) writeFileSync(path.join(TEST_ANIMATIONS, `${slug}-${phase}.webp`), TINY_WEBP)
-const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS }
+// A Hermes home for the sign-in without a password: its token, and a control socket that names this very
+// process as the gateway. It is: it holds the port of the simulated gateway, which the server checks with lsof.
+const LOCAL_TOKEN = 'L'.repeat(43)
+const LOCAL_HOME = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'hb-home-')))
+chmodSync(LOCAL_HOME, 0o700)
+mkdirSync(path.join(LOCAL_HOME, 'webapp'), { mode: 0o700 })
+writeFileSync(path.join(LOCAL_HOME, 'webapp', 'session-token'), `${LOCAL_TOKEN}\n`, { mode: 0o600 })
+const localControl = net.createServer((socket) => socket.once('data', () => socket.end(`${JSON.stringify({
+  ok: true, protocol: 1, id: 1, result: { pid: process.pid, hermes_home: LOCAL_HOME },
+})}\n`)))
+localControl.listen(path.join(LOCAL_HOME, 'gateway.sock'))
+// Off for most of the run: the simulated gateway then asks for a password, as before.
+let localMode = false
+let localTickets = 0
+const localTokenSightings = []
+const localSocketOrigins = []
+const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS, HERMES_HOME: LOCAL_HOME }
 
 // Files the fake gateway serves for orion's MEDIA: tags.
 const MEDIA_FIXTURES = {
@@ -134,7 +151,13 @@ function serveMediaFixture(request, response, url, route) {
 const mock = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1:9121')
   response.setHeader('Content-Type', 'application/json')
-  const authenticated = Number(/hermes_session=test-(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || 0) > expiredBefore
+  if (request.headers['x-hermes-session-token']) localTokenSightings.push(url.pathname)
+  const authenticated = localMode
+    ? request.headers['x-hermes-session-token'] === LOCAL_TOKEN
+    : Number(/hermes_session=test-(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || 0) > expiredBefore
+  if (url.pathname === '/api/status' && localMode) {
+    return response.end(JSON.stringify({ auth_required: false, auth_providers: [], auth_flows: [] }))
+  }
   if (url.pathname === '/auth/password-login') {
     loginCalls += 1
     if (loginRefused) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'invalid_login' })) }
@@ -151,9 +174,19 @@ const mock = http.createServer((request, response) => {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'unauthenticated' })) }
     return response.end(JSON.stringify({ user_id: 'test', display_name: 'Test', provider: 'loopback' }))
   }
+  if (url.pathname === '/api/webapp/socket-ticket' && localMode) {
+    if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
+    localTickets += 1
+    return response.end(JSON.stringify({ ticket: 'local-ticket', ttl_seconds: 30 }))
+  }
   if (url.pathname === '/api/webapp/socket-ticket') {
     response.statusCode = 403
     return response.end(JSON.stringify({ error: 'forbidden' }))
+  }
+  // Without a password, Hermes only knows the first ticket endpoint: this one always refuses.
+  if (url.pathname === '/api/auth/ws-ticket' && localMode) {
+    response.statusCode = 401
+    return response.end(JSON.stringify({ error: 'unauthenticated' }))
   }
   if (url.pathname === '/api/auth/ws-ticket') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'unauthenticated' })) }
@@ -438,6 +471,7 @@ wss.on('connection', (socket) => {
 
 mock.on('upgrade', (request, socket, head) => {
   if (new URL(request.url, 'http://127.0.0.1:9121').pathname !== '/api/ws') return socket.destroy()
+  if (localMode) localSocketOrigins.push(request.headers.origin || '')
   wss.handleUpgrade(request, socket, head, (client) => wss.emit('connection', client, request))
 })
 
@@ -1654,11 +1688,100 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-dark.png` })
   await page.getByRole('button', { name: 'Passer au thème clair' }).click()
 
+  // A gateway without a password, Hermes' default setup on one machine: the server signs in by itself,
+  // for whoever holds its local key and for nobody else.
+  localMode = true
+  const stoppedForLocal = new Promise((resolve) => child.once('exit', resolve))
+  child.kill('SIGTERM')
+  await stoppedForLocal
+  child = spawn(process.execPath, ['server/index.mjs'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
+      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
+      BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
+      NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
+      HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
+      ...TEST_ENV,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let localLog = ''
+  child.stdout.on('data', (data) => { localLog += data })
+  child.stderr.on('data', (data) => { localLog += data })
+  for (let attempt = 0; attempt < 100 && !/\?key=/.test(localLog); attempt += 1) await delay(100)
+  const localKey = /\/\?key=([A-Za-z0-9_-]{32,})/.exec(localLog)?.[1]
+  if (!localKey) throw new Error(`Connexion sans mot de passe : lien absent des logs du serveur. ${localLog.slice(-400)}`)
+  const localBase = 'http://127.0.0.1:4332'
+  const localOptions = await (await fetch(`${localBase}/api/auth/options`)).json()
+  if (localOptions.local?.available !== true) throw new Error(`Connexion sans mot de passe : ${JSON.stringify(localOptions.local)}`)
+
+  // No key, a wrong key, a foreign origin: refused.
+  localTokenSightings.length = 0
+  const localPost = (headers) => fetch(`${localBase}/api/auth/local`, { method: 'POST', headers })
+  const refusals = await Promise.all([
+    localPost({ Origin: localBase }),
+    localPost({ Origin: localBase, 'X-HermesBot-Local-Key': 'x'.repeat(43) }),
+    localPost({ Origin: 'http://evil.test', 'X-HermesBot-Local-Key': localKey }),
+    localPost({ 'X-HermesBot-Local-Key': localKey }),
+  ])
+  if (refusals.some((refusal) => refusal.status !== 403)) throw new Error(`Connexion sans mot de passe acceptée sans preuve : ${refusals.map((refusal) => refusal.status)}`)
+  // Without a session of this app, no request carries the token: the server must not lend it to whoever reaches its port.
+  for (const route of ['/api/auth/me', '/api/auth/providers', '/api/hermes/cron/jobs?profile=nova', '/api/hermes/analytics/usage?days=30&profile=nova', '/api/media?profile=nova&path=/tmp/image.png']) {
+    const stranger = await fetch(`${localBase}${route}`)
+    if ((await stranger.text()).includes(LOCAL_TOKEN)) throw new Error(`Jeton local dans la réponse de ${route}.`)
+  }
+  const strangerSocket = await new Promise((resolve) => {
+    const socket = new WebSocket(`ws://127.0.0.1:4332/api/ws?profile=default`, 'hermes-gateway-v1', { headers: { Origin: localBase } })
+    socket.on('open', () => { socket.close(); resolve('open') })
+    socket.on('unexpected-response', (_request, response) => resolve(response.statusCode))
+    socket.on('error', () => resolve('error'))
+  })
+  if (strangerSocket === 'open') throw new Error('WebSocket ouvert sans session locale.')
+  if (localTokenSightings.length || localTickets) throw new Error(`Jeton local envoyé sans session : ${localTokenSightings.join(', ')}`)
+
+  // With the key: a session, and the token stays on the server side.
+  const localSignIn = await localPost({ Origin: localBase, 'X-HermesBot-Local-Key': localKey })
+  const localCookie = (localSignIn.headers.getSetCookie()[0] || '').split(';')[0]
+  if (localSignIn.status !== 200 || !localCookie.startsWith('hermesbot_session=') || (await localSignIn.text()).includes(LOCAL_TOKEN)) {
+    throw new Error(`Connexion sans mot de passe refusée avec la clé : ${localSignIn.status}`)
+  }
+  const localMe = await fetch(`${localBase}/api/auth/me`, { headers: { cookie: localCookie } })
+  const localMeText = await localMe.text()
+  if (localMe.status !== 200 || !localMeText.includes('loopback') || localMeText.includes(LOCAL_TOKEN)) throw new Error(`Session sans mot de passe : ${localMe.status}`)
+  if (!localTokenSightings.includes('/api/auth/me')) throw new Error('La session sans mot de passe n’a pas présenté le jeton à la gateway.')
+  // Vault writes keep asking for a password session: a bot of the same account can read the token file.
+  const localVault = await fetch(`${localBase}/api/browser-vault/entries/remove`, {
+    method: 'POST', headers: { cookie: localCookie, Origin: localBase, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'none' }),
+  })
+  if (localVault.status !== 401 && localVault.status !== 403) throw new Error(`Coffre ouvert en écriture à une session sans mot de passe : ${localVault.status}`)
+
+  // In a browser: the sign-in link opens the bots with no form, and the key leaves the address bar.
+  const localContext = await browser.newContext()
+  const localPage = await localContext.newPage()
+  await localPage.goto(`${localBase}/?key=${localKey}`)
+  await localPage.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
+  if (await localPage.locator('.login-card').count()) throw new Error('Formulaire affiché malgré le lien de connexion.')
+  if (new URL(localPage.url()).search) throw new Error('La clé locale reste dans la barre d’adresse.')
+  if (!localTickets || localSocketOrigins.some(Boolean)) throw new Error(`Socket sans mot de passe : ${localTickets} ticket(s), Origin « ${localSocketOrigins.join(', ')} ».`)
+  if ((await localPage.content()).includes(LOCAL_TOKEN) || localLog.includes(LOCAL_TOKEN)) throw new Error('Jeton local visible dans la page ou dans les logs.')
+  await localContext.close()
+  // Without the key, a browser gets an explanation, not a password form that cannot work.
+  const strangerContext = await browser.newContext()
+  const strangerPage = await strangerContext.newPage()
+  await strangerPage.goto(localBase)
+  await strangerPage.locator('.login-local').waitFor({ timeout: 15_000 })
+  if (await strangerPage.locator('input[type=password]').count()) throw new Error('Formulaire de mot de passe proposé à une gateway sans mot de passe.')
+  await strangerContext.close()
+  localMode = false
+
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')
+  localControl.close()
   if (vaultService) vaultService.kill('SIGTERM')
   await execFileAsync('/usr/bin/security', ['delete-keychain', BROWSER_VAULT_KEYCHAIN]).catch(() => undefined)
   rmSync(BROWSER_VAULT_KEYCHAIN, { force: true })

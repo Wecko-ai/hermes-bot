@@ -87,6 +87,8 @@ kill "$(cat /tmp/hermesbot-demo.pid)"
 
 If a check fails, read `/tmp/hermesbot-demo.log`, stop the server and report.
 
+Next to a Hermes that needs no password, the log also holds a sign-in link with a key (`/?key=…`). It is for the person, in their own browser. Do not copy that key anywhere else.
+
 ## 4. Check Hermes
 
 HermesBot is a window on [Hermes Agent](https://github.com/NousResearch/hermes-agent). It talks to the Hermes gateway, by default on this Mac at port 9120.
@@ -112,13 +114,12 @@ Otherwise, read `auth_required` and `auth_providers` in the answer of the second
 
   Then run the check again. If you are a Hermes bot yourself, do not run these two commands from your own turn: the restart would stop you. Ask the person to run them.
 
-**`"auth_required": true`, with `"basic"` in `auth_providers`.** Hermes has a username and password sign-in. HermesBot can connect. Go to step 5.
+**`"auth_required": false`.** This is the default setup of Hermes: no password. HermesBot signs in by itself, as long as it runs on this Mac under the same macOS account as Hermes. Go to step 5.
 
-**`"auth_required": false`.** This is the default local setup of Hermes: no password, the browser is signed in with a one-use link. HermesBot only signs in with a username and password, so it cannot connect to this setup yet.
+- Nothing has to change in Hermes. Do not change the address it listens on, and do not give it a public URL: either one makes Hermes reachable from outside this Mac.
+- If Hermes runs under another macOS account than the person's, say so: the sign-in without a password will not work from their account.
 
-- Do not change the address Hermes listens on, and do not give it a public URL, to get a password page. Either one makes Hermes reachable from outside this Mac. That choice belongs to the person, with the Hermes documentation open ("Web Dashboard", section "Authentication").
-- If the person wants the app anyway, go to step 5. The app opens and the demo works; signing in fails until their Hermes has a username and password sign-in.
-- Say this plainly in your report.
+**`"auth_required": true`, with `"basic"` in `auth_providers`.** Hermes has a username and password sign-in. HermesBot shows a sign-in form, and the person types their Hermes username and password in it. Go to step 5.
 
 **`"auth_required": true`, without `"basic"`.** Hermes uses another sign-in, such as OAuth. HermesBot cannot use it. Report it, and stop after the demo unless the person wants the app anyway.
 
@@ -147,7 +148,9 @@ rsync -a --delete release/mac-arm64/HermesBot.app/ /Applications/HermesBot.app/
 open /Applications/HermesBot.app
 ```
 
-The person signs in in the app window, with their Hermes username and password.
+With a Hermes that needs no password, the app opens on the bots at once. Otherwise the person signs in in the app window, with their Hermes username and password.
+
+If the app shows a message instead of the bots, report its exact text.
 
 ## 6. Report
 

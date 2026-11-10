@@ -6,9 +6,10 @@ import path from 'node:path'
 import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserOwners } from './browser-turn.mjs'
 import configModule from './config.cjs'
+import { createLocalGateway } from './local-gateway.mjs'
 
 const CONFIG = configModule.loadConfig()
 const HOST = '127.0.0.1'
@@ -24,6 +25,13 @@ const LOCAL_ORIGINS = new Set([
   `http://${HOST}:${PORT}`,
   `http://localhost:${PORT}`,
 ])
+// A Hermes gateway without a password, its default setup on one machine: see local-gateway.mjs.
+const localGateway = createLocalGateway({ gatewayOrigin: HERMES_ORIGIN, hermesHome: CONFIG.hermesHome })
+// Signing in without a password needs a proof that the caller is the person who runs this server: any
+// process of any account on this machine can reach this port. The desktop app gives its key to its own
+// window. Started by hand, the server prints a sign-in link that carries the key.
+const APP_LOCAL_KEY = typeof globalThis.__hermesBotLocalKey === 'string' && globalThis.__hermesBotLocalKey.length >= 32
+const LOCAL_KEY = APP_LOCAL_KEY ? globalThis.__hermesBotLocalKey : randomBytes(32).toString('base64url')
 
 function json(response, status, body, extraHeaders = {}) {
   const data = JSON.stringify(body)
@@ -84,10 +92,13 @@ function restoreSessions() {
     const records = JSON.parse(persistence.load() || '[]')
     if (!Array.isArray(records)) return
     for (const record of records) {
-      if (!record || typeof record.id !== 'string' || typeof record.cookieHeader !== 'string') continue
+      if (!record || typeof record.id !== 'string') continue
+      // A session without a password keeps nothing of Hermes: its token is read from the Hermes home at each use.
+      const kind = record.kind === 'local' ? 'local' : 'cookie'
+      if (kind === 'cookie' && typeof record.cookieHeader !== 'string') continue
       if (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()) continue
-      const cookies = new Map(Object.entries(record.cookies || {}).filter(([, value]) => typeof value === 'string'))
-      sessions.set(record.id, { id: record.id, cookies, cookieHeader: record.cookieHeader, expiresAt: record.expiresAt })
+      const cookies = new Map(kind === 'local' ? [] : Object.entries(record.cookies || {}).filter(([, value]) => typeof value === 'string'))
+      sessions.set(record.id, { id: record.id, kind, cookies, cookieHeader: kind === 'local' ? '' : record.cookieHeader, expiresAt: record.expiresAt })
     }
   } catch { /* file missing or old format */ }
 }
@@ -96,6 +107,7 @@ function persistSessions() {
   if (!persistence) return
   const records = [...sessions.values()].map((session) => ({
     id: session.id,
+    kind: session.kind,
     cookies: Object.fromEntries(session.cookies),
     cookieHeader: session.cookieHeader,
     expiresAt: session.expiresAt,
@@ -135,9 +147,9 @@ function updateCookies(session, setCookies) {
   if (setCookies.length && sessions.has(session.id)) persistSessions()
 }
 
-function createSession(setCookies) {
+function createSession(setCookies, kind = 'cookie') {
   const id = randomBytes(32).toString('base64url')
-  const session = { id, cookies: new Map(), cookieHeader: '', expiresAt: Date.now() + SESSION_MAX_AGE * 1000 }
+  const session = { id, kind, cookies: new Map(), cookieHeader: '', expiresAt: Date.now() + SESSION_MAX_AGE * 1000 }
   updateCookies(session, setCookies)
   sessions.set(id, session)
   persistSessions()
@@ -158,6 +170,17 @@ function createAdoptedSession(cookieHeader) {
 async function hermesFetch(request, route, options = {}) {
   const headers = new Headers(options.headers)
   const session = browserSession(request)
+  // A streamed media has no maximum duration: its caller handles stopping.
+  const signal = options.signal || AbortSignal.timeout(options.timeout || 20_000)
+  if (session?.kind === 'local') {
+    // The token goes out for a session opened with the local key, and for no other request: attached
+    // by default, it would hand the gateway to every process that reaches this port. The module adds
+    // it itself, on a connection it has checked. No cookie and no Origin: the gateway reads the token alone.
+    const response = await localGateway.fetch(route, { method: options.method || 'GET', headers, body: options.body, signal })
+    // Refused: Hermes replaced its token or changed its sign-in. The next call looks again.
+    if (response.status === 401) localGateway.invalidate()
+    return response
+  }
   const cookieHeader = session?.cookieHeader || adoptableCookieHeader(request)
   if (cookieHeader) headers.set('cookie', cookieHeader)
   headers.set('origin', HERMES_BROWSER_ORIGIN)
@@ -166,8 +189,7 @@ async function hermesFetch(request, route, options = {}) {
     headers,
     body: options.body,
     redirect: 'manual',
-    // A streamed media has no maximum duration: its caller handles stopping.
-    signal: options.signal || AbortSignal.timeout(options.timeout || 20_000),
+    signal,
   })
   updateCookies(session, response.headers.getSetCookie?.() || [])
   return response
@@ -233,6 +255,15 @@ async function handleRestore(request, response) {
   // The Origin can be imitated: without a local cookie, another process on the machine would get a session.
   const session = browserSession(request)
   if (!session) return json(response, 404, { error: 'no_local_session' })
+  if (session.kind === 'local') {
+    // Nothing to replay: look at the gateway and at its token again.
+    localGateway.invalidate()
+    const gateway = await localGateway.check()
+    if (!gateway.ok) return json(response, 401, { error: 'local_unavailable', reason: gateway.reason })
+    session.expiresAt = Date.now() + SESSION_MAX_AGE * 1000
+    persistSessions()
+    return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(session) })
+  }
   const saved = savedCredentials()
   if (!saved) return json(response, 404, { error: 'no_saved_credentials' })
   // hermesFetch stores the new Hermes cookies in this session.
@@ -251,13 +282,47 @@ async function handleRestore(request, response) {
 async function handleLogout(request, response) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   credentialStore?.clear()
-  await hermesFetch(request, '/auth/logout', { method: 'POST' }).then((upstream) => upstream.body?.cancel()).catch(() => {})
   const session = browserSession(request)
+  // A session without a password has nothing to close on the Hermes side.
+  if (session?.kind !== 'local') {
+    await hermesFetch(request, '/auth/logout', { method: 'POST' }).then((upstream) => upstream.body?.cancel()).catch(() => {})
+  }
   if (session) {
     sessions.delete(session.id)
     persistSessions()
   }
   return json(response, 200, { ok: true }, { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0` })
+}
+
+function sameSecret(given, expected) {
+  const a = Buffer.from(String(given))
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+// Started by hand, next to a gateway without a password: the way in is this link, for whoever reads this output.
+let localLinkPrinted = APP_LOCAL_KEY
+function printLocalLink() {
+  if (localLinkPrinted) return
+  localLinkPrinted = true
+  console.log(`Hermes on this machine needs no password. Sign in with: http://${HOST}:${PORT}/?key=${LOCAL_KEY}`)
+}
+
+/** What the sign-in screen may know about the gateway: whether it can be opened without a password. */
+async function localSignInState() {
+  const gateway = await localGateway.check()
+  if (gateway.ok) printLocalLink()
+  return gateway.ok ? { available: true } : { available: false, reason: gateway.reason }
+}
+
+/** Sign-in without a password, to this user's own gateway. The key proves who asks: see LOCAL_KEY. */
+async function handleLocalSignIn(request, response) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!sameSecret(request.headers['x-hermesbot-local-key'] || '', LOCAL_KEY)) return json(response, 403, { error: 'local_key_required' })
+  const gateway = await localGateway.check()
+  if (!gateway.ok) return json(response, 409, { error: 'local_unavailable', reason: gateway.reason })
+  const session = createSession([], 'local')
+  return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(session) })
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
@@ -279,7 +344,8 @@ async function mintSocketTicket(request, profile) {
     `/api/webapp/socket-ticket?socket=gateway&profile=${encodeURIComponent(profile)}`,
     { method: 'POST' },
   )
-  if (upstream.status === 403) {
+  // The second endpoint only knows cookie sessions: without a password it always refuses.
+  if (upstream.status === 403 && browserSession(request)?.kind !== 'local') {
     console.warn('Hermes socket-ticket: HTTP 403, trying /api/auth/ws-ticket')
     upstream = await hermesFetch(request, '/api/auth/ws-ticket', { method: 'POST' })
   }
@@ -707,7 +773,10 @@ const server = http.createServer(async (request, response) => {
       return await handleLogin(request, response)
     }
     if (url.pathname === '/api/auth/options' && request.method === 'GET') {
-      return json(response, 200, { remember: Boolean(credentialStore) })
+      return json(response, 200, { remember: Boolean(credentialStore), local: await localSignInState() })
+    }
+    if (url.pathname === '/api/auth/local' && request.method === 'POST') {
+      return await handleLocalSignIn(request, response)
     }
     if (url.pathname === '/api/auth/restore' && request.method === 'POST') {
       return await handleRestore(request, response)
@@ -777,6 +846,7 @@ server.on('upgrade', async (request, socket, head) => {
       return socket.destroy()
     }
     const identity = await hermesFetch(request, '/api/auth/me')
+    await identity.body?.cancel().catch(() => {})
     if (!identity.ok) {
       console.warn(`Hermes WS identity: HTTP ${identity.status}`)
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
@@ -784,12 +854,15 @@ server.on('upgrade', async (request, socket, head) => {
     }
     const profile = (url.searchParams.get('profile') || 'default').slice(0, 128)
     const ticket = await mintSocketTicket(request, profile)
-    const upstreamUrl = `${HERMES_WS_ORIGIN}/api/ws?native_dial=browser&profile=${encodeURIComponent(profile)}`
+    // Without a password, the socket goes to the same pinned address as the request that got its ticket.
+    const local = browserSession(request)?.kind === 'local'
+    const upstreamUrl = `${local ? localGateway.socketOrigin : HERMES_WS_ORIGIN}/api/ws?native_dial=browser&profile=${encodeURIComponent(profile)}`
     const upstream = new WebSocket(upstreamUrl, [
       'hermes-gateway-v1',
       `hermes-gateway-ticket.${ticket}`,
     ], {
-      headers: { Origin: HERMES_BROWSER_ORIGIN },
+      // Without a password the ticket is the whole credential, and the gateway wants no browser Origin.
+      headers: local ? {} : { Origin: HERMES_BROWSER_ORIGIN },
       handshakeTimeout: 20_000,
       maxPayload: WS_MAX_PAYLOAD,
     })
@@ -848,6 +921,7 @@ export const listening = mainListening
 
 server.listen(PORT, HOST, () => {
   console.log(`HermesBot: http://${HOST}:${PORT} (${DEVELOPMENT ? 'dev' : 'production'})`)
+  localSignInState().catch(() => {})
 })
 
 async function shutdown() {

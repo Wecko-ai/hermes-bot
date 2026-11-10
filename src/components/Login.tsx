@@ -12,7 +12,14 @@ export function Logo() {
   )
 }
 
-export function Login({ onLogin, error }: { onLogin: (username: string, password: string, remember: boolean) => Promise<void>; error: string }) {
+// The gateway answered that it needs no password, but the server could not confirm it is this user's own.
+const LOCAL_BLOCKED = new Set(['unsafe_home', 'gateway_not_running', 'gateway_elsewhere', 'no_token'])
+
+export function Login({ onLogin, onLocalSignIn, error }: {
+  onLogin: (username: string, password: string, remember: boolean) => Promise<void>
+  onLocalSignIn: () => Promise<void>
+  error: string
+}) {
   const { t } = useTranslation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -20,9 +27,19 @@ export function Login({ onLogin, error }: { onLogin: (username: string, password
   const [remember, setRemember] = useState(true)
   // Only the desktop app has the Keychain: without it nothing is kept and the checkbox doesn’t appear.
   const [canRemember, setCanRemember] = useState(false)
+  // A Hermes without a password has no use for the form: 'ready' (sign-in needs the local key) or the reason it is blocked.
+  const [local, setLocal] = useState('')
   useEffect(() => {
-    fetch('/api/auth/options', { credentials: 'same-origin' }).then((response) => response.json()).then((options) => setCanRemember(options.remember === true)).catch(() => { /* checkbox stays hidden */ })
+    fetch('/api/auth/options', { credentials: 'same-origin' }).then((response) => response.json()).then((options) => {
+      setCanRemember(options.remember === true)
+      if (options.local?.available === true) setLocal('ready')
+      else if (LOCAL_BLOCKED.has(options.local?.reason)) setLocal(String(options.local.reason))
+    }).catch(() => { /* checkbox stays hidden */ })
   }, [])
+  const retryLocal = async () => {
+    setBusy(true)
+    try { await onLocalSignIn() } finally { setBusy(false) }
+  }
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setBusy(true)
@@ -35,14 +52,21 @@ export function Login({ onLogin, error }: { onLogin: (username: string, password
         <p className="login-eyebrow">HERMESBOT</p>
         <h1>{t('login.title')}</h1>
         <p className="login-intro">{t('login.intro')}</p>
-        <form onSubmit={submit}>
+        {local && (
+          <div className="login-local">
+            <p className="login-intro">{local === 'ready' ? t('login.localHelp') : t('login.localBlocked', { reason: local })}</p>
+            {error && <p className="login-error" role="alert">{error}</p>}
+            <button className="login-submit" type="button" disabled={busy} onClick={retryLocal}>{busy ? t('login.signingIn') : t('login.localRetry')}{!busy && <ArrowRight size={17} />}</button>
+          </div>
+        )}
+        {!local && <form onSubmit={submit}>
           <label>{t('login.username')}<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required autoFocus /></label>
           <label>{t('login.password')}<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
           {canRemember && <label className="login-remember"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />{t('login.remember')}</label>}
           {error && <p className="login-error" role="alert">{error}</p>}
           <button className="login-submit" type="submit" disabled={busy}>{busy ? t('login.signingIn') : t('login.submit')}{!busy && <ArrowRight size={17} />}</button>
-        </form>
-        <p className="login-security"><LockKeyhole size={13} />{t('login.security')}{canRemember && remember && ` ${t('login.securityKeychain')}`}</p>
+        </form>}
+        <p className="login-security"><LockKeyhole size={13} />{local ? t('login.localSecurity') : t('login.security')}{!local && canRemember && remember && ` ${t('login.securityKeychain')}`}</p>
       </section>
     </main>
   )

@@ -28,7 +28,8 @@
     "disconnectedValidate": "Hermes is disconnected: sign in again, then confirm once more.",
     "alreadyResolved": "The bot was no longer waiting for this answer: it timed out or was already answered.",
     "answerNotSentWith": "Answer not delivered: {{message}}",
-    "answerNotSent": "Answer not delivered."
+    "answerNotSent": "Answer not delivered.",
+    "localRefused": "HermesBot could not open the session. In a browser, use the sign-in link its server printed."
   },
   "loading": {
     "opening": "Opening HermesBot…",
@@ -99,7 +100,11 @@
     "signingIn": "Signing in…",
     "submit": "Open my bots",
     "security": "Local connection to 127.0.0.1. Your password only goes to your Hermes gateway.",
-    "securityKeychain": "It stays encrypted in this Mac’s Keychain."
+    "securityKeychain": "It stays encrypted in this Mac’s Keychain.",
+    "localHelp": "Your Hermes on this Mac needs no password. In a browser, open HermesBot with the sign-in link its server printed in the terminal. The desktop app signs in by itself, from the account that runs Hermes.",
+    "localBlocked": "Hermes answers without a password, but HermesBot could not confirm that it is your own gateway on this Mac ({{reason}}). Hermes must run under this account, with its home in the usual place or named by HERMES_HOME.",
+    "localRetry": "Try again",
+    "localSecurity": "Local connection to 127.0.0.1. Nothing to type: the session is opened by HermesBot’s own server."
   },
   "chat": {
     "showBots": "Show bots",

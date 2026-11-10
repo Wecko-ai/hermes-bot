@@ -78,9 +78,13 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
   const sshHost = text(env.HERMES_SSH_HOST) || text(raw.sshHost)
   const defaultAnimations = path.join(privateDir, 'animations')
 
+  const hermesHome = [text(env.HERMES_HOME), text(raw.hermesHome)].find((value) => value && path.isAbsolute(value))
+
   return {
     dataDir,
     gatewayOrigin,
+    // Home of the Hermes that runs on this machine. Only read to sign in to a gateway without a password.
+    hermesHome: hermesHome || path.join(home, '.hermes'),
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',

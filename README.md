@@ -101,15 +101,15 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 
 ## Connect it to Hermes
 
-HermesBot needs:
+HermesBot needs **Hermes Agent with its gateway Webapp on.** By default the gateway serves it on `http://127.0.0.1:9120`. See "Use the Desktop workspace from a browser" in the Hermes documentation (`hermes config set webapp.enabled true`, then `hermes gateway restart`).
 
-- **Hermes Agent with its gateway Webapp on.** By default the gateway serves it on `http://127.0.0.1:9120`. See "Use the Desktop workspace from a browser" in the Hermes documentation (`hermes config set webapp.enabled true`, then `hermes gateway restart`).
-- **A username and password sign-in on that Webapp.** HermesBot signs in with the username and password of Hermes' dashboard sign-in gate (`dashboard.basic_auth` in the Hermes configuration). See "Web Dashboard", section "Authentication", in the Hermes documentation.
+It then signs in one of two ways, and picks the right one by itself:
 
-> [!IMPORTANT]
-> A Webapp left on its default local setup has no password: Hermes signs your browser in with a one-use link. HermesBot cannot sign in to that setup yet. It needs the password sign-in above.
+- **Hermes on this Mac, without a password.** This is Hermes' default setup, and there is nothing to set up. The desktop app signs in by itself. Started with `npm run dev`, the server prints a sign-in link in the terminal: open that link.
+- **Hermes behind a username and password** (`dashboard.basic_auth` in the Hermes configuration; see "Web Dashboard", section "Authentication", in the Hermes documentation). HermesBot shows a sign-in form.
 
-Start HermesBot (`npm run dev`, or the desktop app below), open http://127.0.0.1:4330 and sign in with your Hermes username and password.
+> [!NOTE]
+> Without a password, HermesBot must run on the same Mac and under the same macOS account as Hermes. It reads the session token Hermes keeps in its own home (`~/.hermes`, or the folder named by `HERMES_HOME`) and sends it to that gateway only. A Hermes reached through the SSH tunnel, or run by another account, needs the username and password sign-in.
 
 Every Hermes profile shows as a bot, except `default` and a profile named `notify`. A profile can carry a card that sets its name, role and group, under `ui_meta["hermes-bots"]`: `title`, `description`, `sectionName` and `sectionId`. Profiles without a card go under "Unassigned".
 
@@ -140,6 +140,7 @@ All settings are optional. Each one is an environment variable, or a key of `con
 | `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Address of the Hermes gateway |
 | `HERMES_BROWSER_ORIGIN` | `browserOrigin` | same as the gateway | `Origin` header sent to the gateway, when it only trusts its public address behind a reverse proxy |
 | `HERMES_SSH_HOST` | `sshHost` | none | SSH host alias for the tunnel to a remote gateway |
+| `HERMES_HOME` | `hermesHome` | `~/.hermes` | Home of the Hermes on this Mac, for the sign-in without a password |
 | `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat |
 | `HERMESBOT_ANIMATIONS` | `animationsDir` | `animations/` in the data folder | Folder of bot animations |
 | `PORT` | | `4330` | Port of the local server |
@@ -171,6 +172,9 @@ window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4
 - Hermes cookies and tickets stay in the server process. The window only gets an opaque session id.
 - Bot output is treated as hostile. No remote image or resource ever loads. Bot files only pass through the local server, with a fixed content type and no SVG. HTML documents run in a sandboxed iframe with no network and no access to the app.
 - HermesBot trusts whatever answers on the gateway address. A local process that took that port would receive your password, but it would already run with your rights.
+- Without a password, the server reads Hermes' session token from the Hermes home at each use. It never stores it and never sends it to the window. For every request that carries the token, it opens the connection to `127.0.0.1` first, then checks that the process at the other end of that connection is the gateway of that home (the gateway names itself on its private control socket). A process of another account, an SSH tunnel, or whoever takes the port between two requests never gets the token.
+- That sign-in opens for the desktop app's own window, or for whoever has the link the server printed, and for nobody else: any process on the Mac can reach the server's port.
+- The shared-Chrome vault keeps asking for a username and password session before any change. A bot can read the Hermes token of its own account, so that token proves nothing there.
 - HermesBot does not sandbox your bots. They run with the rights of the Hermes gateway's user; use Hermes' own approvals and terminal backends for that.
 - The shared-Chrome vault protects against mistakes, not against a hostile bot. Its bots run under the same macOS account as the keychain, so a bot with a terminal could read a saved password or a filled page.
 
@@ -185,7 +189,8 @@ npm run test:e2e   # end-to-end run, needs macOS and Google Chrome
 
 ## Known limits
 
-- Password sign-in only (see "Connect it to Hermes").
+- The sign-in without a password only works for a Hermes on the same Mac and under the same account. It relies on the session token of Hermes' Webapp, which is not a documented interface for other apps: a Hermes update can break it.
+- Other Hermes sign-ins, such as OAuth, are not supported.
 - macOS only, and the packaged app is for Apple silicon. The server and the interface may run elsewhere with `npm run dev`, but this is not tested.
 - Bots, groups and routines cannot be created or edited from the app yet.
 - Most features are verified against the simulated gateway of the test suite and on the author's own setup, not on a wide range of Hermes versions. The gateway contract can change between Hermes releases.

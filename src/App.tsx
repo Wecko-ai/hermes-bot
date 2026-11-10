@@ -468,7 +468,7 @@ export default function App() {
     initializedRef.current = true
     fetch('/api/auth/me', { credentials: 'same-origin' }).then(async (response) => {
       if (response.status === 401) {
-        if (await restoreSession()) {
+        if (await restoreSession() || await localSignIn()) {
           setAuth('ready')
           await initialize()
         } else setAuth('login')
@@ -487,8 +487,38 @@ export default function App() {
   /** Hermes session expired: sign in again with the credentials kept in the Keychain. */
   const restoreSession = async () => {
     const response = await fetch('/api/auth/restore', { method: 'POST', credentials: 'same-origin' })
-    if (response.status === 401) setNotice(i18n.t('app.savedRefused'))
+    if (response.status === 401) {
+      const body = await response.json().catch(() => ({}))
+      if (body?.error === 'saved_credentials_refused') setNotice(i18n.t('app.savedRefused'))
+    }
     return response.ok
+  }
+
+  /**
+   * A Hermes that needs no password, on this machine: the server opens the session itself, on proof of
+   * its local key. The desktop app adds that key to this request; in a browser it comes with the
+   * sign-in link the server printed, and leaves the address bar at once.
+   */
+  const localSignIn = async () => {
+    const key = new URLSearchParams(location.search).get('key') || ''
+    if (key) history.replaceState(null, '', location.pathname)
+    const response = await fetch('/api/auth/local', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: key ? { 'X-HermesBot-Local-Key': key } : {},
+    }).catch(() => null)
+    return response?.ok === true
+  }
+
+  const retryLocalSignIn = async () => {
+    setAuthError('')
+    if (!(await localSignIn())) {
+      setAuthError(i18n.t('app.localRefused'))
+      return
+    }
+    setRosterLoaded(false)
+    setAuth('ready')
+    await reconnect()
   }
 
   const logout = async () => {
@@ -872,7 +902,7 @@ export default function App() {
   if (auth === 'checking') {
     return <LoadingScreen label={t('loading.opening')} />
   }
-  if (auth === 'login') return <Login onLogin={login} error={authError || notice} />
+  if (auth === 'login') return <Login onLogin={login} onLocalSignIn={retryLocalSignIn} error={authError || notice} />
   if (!selectedBot) {
     if (!rosterLoaded) return <LoadingScreen label={t('loading.bots')} />
     return <div className="app-loading"><p>{t('loading.none')}</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? t('loading.reconnecting') : t('loading.reconnect')}</button></div>
