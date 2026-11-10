@@ -476,11 +476,16 @@ async function handleLocalChat(request, response) {
 }
 
 /** Appel à l’API d’administration du coffre. Service absent : 503 `vault_service_unavailable`. */
-async function vaultAdmin(pathname, body) {
+async function vaultAdmin(pathname, body, hermesCookie = '') {
   try {
     const response = await fetch(`${BROWSER_VAULT_ORIGIN}${pathname}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { Authorization: `Bearer ${vaultToken()}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: {
+        Authorization: `Bearer ${vaultToken()}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        // Preuve que l’utilisateur est connecté : le coffre la vérifie auprès de la gateway avant toute écriture.
+        ...(hermesCookie ? { 'X-Hermes-Cookie': hermesCookie } : {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       // Une demande de code attend l’injection CDP : jusqu’à une minute.
       signal: AbortSignal.timeout(65_000),
@@ -531,9 +536,10 @@ function handleBrowserVaultEvents(request, response) {
 /** Fenêtre de l’app vers le coffre : session et origine locale exigées, comme pour Hermes. */
 async function handleBrowserVaultAdmin(request, response, pathname) {
   if (request.method === 'POST' && !LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const session = browserSession(request)
+  if (!session) return json(response, 401, { error: 'unauthenticated' })
   const body = request.method === 'POST' ? await bodyJson(request) : undefined
-  const result = await vaultAdmin(pathname, body)
+  const result = await vaultAdmin(pathname, body, session.cookieHeader || '')
   if (pathname.startsWith('/admin/v1/requests/')) pollVaultRequests().catch(() => undefined)
   return json(response, result.status, result.body)
 }

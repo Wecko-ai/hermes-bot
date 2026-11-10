@@ -437,6 +437,7 @@ try {
     env: {
       ...process.env, BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
       HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
+      HERMES_ORIGIN: 'http://127.0.0.1:9121',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -903,6 +904,13 @@ try {
     if (refused.status !== 403 || (await refused.json()).error !== 'admin_forbidden') throw new Error('API d’administration du coffre ouverte sans jeton.')
   }
   if ((await fetch('http://127.0.0.1:4333/admin/v1/entries')).status !== 403) throw new Error('Liste d’administration lisible sans jeton.')
+  // Même avec le jeton (lisible par un bot du même compte), une écriture exige la session Hermes de l’utilisateur.
+  const stolenToken = { Authorization: `Bearer ${readFileSync(BROWSER_VAULT_TOKEN, 'utf8').trim()}` }
+  for (const headers of [stolenToken, { ...stolenToken, 'X-Hermes-Cookie': 'hermes_session=faux' }]) {
+    const refused = await selfGrant(headers)
+    if (refused.status !== 403 || (await refused.json()).error !== 'user_session_required') throw new Error('Écriture du coffre acceptée sans session Hermes.')
+  }
+  if ((await fetch('http://127.0.0.1:4333/admin/v1/entries', { headers: stolenToken })).status !== 200) throw new Error('Lecture des métadonnées refusée avec le jeton.')
   if (((await import('node:fs')).statSync(BROWSER_VAULT_TOKEN).mode & 0o777) !== 0o600) throw new Error('Jeton du coffre lisible par d’autres comptes.')
   const cliListed = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'list', '--bot', 'orion'], {
     cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },

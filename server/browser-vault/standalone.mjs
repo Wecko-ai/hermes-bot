@@ -16,18 +16,31 @@ const tokenFile = process.env.HERMESBOT_VAULT_TOKEN_FILE
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/vault-admin.token')
 function adminToken() {
   try {
+    // Un jeton ouvert à d’autres comptes, ou posé par un autre, est remplacé.
+    const info = fs.statSync(tokenFile)
     const value = fs.readFileSync(tokenFile, 'utf8').trim()
-    if (/^[0-9a-f]{64}$/.test(value)) return value
+    if (info.uid === process.getuid() && (info.mode & 0o077) === 0 && /^[0-9a-f]{64}$/.test(value)) return value
   } catch { /* créé ci-dessous */ }
   const value = randomBytes(32).toString('hex')
   fs.mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 })
-  fs.writeFileSync(`${tokenFile}.tmp`, `${value}\n`, { mode: 0o600 })
-  fs.renameSync(`${tokenFile}.tmp`, tokenFile)
+  const temporary = `${tokenFile}.${randomBytes(8).toString('hex')}.tmp`
+  const handle = fs.openSync(temporary, 'wx', 0o600)
+  try { fs.writeSync(handle, `${value}\n`) } finally { fs.closeSync(handle) }
+  fs.renameSync(temporary, tokenFile)
   return value
+}
+
+// Session Hermes de l’utilisateur, transmise par l’app pour chaque écriture : la gateway dit si elle est valide.
+const hermesOrigin = process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120'
+async function verifyUser(cookie) {
+  const response = await fetch(`${hermesOrigin}/api/auth/me`, { headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(8000) })
+  await response.arrayBuffer().catch(() => undefined)
+  return response.status === 200
 }
 
 const vault = createBrowserVault({
   adminToken: adminToken(),
+  verifyUser,
   port: Number(process.env.BROWSER_VAULT_PORT || 4331),
   cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || undefined,
   audit: { append: (line) => fs.appendFileSync(auditFile, `${line}\n`, { mode: 0o600 }) },

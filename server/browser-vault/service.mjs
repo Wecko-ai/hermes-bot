@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { KeychainStore, botAllowed, validBots } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
@@ -47,6 +47,22 @@ export function createBrowserVault(options = {}) {
   // Jeton de l’API d’administration : sans lui, un bot pourrait s’autoriser l’identifiant d’un autre.
   const adminToken = Buffer.from(`Bearer ${options.adminToken || ''}`)
   if (!options.adminToken) throw new Error('adminToken requis')
+  // Toute écriture exige en plus la session Hermes de l’utilisateur, vérifiée par la gateway : le jeton est un
+  // fichier, lisible par les bots qui tournent sous le même compte macOS ; cette session, ils ne l’ont pas.
+  const verifyUser = options.verifyUser
+  if (typeof verifyUser !== 'function') throw new Error('verifyUser requis')
+  const verified = new Map()
+  async function requireUser(request) {
+    const cookie = String(request.headers['x-hermes-cookie'] || '')
+    if (!cookie || cookie.length > 8192) throw new BrowserVaultError('user_session_required', 403)
+    const key = createHash('sha256').update(cookie).digest('hex')
+    if ((verified.get(key) || 0) > Date.now()) return
+    let ok = false
+    try { ok = await verifyUser(cookie) } catch { ok = false }
+    if (!ok) throw new BrowserVaultError('user_session_required', 403)
+    if (verified.size > 64) verified.clear()
+    verified.set(key, Date.now() + 60_000)
+  }
   const store = options.store ?? new KeychainStore()
   const requests = new BrowserVaultRequests()
   const cdp = new BrowserVaultCdp(options.cdpOrigin)
@@ -145,6 +161,7 @@ export function createBrowserVault(options = {}) {
     if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot() }
     if (method === 'GET' && pathname === '/admin/v1/entries') return { entries: await store.list() }
     if (method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new BrowserVaultError('invalid_request', 400)
+    await requireUser(request)
     const body = await readJson(request)
     const answer = /^\/admin\/v1\/requests\/([A-Za-z0-9-]{1,64})$/.exec(pathname)
     if (answer) return respond(answer[1], body)
