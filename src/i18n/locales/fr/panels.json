@@ -108,6 +108,8 @@
     },
     "showUsage": "Afficher le contexte et le débit",
     "showUsageHint": "Sous la zone de saisie",
+    "caveman": "Mode caveman",
+    "cavemanHint": "Les bots te répondent en peu de mots, avec les mêmes faits. Pour les messages envoyés d’ici ; ce qu’ils écrivent ailleurs reste normal.",
     "sortBots": "Classer les bots",
     "sortOptions": {
       "groups": "Groupes",

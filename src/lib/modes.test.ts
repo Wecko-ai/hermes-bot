@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadModes, modeApiText, modePlaceholder, saveModes } from './modes'
+import { cavemanApiText, loadModes, modeApiText, modePlaceholder, saveModes } from './modes'
 
 describe('modes de travail', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -12,6 +12,19 @@ describe('modes de travail', () => {
 
   it('interdit l’exécution en BRAIN et en PLAN', () => {
     for (const mode of ['brain', 'plan'] as const) expect(modeApiText('x', mode)).toContain('Do not change files')
+  })
+
+  it('ajoute la note caveman après la consigne du mode, et rien quand le réglage est coupé', () => {
+    expect(cavemanApiText('Fais-le', undefined, false)).toBeUndefined()
+    expect(cavemanApiText('Fais-le', undefined, true)).toMatch(/^Fais-le\n\n\[HermesBot style: caveman\. For this turn only/)
+    const brain = modeApiText('Une idée ?', 'brain')
+    expect(cavemanApiText('Une idée ?', brain, false)).toBe(brain)
+    expect(cavemanApiText('Une idée ?', brain, true)).toMatch(/^Une idée \?\n\n\[HermesBot mode: BRAIN\..*\]\n\n\[HermesBot style: caveman\./s)
+  })
+
+  it('ne raccourcit que les réponses du chat', () => {
+    const note = cavemanApiText('x', undefined, true)
+    for (const kept of ['emails', 'posts', 'messages to others', 'negations exact', 'irreversible actions']) expect(note).toContain(kept)
   })
 
   it('adapte le champ de saisie', () => {

@@ -18,6 +18,8 @@ export interface AppSettings {
   reduceMotion: boolean
   showUsage: boolean
   sendKey: SendKey
+  /** Caveman mode: every bot answers in few words. A note read with each turn sent from the composer. */
+  caveman: boolean
   activitySort: boolean
   showHidden: boolean
   /** Hide list, not an allow list: a newly released model is still offered. */
@@ -47,6 +49,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     reduceMotion: flag(value.reduceMotion, false),
     showUsage: flag(value.showUsage, legacy('hermesbot-show-usage') === '1'),
     sendKey: oneOf(value.sendKey, SEND_KEYS, 'enter'),
+    caveman: flag(value.caveman, false),
     activitySort: flag(value.activitySort, legacy('hermesbot-sort') === 'activity'),
     showHidden: flag(value.showHidden, false),
     hiddenModels: Array.isArray(value.hiddenModels) ? value.hiddenModels.filter((key): key is string => typeof key === 'string') : [],

@@ -27,6 +27,18 @@ export function modeApiText(text: string, mode: ChatMode) {
   return instruction ? `${text}\n\n${instruction}` : undefined
 }
 
+/**
+ * Caveman mode (Settings > Conversations): the bot tells the user the same facts in fewer words.
+ * Like a work mode, it is an instruction read with the turn: the bot's profile is never changed.
+ * It only covers what the bot says in the chat. What it writes elsewhere keeps its normal style.
+ */
+const CAVEMAN_NOTE = '[HermesBot style: caveman. For this turn only, write to the user in few words: answer first, no greeting, filler, recap or closing offer. Keep facts, numbers, paths, commands and negations exact, in the user\'s language. Only your chat replies change: your work, files, code, emails, posts and messages to others stay normal. Use full sentences for warnings and irreversible actions.]'
+
+/** What the model reads with caveman mode on: the mode text if there is one, then the style note. */
+export function cavemanApiText(text: string, modeText: string | undefined, enabled: boolean) {
+  return enabled ? `${modeText ?? text}\n\n${CAVEMAN_NOTE}` : modeText
+}
+
 export function modePlaceholder(mode: ChatMode, botName: string) {
   return i18n.t(`modes.placeholder.${mode}`, { name: botName })
 }

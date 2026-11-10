@@ -96,6 +96,7 @@ function ChatTab() {
         <Segments<SendKey> label={t('settings.sendWith')} value={settings.sendKey} options={[{ id: 'enter', label: t('settings.sendKeys.enter') }, { id: 'cmd-enter', label: t('settings.sendKeys.cmdEnter') }]} onChange={(sendKey) => updateSettings({ sendKey })} />
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
+      <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />
       <Row label={t('settings.sortBots')}>
         <Segments<'groups' | 'activity'> label={t('settings.sortBots')} value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: t('settings.sortOptions.groups') }, { id: 'activity', label: t('settings.sortOptions.activity') }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
       </Row>

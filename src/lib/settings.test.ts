@@ -12,7 +12,12 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', activitySort: false, showHidden: false, hiddenModels: [], localModel: '' })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', caveman: false, activitySort: false, showHidden: false, hiddenModels: [], localModel: '' })
+  })
+
+  it('garde le mode caveman choisi et refuse une valeur qui n’est pas un booléen', () => {
+    expect(parseSettings('{"caveman":true}').caveman).toBe(true)
+    expect(parseSettings('{"caveman":"oui"}').caveman).toBe(false)
   })
 
   it('remplace une valeur invalide au lieu de la propager', () => {

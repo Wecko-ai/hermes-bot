@@ -108,6 +108,8 @@
     },
     "showUsage": "Show context and speed",
     "showUsageHint": "Below the composer",
+    "caveman": "Caveman mode",
+    "cavemanHint": "Bots answer you in few words, with the same facts. For the messages you send from here; what they write elsewhere stays normal.",
     "sortBots": "Sort bots",
     "sortOptions": {
       "groups": "Groups",

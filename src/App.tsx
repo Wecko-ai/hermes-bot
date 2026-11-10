@@ -26,7 +26,7 @@ import { respondBrowserVault, subscribeBrowserVaultRequests } from './lib/browse
 import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
 import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
-import { modeApiText, type ChatMode } from './lib/modes'
+import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
 import type { MediaRef } from './lib/media'
@@ -654,8 +654,11 @@ export default function App() {
     }
   }
 
-  // Without an explicit mode (email card, suggestions), the turn is a normal turn: an approved email must go out.
-  const send = async (text: string, attachments: PendingAttachment[], mode: ChatMode = 'exec', delivery?: DeliveryMode): Promise<boolean> => {
+  // Without an explicit mode (email card, suggestions), the turn is a normal turn with nothing added,
+  // not even the caveman note: an approved email must go out as it was approved.
+  const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode): Promise<boolean> => {
+    const mode = sentMode ?? 'exec'
+    const caveman = sentMode !== undefined && getSettings().caveman
     const now = new Date().toISOString()
     if (DEMO) {
       setMessages((items) => [...items,
@@ -687,7 +690,7 @@ export default function App() {
     const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(running ? { delivery: delivery as 'queue' | 'priority' } : {}) }
     setMessages((items) => [...items, userMessage])
     appendCachedMessage(selected, userMessage)
-    if (running) return queueTurn(chat, text, attachments, userMessage, mode, delivery === 'priority')
+    if (running) return queueTurn(chat, text, attachments, userMessage, mode, caveman, delivery === 'priority')
     updateCachedChat(selected, { running: true })
     updateBot(selected, { preview: text, timestamp: now, status: 'working' })
     setRunning(true)
@@ -696,7 +699,7 @@ export default function App() {
       const { images, fileRefs } = await uploadAttachments(chat, attachments)
       setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      await submitPrompt(client, chat, prompt, images, { apiText: modeApiText(prompt, mode) })
+      await submitPrompt(client, chat, prompt, images, { apiText: cavemanApiText(prompt, modeApiText(prompt, mode), caveman) })
       setActiveChat({ ...chat, running: true })
       return true
     } catch (error) {
@@ -735,12 +738,12 @@ export default function App() {
    * Message sent during a turn: queued, Hermes starts it when the turn ends. Priority, it goes into
    * the same queue with a resume instruction, then the current turn is interrupted: so it runs right after.
    */
-  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, priority: boolean) => {
+  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, caveman: boolean, priority: boolean) => {
     try {
       const { images, fileRefs } = await uploadAttachments(chat, attachments)
       setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      const modeText = modeApiText(prompt, mode)
+      const modeText = cavemanApiText(prompt, modeApiText(prompt, mode), caveman)
       await submitPrompt(client, chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
       if (priority) {
         // The generation of the current turn, read at the last `message.start`: the old one would be refused.

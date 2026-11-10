@@ -93,6 +93,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Bot media.** Images, galleries, video and audio that a bot sends (`MEDIA:` lines) or cites by path show under its message, with a full-screen viewer. PDF, HTML and Markdown documents open in tabs next to the chat.
 - **Bot-to-bot messages.** "Orion messaged Iris" lines in both chats, with the reply. `@bot` mentions tell a bot which other bot you mean.
 - **Modes.** BRAIN (think with me), PLAN (write a plan) and EXEC (do it), per bot. BRAIN and PLAN are an instruction for one turn, not a lock on tools.
+- **Caveman mode.** One switch in Settings > Conversations: every bot answers you in few words, with the same facts. It is a note read with each message you send, not a change to the bots' profiles. What a bot writes elsewhere (files, code, emails, posts, messages to other bots) keeps its normal style.
 - **Model picker.** Change the model for one conversation. The bot's profile is never rewritten.
 - **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
 - **Routines.** The scheduled jobs of each bot, read-only.

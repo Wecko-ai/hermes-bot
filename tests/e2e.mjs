@@ -1440,6 +1440,46 @@ try {
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
+  // Caveman mode: one switch for every bot. The note is read with the turn, after the mode instruction;
+  // the stored text stays the user's, and an approved mail still goes out with nothing added.
+  const setCaveman = async (on) => {
+    await openSettings()
+    await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
+    const cavemanSwitch = settingsDialog.getByRole('switch', { name: /Mode caveman/ })
+    if (await cavemanSwitch.isChecked() === on) throw new Error(`Le mode caveman devrait être ${on ? 'coupé' : 'actif'} avant le clic.`)
+    await cavemanSwitch.setChecked(on)
+    if (on) {
+      await page.waitForTimeout(350)
+      await page.screenshot({ path: `${SCREENSHOTS}settings-caveman.png` })
+    }
+    await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
+    await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  }
+  const CAVEMAN_NOTE = '[HermesBot style: caveman. For this turn only,'
+  await setCaveman(true)
+  await sendInMode('Test caveman')
+  if (!lastApiText?.startsWith(`Test caveman\n\n${CAVEMAN_NOTE}`) || !lastApiText.includes('messages to others stay normal')) throw new Error(`api_text caveman : ${lastApiText}`)
+  if (await page.locator('.messages-scroll').getByText('HermesBot style').count()) throw new Error('La note caveman est visible.')
+  await modeRadio('BRAIN').click()
+  await sendInMode('Test caveman brain')
+  const brainAt = lastApiText?.indexOf('[HermesBot mode: BRAIN.') ?? -1
+  if (brainAt < 0 || lastApiText.indexOf(CAVEMAN_NOTE) < brainAt) throw new Error(`La note caveman doit suivre la consigne du mode : ${lastApiText}`)
+  await modeRadio('EXEC').click()
+  await askMail('m3')
+  await card.waitFor({ timeout: 5_000 })
+  if (!lastApiText?.includes(CAVEMAN_NOTE)) throw new Error('La demande de mail part du champ de saisie : elle porte la note caveman.')
+  const promptsBeforeCavemanMail = promptCalls
+  await card.getByRole('button', { name: 'Envoyer' }).click()
+  for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeCavemanMail; attempt += 1) await delay(50)
+  if (promptCalls !== promptsBeforeCavemanMail + 1 || !lastPromptText.includes('Id: m3')) throw new Error('Le mail approuvé en mode caveman doit lancer un seul tour.')
+  if (lastApiText !== undefined) throw new Error(`Un mail validé ne doit pas porter la note caveman : ${lastApiText}`)
+  await card.waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 3_000 })
+  await delay(500) // the simulated turn ends: the next send would be ignored while it runs
+  await setCaveman(false)
+  await sendInMode('Test sans caveman')
+  if (lastApiText !== undefined) throw new Error(`Mode caveman coupé : rien ne doit être ajouté : ${lastApiText}`)
+
   // A real user gesture (wheel up) detaches the thread; a programmatic scroll would not.
   const scrollBox = await page.locator('.messages-scroll').boundingBox()
   await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2)
@@ -1777,7 +1817,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

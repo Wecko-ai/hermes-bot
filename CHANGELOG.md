@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Caveman mode (Settings > Conversations): bots answer in few words, with the same facts. Off by default. Only their chat replies change; an approved mail goes out with nothing added.
 - Sign-in without a password to a Hermes on the same Mac, its default setup: the desktop app signs in by itself, and `npm run dev` prints a sign-in link. The Hermes session token stays in the server and only goes to the gateway that owns the Hermes home.
 - `AGENT-INSTALL.md`: an installation guide written for an agent. It builds the app, tries the demo and checks whether HermesBot can sign in to your Hermes.
 - The demo (`?demo=1`) follows the interface language.
