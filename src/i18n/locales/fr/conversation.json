@@ -140,5 +140,34 @@
       "plan": "Préparer un plan avec {{name}}",
       "exec": "Message {{name}}"
     }
+  },
+  "subagents": {
+    "title": "Sous-agents",
+    "running_one": "{{count}} en cours",
+    "running_other": "{{count}} en cours",
+    "finished_one": "{{count}} fini",
+    "finished_other": "{{count}} finis",
+    "readOnly": "Lecture seule",
+    "noGoal": "Tâche sans titre",
+    "lastTool": "Dernier outil : {{tool}}",
+    "tools_one": "{{count}} appel d’outil",
+    "tools_other": "{{count}} appels d’outils",
+    "showTail": "Afficher la fin du journal de ce sous-agent",
+    "tailLoading": "Lecture du journal…",
+    "tailUnavailable": "Pas de journal en direct : le sous-agent n’a pas encore commencé, ou il a fini.",
+    "tailFailed": "Le journal n’a pas pu être lu.",
+    "tailTruncated": "Fin du journal seulement.",
+    "outputTail": "Derniers résultats d’outils",
+    "status": {
+      "queued": "En attente",
+      "running": "En cours",
+      "completed": "Terminé",
+      "failed": "Échec",
+      "error": "Erreur",
+      "timeout": "Délai dépassé",
+      "interrupted": "Interrompu",
+      "ended": "Fini"
+    },
+    "duration": { "s": "{{s}} s", "m": "{{m}} min {{s}} s", "h": "{{h}} h {{m}} min" }
   }
 }

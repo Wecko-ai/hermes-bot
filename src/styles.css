@@ -21,6 +21,8 @@
   --success: #2f9e5b;
   --warning: #c9781a;
   --danger: #cf3f36;
+  /* Standing by: no turn, work still running. Calm, distinct from working (accent) and done (success). */
+  --standby: #5a6cb4;
   --avatar-contrast: #14262b;
   --avatar-on-contrast: #f3fbfa;
   --avatar-eyes: #10202a;
@@ -42,6 +44,7 @@
   --border-strong: #e8f1ef38;
   --bubble: #e8f1ef2e;
   --bubble-text: #e8f1ef;
+  --standby: #95a4e8;
   --avatar-contrast: #ffffff;
   --avatar-on-contrast: #10202a;
   --avatar-eyes: #10202a;
@@ -136,6 +139,7 @@ a { color: inherit; }
 .bot-avatar-status.status-waiting { background: var(--warning); }
 .bot-avatar-status.status-blocked { background: var(--danger); }
 .bot-avatar-status.status-done { background: var(--success); }
+.bot-avatar-status.status-standby { background: var(--standby); }
 @keyframes avatar-bob { 0%, 100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-2px) rotate(1deg); } }
 @keyframes avatar-dot { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-1.5px); } }
 
@@ -580,6 +584,9 @@ body::before {
 .live-avatar-halo { position: absolute; inset: -18%; z-index: 0; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--avatar-glow, var(--avatar-color)) 50%, transparent), transparent); animation: halo-breathe 1.9s ease-in-out infinite; }
 .live-avatar.is-working::after { content: ''; position: absolute; inset: -4px; z-index: 2; border-radius: 50%; padding: 1.5px; pointer-events: none; background: conic-gradient(transparent 0 52%, color-mix(in srgb, var(--avatar-glow, var(--avatar-color)) 85%, white) 78%, transparent 96%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: ring-spin 1.5s linear infinite; }
 .live-avatar.is-done { animation: avatar-pop 560ms var(--spring); }
+/* Standing by: a still, thin ring. Never animated: the bot has no turn. */
+.live-avatar.is-standby::after { content: ''; position: absolute; inset: -3.5px; z-index: 2; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--standby) 78%, transparent), 0 0 0 4px color-mix(in srgb, var(--standby) 14%, transparent); }
+.working-strip .live-avatar.is-standby::after { display: none; }
 @keyframes halo-breathe { 0%, 100% { opacity: .35; transform: scale(.9); } 50% { opacity: .85; transform: scale(1.06); } }
 @keyframes ring-spin { to { transform: rotate(360deg); } }
 @keyframes avatar-pop { 0% { transform: scale(.88); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
@@ -596,6 +603,8 @@ body::before {
 .chat-identity.is-done .chat-status { color: var(--success); font-weight: 560; }
 .chat-identity.is-waiting .chat-status { color: var(--warning); font-weight: 560; }
 .chat-identity.is-waiting .chat-status-dot { background: var(--warning); }
+.chat-identity.is-standby .chat-status { color: var(--standby); font-weight: 560; }
+.chat-identity.is-standby .chat-status-dot { background: var(--standby); }
 
 /* Thread: glass bubbles, soft entrance, glowing streaming bubble. */
 .day-separator { width: fit-content; margin: 20px auto 16px; padding: 2px 10px; border-radius: 999px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); }
@@ -651,6 +660,9 @@ body::before {
 }
 .bot-row-status.is-waiting { color: var(--warning); }
 .bot-row-status.is-blocked { color: var(--danger); }
+.bot-row-status.is-standby { color: var(--standby); }
+.bot-row-status.is-standby .bot-row-work { margin-left: 2px; }
+.bot-row.is-standby { background: linear-gradient(100deg, color-mix(in srgb, var(--standby) 10%, transparent), transparent 75%); }
 .bot-row-status .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
 .bot-row.status-waiting { background: linear-gradient(100deg, color-mix(in srgb, var(--warning) 11%, transparent), transparent 75%); }
 .bot-row.status-blocked { background: linear-gradient(100deg, color-mix(in srgb, var(--danger) 11%, transparent), transparent 75%); }
@@ -721,6 +733,35 @@ body::before {
 .prompt-card-other button { width: 28px; height: 28px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 8px; background: var(--accent); color: #fff; }
 .prompt-card button:disabled { opacity: .45; cursor: default; }
 @media (max-width: 640px) { .prompt-dock { padding: 0 10px 6px; } }
+
+/* Subagents of the conversation, read only, above the input field. */
+.subagents-dock { width: min(100%, 880px); flex: none; margin: 0 auto; padding: 0 16px 8px; }
+.subagents-panel { border-radius: 14px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border), 0 8px 22px -18px color-mix(in srgb, var(--standby) 80%, transparent); overflow: hidden; }
+.subagents-head { width: 100%; min-height: 36px; display: flex; align-items: center; gap: 7px; padding: 7px 12px; color: var(--text); font-size: 12.5px; text-align: left; }
+.subagents-head:hover { background: var(--hover); }
+.subagents-icon { width: 20px; height: 20px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 6px; background: color-mix(in srgb, var(--standby) 16%, transparent); color: var(--standby); }
+.subagents-head strong { font-weight: 600; }
+.subagents-counts { min-width: 0; display: inline-flex; gap: 8px; overflow: hidden; color: var(--text-tertiary); white-space: nowrap; }
+.subagents-counts .is-running { color: var(--standby); font-weight: 560; }
+.subagents-readonly { margin-left: auto; flex: none; color: var(--text-tertiary); font-size: 11px; }
+.subagents-list { max-height: 34vh; margin: 0; padding: 0 6px 6px; overflow: auto; list-style: none; }
+.subagent-row { margin-left: calc(var(--depth, 0) * 14px); padding: 2px 0; border-top: .5px solid var(--border); }
+.subagent-main { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 1px; align-items: baseline; padding: 6px 8px; border-radius: 9px; text-align: left; }
+.subagent-main:hover { background: var(--hover); }
+.subagent-state { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.subagent-state .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; }
+.subagent-state.is-running, .subagent-state.is-queued { color: var(--standby); }
+.subagent-state.is-completed { color: var(--success); }
+.subagent-state.is-failed, .subagent-state.is-error, .subagent-state.is-timeout { color: var(--danger); }
+.subagent-state.is-interrupted { color: var(--warning); }
+.subagent-goal { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-meta { grid-column: 2; color: var(--text-tertiary); font-size: 11.5px; line-height: 16px; }
+.subagent-summary { margin: 0 8px 6px; padding: 6px 9px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-tail { margin: 0 8px 6px; }
+.subagent-tail pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-tail-note { margin: 0 8px 6px; color: var(--text-tertiary); font-size: 11.5px; }
+.subagent-tail .subagent-tail-note { margin: 0 0 4px; }
+@media (max-width: 640px) { .subagents-dock { padding: 0 10px 6px; } .subagents-readonly { display: none; } }
 /* Summary of the work in progress, in the bot's panel. */
 .work-card { margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--glass-strong)); box-shadow: var(--glass-highlight); }
 .work-card h3 { margin: 0 0 4px; color: var(--accent); font-size: 11px; font-weight: 600; }

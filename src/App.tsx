@@ -5,9 +5,11 @@ import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
 import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
+import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
+import { chatBackground, isSubagentActive } from './lib/subagents'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { workLine } from './lib/work-summary'
-import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore } from './store'
+import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoData, type DemoLanguage } from './lib/demo'
@@ -38,6 +40,11 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
 /** Reads the turns of every bot. Hermes Desktop re-reads its roster every 5 s. */
 const LIVE_STATUS_MS = 6_000
+/** Subagents and background processes, every profile. They outlast a turn by minutes: no need to read them as often. */
+const BACKGROUND_MS = 15_000
+/** The open conversation’s processes and children, only while something may still run (Hermes Desktop: 1 to 5 s). */
+const CHAT_BACKGROUND_MS = 5_000
+const BUSY = new Set(['working', 'thinking', 'waiting'])
 const asText = (value: unknown) => typeof value === 'string' ? value : ''
 
 const demoLanguage = (): DemoLanguage => (i18n.language === 'fr' ? 'fr' : 'en')
@@ -58,6 +65,7 @@ const {
   showProfileFromList, enterProfile, applySyncedChat,
 } = useChatStore.getState()
 const { addPrompt, settlePrompt, removePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest, removeServerRequest, setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
+const { applyEvent: applySubagentEvent, applyList: applySubagentList, setProcesses: setChatProcesses } = useSubagentsStore.getState()
 
 const systemPrefersDark = () => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
 
@@ -113,6 +121,8 @@ export default function App() {
   const prompts = useRequestsStore((state) => state.prompts)
   const serverRequests = useRequestsStore((state) => state.serverRequests)
   const browserVaultRequests = useRequestsStore((state) => state.browserVaultRequests)
+  const subagentRows = useSubagentsStore((state) => state.rows)
+  const chatProcesses = useSubagentsStore((state) => state.processes)
   const [detailsOpen, setDetailsOpen] = useState(() => window.innerWidth >= 1180)
   const [mobileOpen, setMobileOpen] = useState(false)
   const settings = useSettings()
@@ -182,6 +192,11 @@ export default function App() {
       const payload = event.payload || {}
       if (event.type === 'request.cancel') {
         removeServerRequest(payload.id as string)
+        return
+      }
+      // Delegated children: the Subagents panel of the conversation that spawned them.
+      if (event.type?.startsWith('subagent.') && event.session_id) {
+        applySubagentEvent(event.session_id, event.type, payload)
         return
       }
       // Question or approval from the bot: the turn stays blocked until the user answers (card above the field).
@@ -405,6 +420,75 @@ export default function App() {
     })
     return () => { clearInterval(timer); unsubscribe() }
   }, [auth, client])
+
+  // Standing by: no turn, but subagents or background processes still running. One `subagent.roster` per
+  // profile every 15 s, and one for a bot whose turn just ended: that is when work is left running.
+  useEffect(() => {
+    if (DEMO || auth !== 'ready') return
+    let busy = false
+    const read = (profiles: string[]) => loadBackgroundWork(client, profiles).then(({ counts, answered }) => {
+      for (const slug of answered) {
+        const next = counts.get(slug)
+        const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+        if (bot && !sameBackground(bot.background, next)) updateBot(slug, { background: hasBackground(next) ? next : undefined })
+      }
+    })
+    const poll = () => {
+      const profiles = useRosterStore.getState().bots.map((bot) => bot.slug)
+      if (busy || document.hidden || profiles.length === 0) return
+      busy = true
+      read(profiles).finally(() => { busy = false })
+    }
+    poll()
+    const timer = setInterval(poll, BACKGROUND_MS)
+    const ended = new Map<string, ReturnType<typeof setTimeout>>()
+    const unsubscribe = useRosterStore.subscribe((state, previous) => {
+      if (state.bots === previous.bots) return
+      const before = new Map(previous.bots.map((bot) => [bot.slug, bot.status]))
+      for (const bot of state.bots) {
+        if (!BUSY.has(before.get(bot.slug) ?? '') || BUSY.has(bot.status) || ended.has(bot.slug)) continue
+        // A short delay: the children and processes the turn left behind are registered by then.
+        ended.set(bot.slug, setTimeout(() => { ended.delete(bot.slug); void read([bot.slug]) }, 1_000))
+      }
+    })
+    return () => { clearInterval(timer); unsubscribe(); ended.forEach(clearTimeout) }
+  }, [auth, client])
+
+  // The open conversation’s own processes and children (Subagents panel): read when it opens, then every 5 s
+  // while a turn, a child or a process may still be running, and right after its turn ends.
+  const openSession = activeChat?.sessionId
+  const openProfile = activeChat?.profile
+  const openSocket = activeChat?.socketGeneration
+  useEffect(() => {
+    if (DEMO || auth !== 'ready' || !openSession || !openProfile) return
+    let stopped = false
+    let busy = false
+    const chat = { profile: openProfile, sessionId: openSession }
+    const refresh = () => {
+      if (busy || document.hidden) return
+      busy = true
+      loadChatBackground(client, chat).then(({ processes, subagents }) => {
+        if (stopped) return
+        if (processes !== undefined) setChatProcesses(openSession, processes)
+        if (subagents) applySubagentList(openSession, subagents)
+      }).finally(() => { busy = false })
+    }
+    const mayRun = () => {
+      const bot = useRosterStore.getState().bots.find((item) => item.slug === openProfile)
+      const { rows, processes } = useSubagentsStore.getState()
+      return useChatStore.getState().running || hasBackground(bot?.background) || (processes[openSession] ?? 0) > 0 || (rows[openSession] ?? []).some(isSubagentActive)
+    }
+    refresh()
+    const timer = setInterval(() => { if (mayRun()) refresh() }, CHAT_BACKGROUND_MS)
+    let turnEnd: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = useChatStore.subscribe((state, previous) => {
+      if (previous.running && !state.running && state.activeChat?.sessionId === openSession) {
+        clearTimeout(turnEnd)
+        turnEnd = setTimeout(refresh, 1_000)
+      }
+    })
+    return () => { stopped = true; clearInterval(timer); clearTimeout(turnEnd); unsubscribe() }
+  }, [openSession, openProfile, openSocket, auth, client])
 
   useEffect(() => {
     if (DEMO) return
@@ -887,16 +971,30 @@ export default function App() {
     }
   }
 
+  /** On click in the Subagents panel: the end of a child’s live transcript. */
+  const loadOpenSubagentTail = (subagentId: string) => {
+    const chat = useChatStore.getState().activeChat
+    if (!chat) return Promise.reject(new Error('no_chat'))
+    return loadSubagentTail(client, chat, subagentId)
+  }
+
   const answerBrowserVault = async (id: string, body: Record<string, unknown>) => {
     await respondBrowserVault(id, body)
     removeBrowserVaultRequest(id)
   }
 
-  const selectedBot = bots.find((bot) => bot.slug === selected) || bots[0]
+  const rosterSelected = bots.find((bot) => bot.slug === selected) || bots[0]
+  const openChatSession = activeChat && activeChat.profile === rosterSelected?.slug ? activeChat.sessionId : undefined
+  const openSubagents = openChatSession ? subagentRows[openChatSession] ?? [] : []
+  const openProcesses = openChatSession ? chatProcesses[openChatSession] ?? 0 : 0
+  // The open conversation’s reads and events are fresher than the roster’s for this bot.
+  const openWork = chatBackground(openSubagents, openProcesses)
+  const selectedBot = rosterSelected && openWork ? { ...rosterSelected, background: mergeBackground(rosterSelected.background, openWork) } : rosterSelected
   const localModel = chooseLocalModel(localModels, settings.localModel)
   const localBot: Bot | null = localModel ? { ...localChatBot(localModel, appConfig.localChat.name), status: localRunning ? 'working' : 'idle' } : null
   localBotRef.current = localBot
-  const rosterBots = DEMO || !localBot ? bots : [...bots, localBot]
+  const shownBots = selectedBot && selectedBot !== rosterSelected ? bots.map((bot) => bot.slug === selectedBot.slug ? selectedBot : bot) : bots
+  const rosterBots = DEMO || !localBot ? shownBots : [...shownBots, localBot]
   const openRequest = serverRequests[0]
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
@@ -956,6 +1054,9 @@ export default function App() {
         onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
         prompts={shownPrompts}
         onAnswerPrompt={answerPendingPrompt}
+        subagents={openSubagents}
+        processes={openProcesses}
+        onLoadSubagentTail={loadOpenSubagentTail}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
             options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model])}

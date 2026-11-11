@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { Bot, BotStatus } from '../types'
 import { getAppConfig } from '../lib/app-config'
+import { effectiveStatus } from '../lib/background'
 import { i18n } from '../i18n'
 
 const colors = ['#7A63C9', '#E8833A', '#3FA66B', '#D9483B', '#3B82C4', '#7B8794', '#C9559A', '#2BA6A0', '#E0A526', '#9A6B4F', '#2F4858']
@@ -72,14 +73,15 @@ export function BotAvatar({ bot, size = 36, showStatus = false }: { bot: Bot; si
   const shape = bot.avatar?.shape || shapes[seed % shapes.length]
   const color = avatarColor(bot)
   const eyeColor = color === '#000000' || color === 'var(--avatar-contrast)' ? 'var(--avatar-on-contrast)' : '#17181b'
-  const busy = bot.status === 'thinking' || bot.status === 'working'
+  const status = effectiveStatus(bot)
+  const busy = status === 'thinking' || status === 'working'
 
   return (
     <span
-      className={`bot-avatar is-${bot.status} ${busy ? 'is-busy' : ''}`}
+      className={`bot-avatar is-${status} ${busy ? 'is-busy' : ''}`}
       style={{ width: size, height: size, '--avatar-color': color } as React.CSSProperties}
       role="img"
-      aria-label={`${bot.name}, ${statusLabel(bot.status)}`}
+      aria-label={`${bot.name}, ${statusLabel(status)}`}
     >
       {bot.avatar?.image ? (
         <img className="bot-avatar-image" src={bot.avatar.image} alt="" />
@@ -97,7 +99,7 @@ export function BotAvatar({ bot, size = 36, showStatus = false }: { bot: Bot; si
           )}
         </svg>
       )}
-      {showStatus && bot.status !== 'idle' && <span className={`bot-avatar-status status-${bot.status}`} />}
+      {showStatus && status !== 'idle' && <span className={`bot-avatar-status status-${status}`} />}
     </span>
   )
 }

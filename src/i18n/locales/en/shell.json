@@ -44,7 +44,14 @@
     "working": "Working",
     "waiting": "Waiting for your reply",
     "blocked": "Blocked",
-    "done": "Done"
+    "done": "Done",
+    "standby": "Standing by"
+  },
+  "background": {
+    "subagents_one": "{{count}} subagent",
+    "subagents_other": "{{count}} subagents",
+    "processes_one": "{{count}} background process",
+    "processes_other": "{{count}} background processes"
   },
   "sidebar": {
     "closeNav": "Close navigation",

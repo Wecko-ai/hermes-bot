@@ -140,5 +140,34 @@
       "plan": "Prepare a plan with {{name}}",
       "exec": "Message {{name}}"
     }
+  },
+  "subagents": {
+    "title": "Subagents",
+    "running_one": "{{count}} running",
+    "running_other": "{{count}} running",
+    "finished_one": "{{count}} finished",
+    "finished_other": "{{count}} finished",
+    "readOnly": "Read only",
+    "noGoal": "Untitled task",
+    "lastTool": "Last tool: {{tool}}",
+    "tools_one": "{{count}} tool call",
+    "tools_other": "{{count}} tool calls",
+    "showTail": "Show the end of this subagent’s transcript",
+    "tailLoading": "Loading the transcript…",
+    "tailUnavailable": "No live transcript: the subagent has not started yet, or it has finished.",
+    "tailFailed": "The transcript could not be read.",
+    "tailTruncated": "End of the transcript only.",
+    "outputTail": "Last tool results",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "completed": "Done",
+      "failed": "Failed",
+      "error": "Error",
+      "timeout": "Timed out",
+      "interrupted": "Interrupted",
+      "ended": "Ended"
+    },
+    "duration": { "s": "{{s}} s", "m": "{{m}} min {{s}} s", "h": "{{h}} h {{m}} min" }
   }
 }

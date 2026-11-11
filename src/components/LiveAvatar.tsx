@@ -4,11 +4,16 @@ import type { Bot } from '../types'
 import { BotAvatar, avatarColor, statusLabel } from './BotAvatar'
 import { useAppConfig } from '../lib/app-config'
 import { useSettings } from '../lib/settings'
+import { backgroundSummary, effectiveStatus } from '../lib/background'
 
-export type AvatarPhase = 'working' | 'done' | 'idle'
+/** `standby`: no turn, but subagents or background processes still run. Calm and static, never animated. */
+export type AvatarPhase = 'working' | 'standby' | 'done' | 'idle'
 
-export const avatarPhase = (bot: Bot): AvatarPhase =>
-  bot.status === 'working' || bot.status === 'thinking' ? 'working' : bot.status === 'done' ? 'done' : 'idle'
+export const avatarPhase = (bot: Bot): AvatarPhase => {
+  const status = effectiveStatus(bot)
+  if (status === 'working' || status === 'thinking') return 'working'
+  return status === 'standby' ? 'standby' : status === 'done' ? 'done' : 'idle'
+}
 
 const reducedMotionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
 
@@ -33,7 +38,8 @@ interface LiveAvatarProps {
 
 /**
  * Live avatar: at rest, the crisp SVG avatar; at work, the bot’s animation if it has one (or the avatar
- * fidgeting) with a halo in its color; at the end of the turn, its celebration. You see at a glance who is working.
+ * fidgeting) with a halo in its color; at the end of the turn, its celebration. Standing by: the still avatar
+ * inside a calm ring, never animated. You see at a glance who is working.
  */
 export function LiveAvatar({ bot, size = 36, showStatus = false }: LiveAvatarProps) {
   useTranslation() // re-render when the language changes: the alt text comes from the global instance
@@ -42,13 +48,13 @@ export function LiveAvatar({ bot, size = 36, showStatus = false }: LiveAvatarPro
   const reducedMotion = useReducedMotion()
   const { animatedBots } = useAppConfig()
   const source = `/animations/${bot.slug}-${phase}.webp`
-  const animated = phase !== 'idle' && !reducedMotion && animatedBots.includes(bot.slug) && failedSource !== source
+  const animated = (phase === 'working' || phase === 'done') && !reducedMotion && animatedBots.includes(bot.slug) && failedSource !== source
   const color = avatarColor(bot)
   // A black halo would look like a botched shadow: black/white bots take the accent color.
   const glow = color === 'var(--avatar-contrast)' || color === '#000000' ? 'var(--accent)' : color
   const style = { width: size, height: size, '--avatar-color': color, '--avatar-glow': glow } as CSSProperties
   return (
-    <span className={`live-avatar is-${phase} ${animated ? 'is-animated' : ''}`} style={style}>
+    <span className={`live-avatar is-${phase} ${animated ? 'is-animated' : ''}`} style={style} title={phase === 'standby' ? backgroundSummary(bot.background) : undefined}>
       {phase === 'working' && <span className="live-avatar-halo" aria-hidden="true" />}
       {animated ? (
         <img
@@ -57,7 +63,7 @@ export function LiveAvatar({ bot, size = 36, showStatus = false }: LiveAvatarPro
           src={source}
           width={size}
           height={size}
-          alt={`${bot.name}, ${statusLabel(bot.status)}`}
+          alt={`${bot.name}, ${statusLabel(effectiveStatus(bot))}`}
           draggable={false}
           onError={() => setFailedSource(source)}
         />

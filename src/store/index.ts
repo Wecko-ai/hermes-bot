@@ -7,3 +7,4 @@ export {
   useRequestsStore, resetRequestsStore, addPrompt, settlePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest,
   type RequestsState,
 } from './requests'
+export { useSubagentsStore, resetSubagentsStore, type SubagentsState } from './subagents'

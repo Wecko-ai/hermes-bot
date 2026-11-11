@@ -4,6 +4,8 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- "Standing by" status: a bot with no turn but with subagents or background processes still running gets a calm ring and its own label; hovering it says how many. "Working" keeps the priority.
+- Subagents block in the chat, read only: goal, status, duration, last tool and final summary of each delegated child, and the end of its live transcript on click.
 - Caveman mode (Settings > Conversations): bots answer in few words, with the same facts. Off by default. Only their chat replies change; an approved mail goes out with nothing added.
 - Sign-in without a password to a Hermes on the same Mac, its default setup: the desktop app signs in by itself, and `npm run dev` prints a sign-in link. The Hermes session token stays in the server and only goes to the gateway that owns the Hermes home.
 - `AGENT-INSTALL.md`: an installation guide written for an agent. It builds the app, tries the demo and checks whether HermesBot can sign in to your Hermes.

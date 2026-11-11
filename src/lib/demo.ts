@@ -71,7 +71,7 @@ type BotSlug = keyof (typeof TEXTS)['en']['bots']
 // Slug, name, section, minutes since the last activity, and what differs from an idle bot.
 const ROSTER: [BotSlug, string, SectionId, number, Partial<Bot>][] = [
   ['orion', 'Orion', 'workshop', 1, { status: 'working', unread: 1 }],
-  ['iris', 'Iris', 'workshop', 37, {}],
+  ['iris', 'Iris', 'workshop', 37, { background: { subagents: 2, processes: 1 } }],
   ['nova', 'Nova', 'home', 4, { status: 'done', unread: 2 }],
   ['sage', 'Sage', 'home', 18, {}],
   ['juno', 'Juno', 'home', 23, {}],

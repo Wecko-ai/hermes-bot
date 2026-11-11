@@ -27,6 +27,15 @@ const FILE_TOOLS: Record<string, [string, string]> = {
   patch: ['work.filePatch', 'work.filePatchBare'],
 }
 
+/** A tool by its name only, without its arguments: “Reading”, “Searching the web”, “Running a command”. */
+export function toolLabel(name: string) {
+  const file = FILE_TOOLS[name]
+  if (file) return i18n.t(file[1])
+  if (name === 'web_search') return i18n.t('work.webSearchBare')
+  const label = `work.tools.${name}`
+  return i18n.exists(label) ? i18n.t(label) : name.replaceAll('_', ' ')
+}
+
 /** Only a file name or a search is shown: a command may contain a secret. */
 function toolStep(payload: Json) {
   const name = typeof payload.name === 'string' ? payload.name : ''

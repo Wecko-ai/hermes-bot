@@ -10,6 +10,7 @@ import { UsageTab, type UsageDetails } from './UsageTab'
 import { dateTime, relativeTime, shortTime } from '../lib/time'
 import { conversationMedia, type MediaRef } from '../lib/media'
 import { workLine, type WorkSummary } from '../lib/work-summary'
+import { backgroundSummary, effectiveStatus } from '../lib/background'
 
 function cleanRoutineName(name: string, bot: Bot) {
   const strip = (value: string, prefix: string) =>
@@ -77,7 +78,7 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
       {!activeDocument && <div className="details-scroll">
         <div className="details-identity">
           <LiveAvatar bot={bot} size={72} showStatus />
-          <div><h2>{bot.name}</h2><p>{statusLabel(bot.status)}</p></div>
+          <div><h2>{bot.name}</h2><p>{statusLabel(effectiveStatus(bot))}{effectiveStatus(bot) === 'standby' && ` · ${backgroundSummary(bot.background)}`}</p></div>
         </div>
         <p className="details-role">{bot.role}</p>
         {workText && (

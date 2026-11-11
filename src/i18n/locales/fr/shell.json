@@ -44,7 +44,14 @@
     "working": "Au travail",
     "waiting": "Attend ta réponse",
     "blocked": "Bloqué",
-    "done": "Terminé"
+    "done": "Terminé",
+    "standby": "En veille"
+  },
+  "background": {
+    "subagents_one": "{{count}} sous-agent",
+    "subagents_other": "{{count}} sous-agents",
+    "processes_one": "{{count}} processus en arrière-plan",
+    "processes_other": "{{count}} processus en arrière-plan"
   },
   "sidebar": {
     "closeNav": "Fermer la navigation",

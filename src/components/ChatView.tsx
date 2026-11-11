@@ -11,6 +11,9 @@ import { MessageList } from './MessageList'
 import { Composer, type ComposerHandle } from './Composer'
 import { PromptCard } from './PromptCard'
 import type { PendingPrompt } from '../lib/hermes'
+import { SubagentsPanel } from './SubagentsPanel'
+import type { SubagentRow } from '../lib/subagents'
+import { backgroundSummary, type SubagentTail } from '../lib/background'
 import { locale } from '../i18n'
 
 interface ChatViewProps {
@@ -43,6 +46,10 @@ interface ChatViewProps {
   /** Open questions and approvals of this chat: the bot stays blocked while they wait. */
   prompts: PendingPrompt[]
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
+  /** Children delegated in this conversation, and its background processes still running. */
+  subagents: SubagentRow[]
+  processes: number
+  onLoadSubagentTail: (subagentId: string) => Promise<SubagentTail>
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
@@ -55,7 +62,9 @@ export function ChatView(props: ChatViewProps) {
   // During a turn started here, the header shows the work even if the roster hasn’t caught up yet.
   const liveBot = waiting ? { ...bot, status: 'waiting' as const } : props.running && avatarPhase(bot) !== 'working' ? { ...bot, status: 'working' as const } : bot
   const phase = avatarPhase(liveBot)
-  const status = t(`status.${waiting ? 'waiting' : phase === 'working' ? 'working' : phase === 'done' ? 'done' : 'idle'}`)
+  const status = t(`status.${waiting ? 'waiting' : phase}`)
+  // Standing by: what still runs, on hover.
+  const standby = !waiting && phase === 'standby' ? backgroundSummary(liveBot.background) : ''
   const detail = phase === 'working' ? props.workText || props.activity : ''
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -121,11 +130,11 @@ export function ChatView(props: ChatViewProps) {
     >
       <header className="chat-header">
         <div className="chat-leading"><button className="plain-icon mobile-menu" aria-label={t('chat.showBots')} onClick={props.onOpenMobile}><Menu size={19} /></button></div>
-        <div className={`chat-identity is-${waiting ? 'waiting' : phase}`} title={bot.role}>
+        <div className={`chat-identity is-${waiting ? 'waiting' : phase}`} title={standby || bot.role}>
           <LiveAvatar bot={liveBot} size={26} />
           <div>
             <h1>{bot.name}</h1>
-            <p className="chat-status"><span className="chat-status-dot" aria-hidden="true" /><span aria-live="polite">{status}</span>{detail && <span className="chat-status-detail"> · {detail}</span>}</p>
+            <p className="chat-status"><span className="chat-status-dot" aria-hidden="true" /><span aria-live="polite">{status}</span>{standby && <span className="visually-hidden"> · {standby}</span>}{detail && <span className="chat-status-detail"> · {detail}</span>}</p>
           </div>
         </div>
         <div className="chat-header-actions">
@@ -155,6 +164,7 @@ export function ChatView(props: ChatViewProps) {
         onOpenBot={props.onOpenBot}
       />
       {props.modelPicker}
+      {!props.hidden && <SubagentsPanel key={bot.slug} rows={props.subagents} processes={props.processes} onLoadTail={props.onLoadSubagentTail} />}
       {props.prompts[0] && !props.hidden && (
         <div className="prompt-dock">
           <PromptCard key={props.prompts[0].promptId} prompt={props.prompts[0]} botName={bot.name} onAnswer={props.onAnswerPrompt} />

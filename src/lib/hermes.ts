@@ -35,7 +35,8 @@ export interface ActiveChat {
 }
 
 export class HermesRpcError extends Error {
-  constructor(message: string, public data: Json = {}) {
+  /** `code`: the JSON-RPC error code; `-32601` says the gateway does not know the method. */
+  constructor(message: string, public data: Json = {}, public code?: number) {
     super(message)
     this.name = 'HermesRpcError'
   }
@@ -172,7 +173,7 @@ export class HermesClient {
           clearTimeout(request.timer)
           if (frame.error) {
             const error = asObject(frame.error)
-            request.reject(new HermesRpcError(asString(error.message, i18n.t('hermes.requestRefused')), asObject(error.data)))
+            request.reject(new HermesRpcError(asString(error.message, i18n.t('hermes.requestRefused')), asObject(error.data), typeof error.code === 'number' ? error.code : undefined))
           } else request.resolve(frame.result)
           return
         }

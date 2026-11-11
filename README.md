@@ -85,7 +85,8 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 ## What it does
 
 - **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K).
-- **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". The status is right even for a bot woken by another bot.
+- **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". A bot with no turn but with subagents or background processes still running is marked "Standing by", with a calm ring and no animation; hovering it says how many are left. The status is right even for a bot woken by another bot.
+- **Subagents.** In the chat, a collapsible "Subagents" block lists the children the bot delegated in that conversation: goal, status, duration, last tool and final summary. Click one to read the end of its live transcript. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
 - **Chat.** Streaming, Markdown, tables and code. Stop the current turn. Search in the conversation. Drafts are kept per bot.
 - **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. An action that needs approval opens a dialog (once, for the session, always, deny).
 - **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).

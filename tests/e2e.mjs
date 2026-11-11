@@ -93,6 +93,13 @@ let lastPromptText = ''
 // Turns seen by `session.active_list`, profile by profile: without `profile`, the real gateway only lists `default`.
 const liveStatusByProfile = {}
 const activeListParams = []
+// Work left running without a turn: `subagent.roster` rows by profile, `process.list` and `subagent.list` rows by
+// session, `subagent.tail` text by child. Every call is kept to check its exact parameters.
+const subagentRosterByProfile = {}
+const processListBySession = {}
+const subagentListBySession = {}
+const subagentTailById = {}
+const backgroundCalls = []
 let lastApiText
 // Simulated gateway slowness, to see the loading screens, isolated local chat.
 // Held replies: the test keeps the answer to a method back until it has seen the loading state, then releases it.
@@ -261,6 +268,8 @@ const profiles = [{
 }]
 
 function send(socket, value) { socket.send(JSON.stringify(value)) }
+/** An event pushed by the gateway outside any request (a child working in the background). */
+function broadcast(value) { for (const socket of wss.clients) if (socket.readyState === WebSocket.OPEN) send(socket, value) }
 function event(sessionId, type, payload) {
   return { jsonrpc: '2.0', method: 'event', params: { type, session_id: sessionId, execution_generation: 1, payload } }
 }
@@ -343,6 +352,21 @@ wss.on('connection', (socket) => {
       activeListParams.push(frame.params)
       const status = liveStatusByProfile[frame.params.profile]
       return reply({ sessions: status ? [{ id: `chat-${frame.params.profile}`, session_key: `chat-${frame.params.profile}`, status }] : [] })
+    }
+    if (frame.method === 'subagent.roster') {
+      backgroundCalls.push({ method: frame.method, params: frame.params })
+      return reply({ sessions: subagentRosterByProfile[frame.params.profile] || [] })
+    }
+    if (frame.method === 'process.list' || frame.method === 'subagent.list' || frame.method === 'subagent.tail') {
+      backgroundCalls.push({ method: frame.method, params: frame.params })
+      // Like the gateway's ancillary reads: any other key is refused.
+      const allowed = new Set(['session_id', 'profile', ...(frame.method === 'subagent.tail' ? ['subagent_id'] : [])])
+      if (Object.keys(frame.params).some((key) => !allowed.has(key))) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4001, message: 'invalid_params', data: { reason: 'invalid_params' } } })
+      const sessionId = frame.params.session_id
+      if (frame.method === 'process.list') return reply({ processes: processListBySession[sessionId] || [] })
+      if (frame.method === 'subagent.list') return reply({ subagents: subagentListBySession[sessionId] || [], delegations: [] })
+      const text = subagentTailById[frame.params.subagent_id]
+      return reply({ subagent_id: frame.params.subagent_id, available: typeof text === 'string', text: text || '', truncated: false })
     }
     if (frame.method === 'session.events.since') return reply({ events: [], latest_seq: 0, truncated: false, count: 0, epoch: 'test', open_requests: [] })
     if (frame.method === 'model.options') {
@@ -1594,6 +1618,87 @@ try {
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Retour aux groupes : ${await rosterOrder()}`)
 
+  // Standing by: no turn, but a subagent and background processes still running. Profile-wide first
+  // (`subagent.roster`), then the open conversation's own reads (`process.list`, `subagent.list`) and events.
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
+  backgroundCalls.length = 0
+  subagentRosterByProfile.orion = [{ session_id: 'chat-orion', subagents: 1, background: 1 }, { session_id: 'cron-orion', subagents: 0, background: 1 }]
+  liveStatusByProfile.orion = 'working'
+  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 9_000 })
+  delete liveStatusByProfile.orion
+  // The turn's end brings the read forward: no need to wait for the 15 s round.
+  await page.locator('[data-bot=orion] .bot-row-status.is-standby').getByText('En veille').waitFor({ timeout: 9_000 })
+  const standbyTitle = await page.locator('[data-bot=orion]').getAttribute('title')
+  if (standbyTitle !== '1 sous-agent · 2 processus en arrière-plan') throw new Error(`Survol du bot en veille : ${standbyTitle}`)
+  await page.locator('[data-bot=orion] .live-avatar.is-standby').waitFor({ timeout: 2_000 })
+  if (await page.locator('[data-bot=orion] img.live-avatar-motion').count()) throw new Error('Un bot en veille ne doit pas être animé.')
+  await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 2_000 })
+  const rosterReads = backgroundCalls.filter((call) => call.method === 'subagent.roster')
+  if (!rosterReads.some((call) => call.params.profile === 'orion') || rosterReads.some((call) => Object.keys(call.params).join() !== 'profile')) throw new Error(`subagent.roster : ${JSON.stringify(rosterReads)}`)
+  // Working keeps the priority over standing by.
+  liveStatusByProfile.orion = 'working'
+  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 9_000 })
+  delete liveStatusByProfile.orion
+  await page.locator('[data-bot=orion] .bot-row-status.is-standby').waitFor({ timeout: 9_000 })
+
+  processListBySession['chat-orion'] = [
+    { session_id: 'proc_dev', command: 'npm run dev', status: 'running', started_epoch: Date.now() / 1000 - 300 },
+    { session_id: 'proc_old', command: 'ls', status: 'exited', exit_code: 0 },
+  ]
+  subagentListBySession['chat-orion'] = [{ subagent_id: 'sa-offres', parent_id: null, depth: 0, goal: 'Comparer les offres d’hébergement', delegation_id: 'd-1', model: 'claude-sonnet-5-5', started_at: Date.now() / 1000 - 75, status: 'running', tool_count: 3, last_tool: 'web_search', accepting_steer: true }]
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
+  await page.locator('.chat-identity.is-standby .chat-status').getByText('En veille').waitFor({ timeout: 5_000 })
+  const panel = page.locator('.subagents-panel')
+  await panel.getByText('Comparer les offres d’hébergement').waitFor({ timeout: 6_000 })
+  await panel.locator('.subagents-counts').getByText('1 en cours').waitFor({ timeout: 2_000 })
+  await panel.locator('.subagents-counts').getByText('1 processus en arrière-plan').waitFor({ timeout: 2_000 })
+  await panel.getByText('Dernier outil : Cherche sur le web').waitFor({ timeout: 2_000 })
+  for (const call of backgroundCalls.filter((item) => item.method === 'process.list' || item.method === 'subagent.list')) {
+    if (JSON.stringify(call.params) !== JSON.stringify({ profile: 'orion', session_id: 'chat-orion' })) throw new Error(`${call.method} : ${JSON.stringify(call.params)}`)
+  }
+  if (await page.locator('.subagents-panel').getByText('npm run dev').count()) throw new Error('La commande d’un processus est affichée.')
+  // Events of a child delegated in the background, as the gateway relays them.
+  const delegated = { goal: 'Résumer les avis clients', task_count: 2, task_index: 1, subagent_id: 'sa-avis', depth: 0, model: 'claude-sonnet-5-5', tool_count: 0 }
+  broadcast(event('chat-orion', 'subagent.spawn_requested', delegated))
+  broadcast(event('chat-orion', 'subagent.start', delegated))
+  broadcast(event('chat-orion', 'subagent.tool', { ...delegated, tool_name: 'read_file', tool_preview: 'avis-secret.md', text: 'avis-secret.md', tool_count: 1 }))
+  await panel.getByText('Résumer les avis clients').waitFor({ timeout: 3_000 })
+  await panel.locator('.subagents-counts').getByText('2 en cours').waitFor({ timeout: 2_000 })
+  if (await panel.getByText('avis-secret.md').count()) throw new Error('Les arguments d’un outil sont affichés.')
+  broadcast(event('chat-orion', 'subagent.complete', { ...delegated, status: 'completed', summary: 'Les clients aiment la vitesse, moins le prix.', duration_seconds: 64, tool_count: 5, output_tail: [{ tool: 'read_file', preview: '120 avis lus', is_error: false }] }))
+  await panel.getByText('Les clients aiment la vitesse, moins le prix.').waitFor({ timeout: 3_000 })
+  await panel.locator('.subagents-counts').getByText('1 fini').waitFor({ timeout: 2_000 })
+  await panel.locator('.subagent-row.is-completed').getByText('1 min 04 s').waitFor({ timeout: 2_000 })
+  const headerTitle = await page.locator('.chat-identity').getAttribute('title')
+  if (headerTitle !== '1 sous-agent · 2 processus en arrière-plan') throw new Error(`Survol de l’en-tête : ${headerTitle}`)
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}subagents-panel.png` })
+  // On click: the end of the live transcript; a finished child shows the last tool results it gave.
+  subagentTailById['sa-offres'] = 'Lecture des offres.\nComparaison faite : l’offre B coûte 20 % de moins.'
+  await panel.locator('.subagent-row', { hasText: 'Comparer les offres' }).locator('.subagent-main').click()
+  await panel.locator('.subagent-tail pre').getByText('l’offre B coûte 20 % de moins').waitFor({ timeout: 3_000 })
+  const tailCall = backgroundCalls.filter((item) => item.method === 'subagent.tail').at(-1)
+  if (JSON.stringify(tailCall?.params) !== JSON.stringify({ profile: 'orion', session_id: 'chat-orion', subagent_id: 'sa-offres' })) throw new Error(`subagent.tail : ${JSON.stringify(tailCall?.params)}`)
+  await panel.locator('.subagent-row', { hasText: 'Résumer les avis' }).locator('.subagent-main').click()
+  await panel.locator('.subagent-row', { hasText: 'Résumer les avis' }).getByText('Derniers résultats d’outils').waitFor({ timeout: 3_000 })
+  await panel.locator('.subagent-row', { hasText: 'Résumer les avis' }).getByText('120 avis lus').waitFor({ timeout: 2_000 })
+  await page.screenshot({ path: `${SCREENSHOTS}subagents-tail.png` })
+  // Everything stops: back to idle, and the open conversation is no longer read.
+  delete subagentRosterByProfile.orion
+  processListBySession['chat-orion'] = [{ session_id: 'proc_dev', command: 'npm run dev', status: 'exited', exit_code: 0 }]
+  subagentListBySession['chat-orion'] = []
+  await page.locator('.chat-identity.is-idle').waitFor({ timeout: 25_000 })
+  await page.locator('[data-bot=orion] .bot-row-status.is-standby').waitFor({ state: 'detached', timeout: 2_000 })
+  await panel.locator('.subagent-row.is-ended').getByText('Comparer les offres d’hébergement').waitFor({ timeout: 2_000 })
+  const chatReads = () => backgroundCalls.filter((item) => item.method === 'process.list').length
+  const readsAtRest = chatReads()
+  await delay(6_000)
+  if (chatReads() !== readsAtRest) throw new Error('process.list est encore lu alors que plus rien ne tourne.')
+  delete processListBySession['chat-orion']
+  delete subagentListBySession['chat-orion']
+
   const stoppedChild = new Promise((resolve) => child.once('exit', resolve))
   child.kill('SIGTERM')
   await stoppedChild
@@ -1828,7 +1933,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

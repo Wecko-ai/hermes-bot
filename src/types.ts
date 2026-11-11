@@ -56,7 +56,17 @@ export interface UsageHistory {
   models: { model: string; tokens: number; costUsd: number }[]
 }
 
-export type BotStatus = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done'
+/**
+ * `standby`: no turn, but subagents or background processes still running. It is never stored in `Bot.status`,
+ * which holds the turn state: `effectiveStatus` (lib/background) derives it from `Bot.background`.
+ */
+export type BotStatus = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done' | 'standby'
+
+/** Work still running without a turn: delegated subagents and background processes that have not exited. */
+export interface BackgroundWork {
+  subagents: number
+  processes: number
+}
 
 export interface Bot {
   slug: string
@@ -80,6 +90,8 @@ export interface Bot {
   workTitle?: string
   /** The bot holds the shared Chrome (local arbiter): at work even without a Hermes turn. */
   browserOwner?: boolean
+  /** Subagents and background processes still running in the profile's conversations (`subagent.roster`). */
+  background?: BackgroundWork
   unread: number
   hidden: boolean
   avatar?: {

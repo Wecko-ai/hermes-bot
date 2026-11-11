@@ -9,6 +9,7 @@ import { compareBotActivity, latestActivity } from '../lib/activity'
 import { workLine, type WorkSummary } from '../lib/work-summary'
 import { updateSettings, useSettings } from '../lib/settings'
 import { compareSections, useAppConfig } from '../lib/app-config'
+import { backgroundSummary } from '../lib/background'
 import { locale } from '../i18n'
 
 // “Non classés” (the roster’s name for unsorted bots), then the local chat, close the list unless the configuration places them elsewhere.
@@ -146,6 +147,8 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
               {(activitySort || !collapsed.has(section)) && sectionBots.map((bot) => {
                 const phase = avatarPhase(bot)
                 const work = phase === 'working' ? workLine(workSummaries[bot.slug], bot.workTitle) : ''
+                // Standing by: what still runs is told on hover, the row keeps its last message.
+                const standby = phase === 'standby' ? backgroundSummary(bot.background) : ''
                 return (
                   <button
                     className={`bot-row is-${phase} status-${bot.status} ${selected === bot.slug ? 'is-selected' : ''} ${bot.hidden ? 'is-hidden' : ''}`}
@@ -154,6 +157,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
                     style={{ '--avatar-color': avatarColor(bot) } as CSSProperties}
                     onClick={() => onSelect(bot)}
                     aria-current={selected === bot.slug ? 'page' : undefined}
+                    title={standby || undefined}
                   >
                     <LiveAvatar bot={bot} size={36} />
                     <span className="bot-row-copy">
@@ -163,6 +167,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
                       </span>
                       <span className="bot-row-line bot-row-preview-line">
                         {phase === 'working' && <span className="bot-row-status is-working">{statusLabel(bot.status)}<span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>{work && <span className="bot-row-work" title={work}>{work}</span>}</span>}
+                        {phase === 'standby' && <span className="bot-row-status is-standby"><span className="status-dot" aria-hidden="true" />{statusLabel('standby')}<span className="visually-hidden"> · {standby}</span>{cleanPreview(bot.preview) && <span className="bot-row-work">{cleanPreview(bot.preview)}</span>}</span>}
                         {phase === 'done' && <span className="bot-row-status is-done"><Check size={12} strokeWidth={2.6} />{statusLabel(bot.status)}</span>}
                         {(bot.status === 'waiting' || bot.status === 'blocked') && <span className={`bot-row-status is-${bot.status}`}><span className="status-dot" aria-hidden="true" />{statusLabel(bot.status)}</span>}
                         {phase === 'idle' && bot.status !== 'waiting' && bot.status !== 'blocked' && <span className="bot-row-preview">{cleanPreview(bot.preview) || bot.role}</span>}

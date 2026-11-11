@@ -31,6 +31,8 @@ export function mergeRoster(current: Bot[], fresh: Bot[], selected: string, isRu
     return {
       ...bot,
       status,
+      // Read on its own (`subagent.roster`): the profiles re-read does not carry it.
+      background: bot.background ?? old.background,
       preview: bot.preview || old.preview,
       timestamp,
       seenAt: settled || isOpen ? timestamp : seenAt,
