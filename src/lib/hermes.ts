@@ -391,12 +391,28 @@ export async function loadSessionEvents(client: HermesClient, profile: string, s
   return { events: (Array.isArray(result?.events) ? result.events : []) as RpcEvent[], latestSeq: asNumber(result?.latest_seq, lastSeen) }
 }
 
-/** Chrome owners (one per team). An older server only returns `owner`. */
-export async function loadBrowserOwner(): Promise<string[]> {
+/** A bot holding a team's Chrome, and since when (milliseconds) if the arbiter says. */
+export interface BrowserTurn {
+  owner: string
+  since?: number
+}
+
+function asBrowserTurn(value: unknown): BrowserTurn | null {
+  if (typeof value === 'string') return value ? { owner: value } : null
+  const row = asObject(value)
+  const owner = asString(row.owner)
+  if (!owner) return null
+  // ISO from the server, milliseconds once read.
+  const since = typeof row.since === 'number' ? row.since : Date.parse(asString(row.since))
+  return Number.isFinite(since) ? { owner, since } : { owner }
+}
+
+/** Chrome turns (one per team). An older server only returns `owners`, or a single `owner`. */
+export async function loadBrowserOwner(): Promise<BrowserTurn[]> {
   try {
-    const result = await fetchJson<{ owner?: unknown; owners?: unknown }>('/api/browser-turn')
-    if (Array.isArray(result.owners)) return result.owners.filter((owner): owner is string => typeof owner === 'string' && owner !== '')
-    return typeof result.owner === 'string' && result.owner ? [result.owner] : []
+    const result = await fetchJson<{ owner?: unknown; owners?: unknown; turns?: unknown }>('/api/browser-turn')
+    const rows: unknown[] = Array.isArray(result.turns) ? result.turns : Array.isArray(result.owners) ? result.owners : [result.owner]
+    return rows.map(asBrowserTurn).filter((turn): turn is BrowserTurn => turn !== null)
   } catch {
     return []
   }
@@ -410,9 +426,10 @@ function isRosterProfile(profile: Json): boolean {
   return Boolean(slug) && !profile.is_default && !SYSTEM_PROFILES.has(slug)
 }
 
-export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string | string[]> = loadBrowserOwner): Promise<RosterResponse> {
+export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string | Array<string | BrowserTurn>> = loadBrowserOwner): Promise<RosterResponse> {
   const [result, chromeOwnerValue] = await Promise.all([client.request('profiles.list', { include_sessions: true }), browserOwner()])
-  const chromeOwners = Array.isArray(chromeOwnerValue) ? chromeOwnerValue : chromeOwnerValue ? [chromeOwnerValue] : []
+  const chromeTurns = (Array.isArray(chromeOwnerValue) ? chromeOwnerValue : [chromeOwnerValue])
+    .map(asBrowserTurn).filter((turn): turn is BrowserTurn => turn !== null)
   const profiles = Array.isArray(result?.profiles) ? result.profiles : []
   // A profile without a `hermes-bots` card (bot created outside the app, no section) stays visible, under “Non classés”.
   // Only `default` and the technical profiles without a chat (SYSTEM_PROFILES) stay out of the roster.
@@ -428,7 +445,12 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
     const workerActive = asNumber(worker.last_active) * 1000 > Date.now() - WORKER_ACTIVE_MS
     const liveStatus = liveTurnStatus(live.get(asString(canonical.resolved_id)) ?? live.get(asString(canonical.id)))
     const turnRunning = canonical.running === true || liveStatus === 'working'
-    const browserWorking = chromeOwners.includes(slug)
+    // Holding a Chrome is not working: a bot whose Bot Chat turn ended after it took the Chrome
+    // keeps it while it waits for the user. A turn taken by a worker (cron) still counts.
+    const chromeTurn = chromeTurns.find((turn) => turn.owner === slug)
+    const chatActive = Date.parse(isoDate(canonical.last_active) ?? '') || 0
+    const heldWhileIdle = chromeTurn?.since !== undefined && !turnRunning && liveStatus === 'idle' && chatActive >= chromeTurn.since
+    const browserWorking = Boolean(chromeTurn) && !heldWhileIdle
     const status: BotStatus = browserWorking || turnRunning || workerActive ? 'working' : liveStatus
     return [{
       slug,

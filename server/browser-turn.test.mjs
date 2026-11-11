@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { browserTurnCommand, parseBrowserOwners, parseBrowserTurn, readBrowserOwners } from './browser-turn.mjs'
+import { browserTurnCommand, parseBrowserOwners, parseBrowserTurn, parseBrowserTurns, readBrowserOwners } from './browser-turn.mjs'
 
 describe('commande de l’arbitre du Chrome', () => {
   const setting = { command: ['/opt/arbiter', 'statut'], user: 'owner', remoteCommand: ['/usr/bin/ssh', 'host', '/opt/arbiter statut'] }
@@ -44,5 +44,19 @@ describe('propriétaire du Chrome partagé', () => {
     expect(parseBrowserOwners('tour : vega 2026-01-05T10:00:00+0000 pid=1 depuis 2 min\nen file : 0')).toEqual(['vega'])
     expect(parseBrowserOwners('tour : libre')).toEqual([])
     expect(parseBrowserOwners('')).toEqual([])
+  })
+
+  it('donne l’heure de prise du tour, sans pid ni file', () => {
+    const output = 'tour[direction] : vega 2026-11-11T10:35:23+0200 pid=4242 depuis 2 min\nen file[direction] : 1\n  1. iris\ntour[studio] : nova depuis 1 min\n'
+    expect(parseBrowserTurns(output)).toEqual([
+      { owner: 'vega', since: '2026-11-11T08:35:23.000Z' },
+      { owner: 'nova', since: null },
+    ])
+    expect(parseBrowserTurns('tour : vega 2026-01-05T10:00:00Z pid=1 depuis 0 min')).toEqual([{ owner: 'vega', since: '2026-01-05T10:00:00.000Z' }])
+  })
+
+  it('laisse de côté un tour tenu au-delà de la limite de l’arbitre', () => {
+    const output = 'tour[direction] : vega 2026-11-11T09:00:00+0200 pid=1 depuis 45 min\ntour[studio] : nova 2026-11-11T09:40:00+0200 pid=2 depuis 44 min\n'
+    expect(parseBrowserOwners(output)).toEqual(['nova'])
   })
 })

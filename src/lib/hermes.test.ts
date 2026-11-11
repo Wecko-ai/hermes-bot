@@ -124,6 +124,27 @@ describe('statut réel du roster', () => {
     expect(bySlug.nova.status).toBe('working')
     expect(bySlug.iris.status).toBe('idle')
   })
+
+  it('ne montre pas au travail un bot qui garde le Chrome après la fin de son tour', async () => {
+    // Bot Chat active until 03:36:11 UTC, Chrome taken at 03:35:23, no turn running: it waits for the user.
+    const ended = { ...profile, canonical_session: { ...profile.canonical_session, last_active: Date.parse('2026-11-11T03:36:11Z') / 1000 } }
+    const turnStatus = { current: 'idle' }
+    const request = vi.fn(async (method: string) => method === 'profiles.list'
+      ? { profiles: [ended] }
+      : { sessions: [{ id: 'vivant', session_key: 'chat', status: turnStatus.current }] })
+    const client = { request } as unknown as HermesClient
+    const held = await loadRoster(client, async () => [{ owner: 'orion', since: Date.parse('2026-11-11T03:35:23Z') }])
+    expect(held.bots[0].status).toBe('idle')
+    expect(held.bots[0].browserOwner).toBeUndefined()
+    expect(held.bots[0].workTitle).toBeUndefined()
+    // Taken after the chat's last activity (cron, background script): the Chrome still shows the work.
+    const later = await loadRoster(client, async () => [{ owner: 'orion', since: Date.parse('2026-11-11T03:40:00Z') }])
+    expect(later.bots[0].status).toBe('working')
+    expect(later.bots[0].workTitle).toBe('Pilote le Chrome partagé')
+    // A new turn running with the Chrome: working.
+    turnStatus.current = 'working'
+    expect((await loadRoster(client, async () => [{ owner: 'orion', since: Date.parse('2026-11-11T03:35:23Z') }])).bots[0].status).toBe('working')
+  })
 })
 
 describe('modèles du forfait', () => {

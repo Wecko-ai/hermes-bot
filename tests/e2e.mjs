@@ -30,7 +30,9 @@ writeFileSync(BROWSER_TOUR_FIXTURE, `#!/usr/bin/env node
 const fs = require('node:fs')
 let owner = 'libre'
 try { owner = fs.readFileSync(process.env.BROWSER_TOUR_OWNER_FILE, 'utf8').trim() || 'libre' } catch {}
-console.log(\`tour : \${owner} 2026-01-05T10:00:00+0000 pid=123 depuis 1 min\\nen file : 0\`)
+// Taken just now, as the arbiter writes it (strftime %z): a turn taken before the chat's last activity no longer counts.
+const since = new Date().toISOString().replace(/\\.\\d+Z$/, '+0000')
+console.log(\`tour : \${owner} \${since} pid=123 depuis 1 min\\nen file : 0\`)
 `, { mode: 0o700 })
 
 // Settings of the test install: never those of private/, bot open at start, hidden provider,

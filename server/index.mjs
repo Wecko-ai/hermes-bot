@@ -7,7 +7,7 @@ import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { browserTurnCommand, readBrowserOwners } from './browser-turn.mjs'
+import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
 import configModule from './config.cjs'
 import { createLocalGateway } from './local-gateway.mjs'
 
@@ -801,8 +801,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
       if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-      const owners = await readBrowserOwners(BROWSER_TURN_COMMAND)
-      return json(response, 200, { owner: owners[0] || '', owners })
+      const turns = await readBrowserTurns(BROWSER_TURN_COMMAND)
+      const owners = turns.map((turn) => turn.owner)
+      return json(response, 200, { owner: owners[0] || '', owners, turns })
     }
     if (url.pathname === '/api/app-config' && request.method === 'GET') {
       return await handleAppConfig(response)
