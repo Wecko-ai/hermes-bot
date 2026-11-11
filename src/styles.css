@@ -178,6 +178,13 @@ a { color: inherit; }
 .message-content code { padding: 2px 4px; border-radius: 4px; background: var(--surface-soft); font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.9em; }
 .message-content pre { max-width: 100%; overflow-x: auto; margin: 12px 0; padding: 14px 15px; border-radius: 10px; background: #12222a; color: #e8f1ef; line-height: 1.55; }
 .message-content pre code { padding: 0; background: transparent; color: inherit; font-size: 11px; }
+.message-content .code-block { position: relative; margin: 12px 0; }
+.message-content .code-block > pre { margin: 0; padding-right: 46px; }
+/* Outside the scrolling block: the button stays in the corner however far the line goes. */
+.code-copy { position: absolute; top: 8px; right: 8px; width: 28px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; color: #e8f1ef; background: #1d323c; box-shadow: inset 0 0 0 .5px rgb(255 255 255 / 14%); opacity: .7; transition: opacity 120ms, background 120ms; }
+.code-block:hover .code-copy, .code-copy:focus-visible, .code-copy.is-copied { opacity: 1; }
+.code-copy:hover { background: #28434f; }
+.code-copy.is-copied { color: #7ee2b8; }
 .message-content table { display: block; max-width: 100%; overflow-x: auto; margin: 12px 0; border-collapse: collapse; font-size: 12px; }
 .message-content th, .message-content td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .message-content th { color: var(--text-secondary); font-weight: 600; }

@@ -32,6 +32,8 @@
     "priority": "Prioritaire",
     "queued": "En file",
     "copyReply": "Copier la réponse",
+    "copyCode": "Copier",
+    "copiedCode": "Copié",
     "opening": "Ouverture de la conversation avec {{name}}…",
     "suggestionCapabilities": "Que peux-tu faire ?",
     "suggestionDay": "Fais-moi un point sur ta journée.",

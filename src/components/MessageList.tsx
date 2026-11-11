@@ -67,7 +67,29 @@ function MarkdownImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
   return <a href={url} target="_blank" rel="noreferrer noopener">{alt || t('messages.imageFallback')}</a>
 }
 
-/** A `hermes-mail` code block becomes the mail card to approve. */
+type HastNode = { type: string; value?: string; children?: HastNode[] }
+
+/** The text of a block as written, without its rendering. */
+const hastText = (node: HastNode): string => node.type === 'text' ? node.value ?? '' : (node.children ?? []).map(hastText).join('')
+
+/** Copies the command or code of a block, without the final line break: pasted in a terminal, it doesn't run on its own. */
+function CodeCopy({ text }: { text: string }) {
+  const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1400)
+  }
+  const label = copied ? t('messages.copiedCode') : t('messages.copyCode')
+  return (
+    <button type="button" className={`code-copy ${copied ? 'is-copied' : ''}`} aria-label={label} title={label} onClick={copy}>
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  )
+}
+
+/** A `hermes-mail` code block becomes the mail card to approve; any other block gets a copy button. */
 function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
   const context = useContext(MediaContext)
   const code = node?.children[0]
@@ -76,7 +98,13 @@ function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & Extra
     const source = code.children.map((child) => (child.type === 'text' ? child.value : '')).join('')
     return <MailBlock source={source} approvedBlock={language === `language-${MAIL_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} />
   }
-  return <pre {...props}>{children}</pre>
+  const text = code ? hastText(code as HastNode).replace(/\n$/, '') : ''
+  return (
+    <div className="code-block">
+      <pre {...props}>{children}</pre>
+      {text.trim() && !context?.streaming && <CodeCopy text={text} />}
+    </div>
+  )
 }
 
 const MARKDOWN_COMPONENTS: Components = { a: MarkdownLink, p: MarkdownParagraph, img: MarkdownImage, pre: MarkdownPre }
