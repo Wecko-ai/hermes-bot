@@ -115,6 +115,8 @@ export interface ChatMessage {
   agent?: AgentMessage
   /** Sent during a turn: queued, or priority (the turn was interrupted for it). */
   delivery?: 'queue' | 'priority'
+  /** Images the user sent with the message: paths on the gateway's machine. */
+  images?: string[]
 }
 
 export interface AgentMessage {

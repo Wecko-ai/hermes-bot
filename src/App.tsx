@@ -871,7 +871,7 @@ export default function App() {
     setRunning(true)
     setActivity('')
     try {
-      const { images, fileRefs } = await uploadAttachments(chat, attachments)
+      const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
       setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
       await submitPrompt(client, chat, prompt, images, { apiText: cavemanApiText(prompt, modeApiText(prompt, mode), caveman) })
@@ -897,7 +897,7 @@ export default function App() {
     setNotice(error instanceof Error ? error.message : i18n.t('app.sendFailed'))
   }
 
-  const uploadAttachments = async (chat: ActiveChat, attachments: PendingAttachment[]) => {
+  const uploadAttachments = async (chat: ActiveChat, attachments: PendingAttachment[], userMessage?: ChatMessage, text = '') => {
     const images: { path: string; mime: string }[] = []
     const fileRefs: string[] = []
     for (const attachment of attachments) {
@@ -905,6 +905,13 @@ export default function App() {
       const dataUrl = await readDataUrl(attachment.file)
       if (attachment.kind === 'image') images.push(await attachImageBytes(client, chat, attachment.name, dataUrl))
       else fileRefs.push(await attachFile(client, chat, attachment.name, dataUrl))
+    }
+    // The sent images show in the bubble, read back from the gateway like the bot's: no more "[Image: x]".
+    const paths = images.map((image) => image.path).filter(Boolean)
+    if (userMessage && paths.length) {
+      const changes = { content: [text, ...attachments.filter((item) => item.kind !== 'image').map(attachmentLabel)].filter(Boolean).join('\n\n'), images: paths }
+      setMessages((items) => items.map((item) => item.id === userMessage.id ? { ...item, ...changes } : item))
+      useChatStore.getState().patchCachedMessage(chat.profile, userMessage.id, changes)
     }
     return { images, fileRefs }
   }
@@ -915,7 +922,7 @@ export default function App() {
    */
   const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, caveman: boolean, priority: boolean) => {
     try {
-      const { images, fileRefs } = await uploadAttachments(chat, attachments)
+      const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
       setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
       const modeText = cavemanApiText(prompt, modeApiText(prompt, mode), caveman)

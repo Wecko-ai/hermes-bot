@@ -448,6 +448,8 @@ a { color: inherit; }
 .message-user .media-card { color: inherit; }
 /* Files cited by path, without MEDIA:: readable under the text so they can be checked without leaving the chat. */
 .cited-files { margin-top: 10px; padding-top: 9px; border-top: .5px solid var(--border); }
+.cited-files.is-sent { margin-top: 0; padding-top: 0; border-top: 0; white-space: normal; }
+.message-content > p + .cited-files.is-sent, .message-content > * + .cited-files.is-sent { margin-top: 8px; }
 .cited-files-label { margin-bottom: 6px; color: var(--text-tertiary); font-size: 10px; font-weight: 560; letter-spacing: .02em; text-transform: uppercase; }
 .cited-files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
 .cited-files-grid .media-thumb { width: 100%; aspect-ratio: 4 / 5; }

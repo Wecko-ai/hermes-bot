@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachmentKind, attachmentLabel, defaultPrompt, filterAttachments, formatBytes, MAX_ATTACHMENTS, MAX_FILE_BYTES, withoutFileRefs } from './attachments'
+import { attachmentKind, attachmentLabel, defaultPrompt, filterAttachments, formatBytes, MAX_ATTACHMENTS, MAX_FILE_BYTES, splitUserImages, withoutFileRefs } from './attachments'
 
 describe('pièces jointes', () => {
   it('garde les images lisibles par le modèle, envoie le reste en fichier', () => {
@@ -34,5 +34,15 @@ describe('pièces jointes', () => {
     expect(withoutFileRefs('Vois\n\n@file:attachments/rapport.pdf')).toBe('Vois\n\n[Fichier : rapport.pdf]')
     expect(withoutFileRefs('@file:`attachments/mon film.mp4`')).toBe('[Fichier : mon film.mp4]')
     expect(withoutFileRefs('rien ici')).toBe('rien ici')
+  })
+
+  it('sort les images envoyées des notes que Hermes ajoute au message', () => {
+    const note = "[The user sent an image~ Here's what I can see:\n# Écran\n\nUn bouton [Send].]\n[If you need a closer look, use vision_analyze with image_url: /h/cache/upload_a.png ~]\n\nje veux ça"
+    expect(splitUserImages(note)).toEqual({ text: 'je veux ça', images: ['/h/cache/upload_a.png'] })
+    const failed = '[The user sent an image but I couldn\'t quite see it this time (>_<) You can try looking at it yourself with vision_analyze using image_url: /h/b.jpg]\n\nregarde'
+    expect(splitUserImages(failed)).toEqual({ text: 'regarde', images: ['/h/b.jpg'] })
+    expect(splitUserImages('Vois\n\n@image:/h/c.png\n@image:`/h/mon d.png`')).toEqual({ text: 'Vois', images: ['/h/c.png', '/h/mon d.png'] })
+    expect(splitUserImages('Vois\n\n[Image attached at: /h/e.webp]')).toEqual({ text: 'Vois', images: ['/h/e.webp'] })
+    expect(splitUserImages('écris @image:/x.png dans le texte')).toEqual({ text: 'écris @image:/x.png dans le texte', images: [] })
   })
 })

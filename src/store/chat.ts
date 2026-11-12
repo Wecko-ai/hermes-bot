@@ -76,6 +76,8 @@ export interface ChatState {
   /** Adds to the cache the notes that are not already there. */
   appendCachedNotes: (profile: string, notes: ChatMessage[]) => void
   markCachedFailed: (profile: string, messageId: string) => void
+  /** Changes one cached message (e.g. the images of a sent message once uploaded). */
+  patchCachedMessage: (profile: string, messageId: string, changes: Partial<ChatMessage>) => void
   /** After a disconnection: no cached turn is followed any more. */
   stopAllCachedRuns: () => void
 
@@ -134,6 +136,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const { cache } = get()
     const cached = cache.get(profile)
     if (cached) cache.set(profile, { ...cached, messages: markMessageFailed(cached.messages, messageId) })
+  },
+  patchCachedMessage: (profile, messageId, changes) => {
+    const { cache } = get()
+    const cached = cache.get(profile)
+    if (cached) cache.set(profile, { ...cached, messages: cached.messages.map((item) => item.id === messageId ? { ...item, ...changes } : item) })
   },
   stopAllCachedRuns: () => {
     const { cache, updateCachedChat } = get()

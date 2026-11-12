@@ -70,6 +70,9 @@ const MEDIA_FIXTURES = {
   '/Users/test/docs/rapport.pdf': ['doc.pdf', 'application/pdf'],
   '/Users/test/docs/page.html': ['doc.html', 'text/html'],
   '/Users/test/docs/note.md': ['doc.md', 'text/markdown'],
+  // Images the user sent: Hermes's copy, read back like the bot's media.
+  '/Users/test/cache/upload_envoi.png': ['slide.png', 'image/png'],
+  '/x/vignette.png': ['slide.png', 'image/png'],
 }
 const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).length
 const mediaRequests = []
@@ -347,7 +350,7 @@ wss.on('connection', (socket) => {
                 '```',
               ].join('\n'),
             },
-            { row_id: 36, role: 'user', content: 'Regarde avec @nova\n\n@file:attachments/ancien.pdf\n\n[@mentions resolved from the Bot Mode roster — the user is referring to: @nova = agent profile "nova" ("Nova"). If they want one of these agents contacted, compose your own message.]', timestamp: Date.now() - 38_000 },
+            { row_id: 36, role: 'user', content: `[The user sent an image~ Here's what I can see:\nUne capture d'écran.]\n[If you need a closer look, use vision_analyze with image_url: /Users/test/cache/upload_envoi.png ~]\n\nRegarde avec @nova\n\n@file:attachments/ancien.pdf\n\n[@mentions resolved from the Bot Mode roster — the user is referring to: @nova = agent profile "nova" ("Nova"). If they want one of these agents contacted, compose your own message.]`, timestamp: Date.now() - 38_000 },
             { row_id: 37, role: 'assistant', content: 'Les documents :\n\nMEDIA:/Users/test/docs/rapport.pdf\n\nMEDIA:/Users/test/docs/page.html\n\nMEDIA:/Users/test/docs/note.md', timestamp: Date.now() - 37_000 },
             // Output quoted by path, without MEDIA:, as some bots do.
             { row_id: 38, role: 'assistant', content: 'Rendu prêt, rien de publié.\n\n**Fichiers** (dossier `/Users/test/visuels/`)\n- Vidéo : `/Users/test/videos/video.mp4`, 57 s.\n- Planche : `slide-02.png`\n- Manquante : `absente.png`\n\n```\nls /Users/test/videos/exemple-cite.mp4\n```', timestamp: Date.now() - 36_000 },
@@ -782,6 +785,15 @@ try {
   if (await orionBox.inputValue() !== 'Regarde ça') throw new Error('Brouillon perdu au changement de bot.')
   await orionBox.press('Enter')
   await page.locator('.message-user').getByText('[Fichier : film.mp4]').last().waitFor({ timeout: 5_000 })
+  // The sent image shows in the bubble (gateway path), not as an "[Image : x]" label.
+  await page.locator('.message-user', { hasText: '[Fichier : film.mp4]' }).last().locator('.cited-files.is-sent img').waitFor({ timeout: 5_000 })
+  if (await page.locator('.message-user').getByText('[Image : vignette.png]').count()) throw new Error('L’image envoyée reste une étiquette.')
+  if (!mediaRequests.some((item) => item.path === '/x/vignette.png')) throw new Error('L’image envoyée n’est pas relue depuis la gateway.')
+  // History: Hermes's vision note becomes the image, its text is hidden.
+  if (await page.locator('.messages-scroll').getByText('The user sent an image').count()) throw new Error('La note de vision de Hermes est visible.')
+  if (!mediaRequests.some((item) => item.path === '/Users/test/cache/upload_envoi.png')) throw new Error('L’image envoyée de l’historique n’est pas chargée.')
+  await page.locator('.message-user .cited-files.is-sent').last().scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}sent-image.png` })
   for (let attempt = 0; attempt < 40 && !lastPromptText.includes('@file:attachments/dossier.pdf'); attempt += 1) await delay(50)
   if (fileAttachCalls.length !== 2 || imageAttachCalls.length !== 1) throw new Error(`Pièces jointes : ${fileAttachCalls.length} fichiers, ${imageAttachCalls.length} images.`)
   if (!fileAttachCalls[0].data_url?.startsWith('data:video/mp4;base64,') || fileAttachCalls[0].session_id !== 'chat-orion') throw new Error('file.attach mal formé.')

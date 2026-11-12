@@ -10,7 +10,7 @@ import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaE
 import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
 import { splitOpenQuestions } from '../lib/questions'
-import { isServablePath, mediaIndex, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
+import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE } from '../lib/mail'
 import { mayBecomeSilent } from '../lib/hermes'
@@ -127,20 +127,22 @@ interface CitedFilesProps {
   files: MediaRef[]
   profile: string
   version: string
+  /** Images the user sent: no "cited files" title. */
+  sent?: boolean
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
 }
 
 /** What the bot produced, readable without leaving the chat: thumbnails, players, PDFs beside. */
-function CitedFiles({ files, profile, version, onOpenImages, onOpenDocument }: CitedFilesProps) {
+function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpenDocument }: CitedFilesProps) {
   const { t } = useTranslation()
   const openImage = (item: MediaRef) => {
     const images = files.filter((entry) => entry === item || (entry.kind === 'image' && !mediaFailed(profile, entry)))
     onOpenImages(images, Math.max(0, images.indexOf(item)), version)
   }
   return (
-    <div className="cited-files">
-      <div className="cited-files-label">{t('messages.citedFile', { count: files.length })}</div>
+    <div className={sent ? 'cited-files is-sent' : 'cited-files'}>
+      {!sent && <div className="cited-files-label">{t('messages.citedFile', { count: files.length })}</div>}
       <div className="cited-files-grid">
         {files.map((file) => <MediaEmbed key={file.path} media={file} profile={profile} version={version} onOpenImage={openImage} onOpenDocument={onOpenDocument} />)}
       </div>
@@ -262,6 +264,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
               {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
             </>
           : <Markdown content={message.content} profile={profile} version={message.id} streaming={message.streaming} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+        {message.images?.length ? <CitedFiles files={message.images.map(mediaRef)} profile={profile} version={message.id} sent onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} /> : null}
         {message.streaming && <span className="stream-caret" />}
       </div>
       {!message.streaming && (

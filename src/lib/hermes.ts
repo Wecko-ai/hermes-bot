@@ -1,5 +1,5 @@
 import type { Bot, BotStatus, ChatMessage, ContextBreakdown, ModelOption, ModelOverride, Routine, RosterResponse, SessionUsage, UsageHistory } from '../types'
-import { withoutFileRefs } from './attachments'
+import { splitUserImages, withoutFileRefs } from './attachments'
 import { withoutMentionNote } from './mentions'
 import { agentChatMessages, agentMessagesFromRow } from './inter-agent'
 import { getAppConfig } from './app-config'
@@ -73,7 +73,7 @@ const isoDate = (value: unknown): string | null => {
 }
 
 /** What the user wrote, without the mentions note or the `@file:` references added for the bot. */
-const cleanUserText = (text: string) => withoutFileRefs(withoutMentionNote(text))
+const cleanUserText = (text: string) => withoutFileRefs(withoutMentionNote(splitUserImages(text).text))
 
 function textContent(message: Json): string {
   for (const candidate of [message.text, message.content, message.display_text]) {
@@ -105,7 +105,9 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   const text = textContent(message).trim()
   if (!text) return agents
   const role = ['user', 'assistant', 'system', 'tool'].includes(rawRole) ? rawRole as ChatMessage['role'] : 'system'
-  const content = role === 'user' ? cleanUserText(text.replace(STEER_WRAPPER, '$1')) : text
+  const sent = role === 'user' ? splitUserImages(text.replace(STEER_WRAPPER, '$1')) : { text, images: [] }
+  const content = role === 'user' ? cleanUserText(sent.text) : text
+  if (!content && !sent.images.length) return agents
   const silent = isSilentMessage(content)
   const fromGateway = role === 'user' && isGatewayMessage(content, asString(message.display_kind))
   // Raw history: the assistant’s text, then its `message_agent` calls.
@@ -115,6 +117,7 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
     content,
     createdAt,
     technical: silent || fromGateway || role === 'system' || role === 'tool',
+    ...(sent.images.length ? { images: sent.images } : {}),
   }, ...agents]
 }
 

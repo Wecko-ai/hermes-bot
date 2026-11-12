@@ -84,6 +84,28 @@ export function defaultPrompt(attachments: Pick<PendingAttachment, 'kind'>[]) {
   return i18n.t(attachments.length === 1 ? 'attachments.promptFile' : 'attachments.promptFiles')
 }
 
+// What Hermes puts in a user message sent with images: its vision note (`[The user sent an image~ …
+// image_url: /path ~]`), the native `[Image attached at: /path]` hint, or `@image:/path` lines.
+const IMAGE_NOTE = /\[The user sent an image[\s\S]*?image_url: (\S+?)(?: ~)?\][ \t]*(?:\n|$)/g
+const IMAGE_HINT = /^\[Image attached at: ([^\n\]]+)\][ \t]*$/gm
+const IMAGE_REF = /^@image:(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[ \t]*$/gm
+
+/** The images of a message the user sent, and its text without Hermes's notes about them. */
+export function splitUserImages(text: string): { text: string; images: string[] } {
+  const images: string[] = []
+  const keep = (value: string) => {
+    const path = /^[`"']/.test(value) ? value.slice(1, -1) : value.trim()
+    if (path && !images.includes(path)) images.push(path)
+    return ''
+  }
+  if (!/sent an image|Image attached at: |@image:/.test(text)) return { text, images }
+  const rest = text
+    .replace(IMAGE_NOTE, (_m, path: string) => keep(path))
+    .replace(IMAGE_HINT, (_m, path: string) => keep(path))
+    .replace(IMAGE_REF, (_m, path: string) => keep(path))
+  return images.length ? { text: rest.replace(/\n{3,}/g, '\n\n').trim(), images } : { text, images }
+}
+
 const FILE_REF = /@file:(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)/g
 
 /** An already-sent `@file:attachments/report.pdf` reads back as an attachment, not as a path. */
