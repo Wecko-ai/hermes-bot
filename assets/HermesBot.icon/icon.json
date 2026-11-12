@@ -1,0 +1,14 @@
+{
+  "fill" : { "solid" : "srgb:0.00000,0.00000,0.00000,1.00000" },
+  "groups" : [
+    {
+      "layers" : [
+        { "image-name" : "mascot.png", "name" : "mascot", "glass" : false }
+      ],
+      "shadow" : { "kind" : "none", "opacity" : 0.5 },
+      "translucency" : { "enabled" : false, "value" : 0.5 },
+      "specular" : false
+    }
+  ],
+  "supported-platforms" : { "squares" : [ "macOS" ] }
+}

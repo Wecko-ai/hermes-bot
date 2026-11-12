@@ -136,7 +136,9 @@
     "session": "Session",
     "sessionHint": "Forgets the credentials saved on this Mac",
     "logout": "Sign out",
-    "version": "Version"
+    "version": "Version",
+    "notifications": "Notifications",
+    "notificationsHint": "When a bot is done or waits on your answer, unless its chat is in view"
   },
   "vault": {
     "unresponsive": "The vault isn’t responding.",

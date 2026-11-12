@@ -180,5 +180,10 @@
       "text_to_speech": "Generating audio",
       "cronjob_manage": "Managing routines"
     }
+  },
+  "notifications": {
+    "done": "Is done",
+    "question": "Has a question for you",
+    "approval": "Waits for your approval"
   }
 }

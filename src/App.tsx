@@ -35,6 +35,8 @@ import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
+import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
+import { notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, type NotificationKind } from './lib/notifications'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
@@ -152,6 +154,9 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [localOpen, setLocalOpen] = useState(false)
   const localOpenRef = useRef(false)
+  // Set after their definition below: the reconnection and notification effects call the latest version.
+  const reconnectRef = useRef<() => Promise<void>>(async () => undefined)
+  const selectBotRef = useRef<(bot: Bot) => void>(() => undefined)
   // Mounted on first open, then kept: a reply keeps going while another bot is on screen.
   const [localStarted, setLocalStarted] = useState(false)
   const [localRunning, setLocalRunning] = useState(false)
@@ -338,6 +343,89 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
     return subscribeBrowserVaultRequests(setBrowserVaultRequests)
+  }, [auth])
+
+  // Automatic reconnection: a dropped socket, a silent heartbeat, the network or the window coming back.
+  useEffect(() => {
+    if (DEMO || auth !== 'ready') return
+    const reconnector = createReconnector({
+      attempt: () => reconnectRef.current(),
+      isConnected: () => useRosterStore.getState().connected,
+    })
+    // Every path that ends disconnected (socket closed, failed attempt, silent heartbeat) goes through the store.
+    // A reconnection in progress closes the socket on purpose: only its outcome counts.
+    const unsubscribe = useRosterStore.subscribe((state, previous) => {
+      if (state.connected || state.reconnecting) return
+      if (previous.connected || previous.reconnecting) reconnector.schedule()
+    })
+    const retryNow = () => { if (!useRosterStore.getState().connected && !document.hidden) reconnector.now() }
+    const onVisible = () => { if (!document.hidden) retryNow() }
+    window.addEventListener('online', retryNow)
+    window.addEventListener('focus', retryNow)
+    document.addEventListener('visibilitychange', onVisible)
+    let beating = false
+    const heartbeat = setInterval(() => {
+      if (beating || document.hidden || !useRosterStore.getState().connected || useRosterStore.getState().reconnecting) return
+      beating = true
+      const generation = client.generation
+      client.request('gateway.ping', {}, HEARTBEAT_TIMEOUT_MS).catch(() => {
+        // A socket replaced meanwhile is not the one that went silent.
+        if (client.generation !== generation) return
+        client.close()
+        setConnected(false)
+      }).finally(() => { beating = false })
+    }, HEARTBEAT_MS)
+    return () => {
+      reconnector.stop()
+      unsubscribe()
+      clearInterval(heartbeat)
+      window.removeEventListener('online', retryNow)
+      window.removeEventListener('focus', retryNow)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [auth, client])
+
+  // macOS notifications: a bot is done or waits on an answer, unless its chat is in view.
+  useEffect(() => {
+    if (DEMO || auth !== 'ready' || typeof Notification === 'undefined') return
+    if (getSettings().notifications && Notification.permission === 'default') void Notification.requestPermission()
+    const notify = (slug: string, kind: NotificationKind) => {
+      const viewing = !localOpenRef.current && useRosterStore.getState().selected === slug
+      if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
+      const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+      if (!bot || bot.hidden) return
+      const last = kind === 'done' ? [...(getCached(slug)?.messages || [])].reverse().find((message) => message.role === 'assistant' && !message.technical)?.content : undefined
+      const excerpt = notificationExcerpt(last)
+      const body = excerpt ? `${i18n.t(`notifications.${kind}`)} · ${excerpt}` : i18n.t(`notifications.${kind}`)
+      const notification = new Notification(bot.name, { body, tag: `hermesbot-${slug}` })
+      notification.onclick = () => {
+        void window.hermesBot?.focusWindow?.()
+        window.focus()
+        const target = useRosterStore.getState().bots.find((item) => item.slug === slug)
+        if (target) selectBotRef.current(target)
+        notification.close()
+      }
+    }
+    const unsubscribeRoster = useRosterStore.subscribe((state, previous) => {
+      if (state.bots === previous.bots) return
+      const before = new Map(previous.bots.map((bot) => [bot.slug, bot.status]))
+      for (const bot of state.bots) {
+        const kind = notificationForStatus(before.get(bot.slug), bot.status)
+        if (kind) notify(bot.slug, kind)
+      }
+    })
+    const unsubscribeRequests = useRequestsStore.subscribe((state, previous) => {
+      if (state.serverRequests === previous.serverRequests) return
+      const known = new Set(previous.serverRequests.map((request) => request.id))
+      for (const request of state.serverRequests) {
+        if (known.has(request.id)) continue
+        const kind = notificationForRequest(request.method)
+        const sessionId = typeof request.params.session_id === 'string' ? request.params.session_id : ''
+        const bot = sessionId ? useRosterStore.getState().bots.find((item) => item.sessionId === sessionId) : undefined
+        if (kind && bot) notify(bot.slug, kind)
+      }
+    })
+    return () => { unsubscribeRoster(); unsubscribeRequests() }
   }, [auth])
 
   useEffect(() => {
@@ -695,6 +783,8 @@ export default function App() {
     }
   }
 
+  reconnectRef.current = reconnect
+
   useEffect(() => {
     if (!selected || DEMO) return
     const profile = selected
@@ -737,6 +827,7 @@ export default function App() {
       setMobileOpen(false)
     }
   }
+  selectBotRef.current = selectBot
 
   // Without an explicit mode (email card, suggestions), the turn is a normal turn with nothing added,
   // not even the caveman note: an approved email must go out as it was approved.

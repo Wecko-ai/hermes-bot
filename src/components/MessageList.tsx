@@ -8,6 +8,8 @@ import { BotAvatar, statusLabel } from './BotAvatar'
 import { LiveAvatar } from './LiveAvatar'
 import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaEmbed'
 import { MailBlock, MailContext } from './MailCard'
+import { QuestionsCard } from './QuestionsCard'
+import { splitOpenQuestions } from '../lib/questions'
 import { isServablePath, mediaIndex, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE } from '../lib/mail'
@@ -248,10 +250,18 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
   if (message.role === 'system' || message.role === 'tool') {
     return <div className="system-message">{message.content}</div>
   }
+  // "Questions ouvertes" at the end of a reply: answered from fields, not by retyping them.
+  const questions = message.role === 'assistant' && !message.streaming ? splitOpenQuestions(message.content) : null
   return (
     <article className={`message message-${message.role} ${message.streaming ? 'is-streaming' : ''} ${message.failed ? 'is-failed' : ''} ${isEntering(message) ? 'is-entering' : ''}`}>
       <div className="message-content">
-        <Markdown content={message.content} profile={profile} version={message.id} streaming={message.streaming} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
+        {questions
+          ? <>
+              {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+              <QuestionsCard id={message.id} block={questions} />
+              {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+            </>
+          : <Markdown content={message.content} profile={profile} version={message.id} streaming={message.streaming} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
         {message.streaming && <span className="stream-caret" />}
       </div>
       {!message.streaming && (

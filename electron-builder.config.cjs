@@ -10,7 +10,16 @@ const privateConfig = (() => {
   }
 })()
 
+// Icon Composer icon first: since macOS 26 a plain .icns is shrunk into a grey plate in the Dock.
+const privateIconComposer = path.join(__dirname, 'private', 'assets', 'HermesBot.icon')
 const privateIcon = path.join(__dirname, 'private', 'assets', 'icon.icns')
+const macIcon = fs.existsSync(privateIconComposer)
+  ? privateIconComposer
+  : fs.existsSync(path.join(__dirname, 'assets', 'HermesBot.icon'))
+    ? 'assets/HermesBot.icon'
+    : fs.existsSync(privateIcon)
+      ? privateIcon
+      : 'assets/icon.icns'
 
 module.exports = {
   appId: typeof privateConfig.appId === 'string' && privateConfig.appId ? privateConfig.appId : 'app.hermesbot.desktop',
@@ -31,7 +40,7 @@ module.exports = {
   ],
   mac: {
     category: 'public.app-category.productivity',
-    icon: fs.existsSync(privateIcon) ? privateIcon : 'assets/icon.icns',
+    icon: macIcon,
     target: [{ target: 'dir', arch: ['arm64'] }],
     identity: null,
     hardenedRuntime: false,

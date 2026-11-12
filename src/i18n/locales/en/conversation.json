@@ -52,6 +52,16 @@
     "freeAnswer": "Free answer to {{name}}",
     "sendAnswer": "Send the answer"
   },
+  "questions": {
+    "intro": "My answers to your questions:",
+    "placeholder": "Your answer…",
+    "progress": "{{filled}} of {{total}} answered",
+    "send": "Send answers",
+    "shortcut": "⌘ Return to send",
+    "sent_one": "Answer sent",
+    "sent_other": "{{count}} answers sent",
+    "again": "Answer again"
+  },
   "mail": {
     "approved": "Mail approved: {{subject}}",
     "discarded": "Draft dismissed: {{subject}}",

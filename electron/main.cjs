@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain, session } = require('electron')
+const { app, BrowserWindow, shell, dialog, safeStorage, ipcMain, session, nativeTheme } = require('electron')
 const { execFile, spawn } = require('node:child_process')
 const { randomBytes } = require('node:crypto')
 const path = require('node:path')
@@ -195,7 +195,7 @@ async function createWindow() {
     minWidth: 860,
     minHeight: 600,
     title: 'HermesBot',
-    backgroundColor: '#e9efec',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#e9efec',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
@@ -228,6 +228,15 @@ async function createWindow() {
 ipcMain.handle('hermes-bot:restart-tunnel', (event) => {
   if (!event.senderFrame?.url.startsWith(`${ORIGIN}/`)) throw new Error(text().forbiddenOrigin())
   return restartHermesTunnel()
+})
+
+ipcMain.handle('hermes-bot:focus-window', (event) => {
+  if (!event.senderFrame?.url.startsWith(`${ORIGIN}/`)) throw new Error(text().forbiddenOrigin())
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  app.focus({ steal: true })
+  mainWindow.focus()
 })
 
 app.whenReady().then(async () => {

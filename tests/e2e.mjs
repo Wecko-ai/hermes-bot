@@ -82,6 +82,9 @@ let loginCalls = 0
 let loginRefused = false
 let logoutCalls = 0
 let sessionResumeCalls = 0
+// Heartbeat of the app; silentPings makes the gateway stop answering it.
+let pingCalls = 0
+let silentPings = false
 // Requests from the gateway to the app (vault, approvals) and replies received.
 const clientResponses = new Map()
 let capabilityCalls = 0
@@ -286,6 +289,11 @@ wss.on('connection', (socket) => {
       if (frame.params.server_requests === true) capabilityCalls += 1
       return reply({ server_requests: [], declines_not_shown: true })
     }
+    if (frame.method === 'gateway.ping') {
+      pingCalls += 1
+      if (silentPings) return
+      return reply({ ok: true })
+    }
     if (frame.method === 'profiles.list') {
       profilesListCalls += 1
       return reply({ profiles: emptyRoster ? [] : profiles, bot_mode_protocol: true })
@@ -451,6 +459,12 @@ wss.on('connection', (socket) => {
         at(900, 'message.complete', { turn_id: 'turn-mail', text: `Brouillon à valider :\n\n${draft}`, status: 'complete' })
         return
       }
+      if (frame.params.text === 'Test questions') {
+        const text = ['Voici la page.', '', '## Questions ouvertes', '1. Avec quoi le client est-il reparti au bout des 5 jours ?', '2. L’Intensif est-il pour une seule personne ?', '3. Le bloc dirigeants reste-t-il au tutoiement ?'].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-questions' })
+        at(300, 'message.complete', { turn_id: 'turn-questions', text, status: 'complete' })
+        return
+      }
       if (frame.params.text === 'Test silence') {
         at(30, 'message.start', { turn_id: 'turn-silence' })
         at(80, 'message.delta', { turn_id: 'turn-silence', text: 'NO' })
@@ -591,6 +605,17 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   // French interface: the texts searched below come from the French catalog.
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'fr-FR' })
+  // macOS notifications: recorded instead of shown, permission already granted.
+  await page.addInitScript(() => {
+    window.__notifications = []
+    window.Notification = class {
+      static permission = 'granted'
+      static requestPermission() { return Promise.resolve('granted') }
+      constructor(title, options = {}) { this.title = title; this.body = options.body; this.tag = options.tag; window.__notifications.push(this) }
+      close() {}
+    }
+  })
+  const notificationsSent = () => page.evaluate(() => window.__notifications.map(({ title, body, tag }) => ({ title, body, tag })))
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   // Chromium announces the request before the CSP blocks it: only a CSP refusal removes it from the list.
@@ -966,8 +991,12 @@ try {
   for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: 'turn-fond' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 3_000 })
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 3_000 })
+  const notificationsBefore = (await notificationsSent()).length
   for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: 'turn-fond', text: 'Travail de fond terminé.', status: 'complete' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
+  // A bot whose chat is not open: one macOS notification, its name as title.
+  const novaDone = (await notificationsSent()).slice(notificationsBefore)
+  if (novaDone.length !== 1 || novaDone[0].tag !== 'hermesbot-nova' || !novaDone[0].body.startsWith('A terminé')) throw new Error(`Notification de fin de tour : ${JSON.stringify(novaDone)}`)
 
   // Work summary: visible on the row of a background bot, with no unread before the turn ends.
   const novaBadge = page.locator('[data-bot=nova] .unread-badge')
@@ -1226,6 +1255,29 @@ try {
   await page.locator('.mail-note.is-muted').getByText('Brouillon écarté').waitFor({ timeout: 2_000 })
   if (promptCalls !== promptsBeforeDiscard) throw new Error('Ignorer ne doit lancer aucun tour.')
   if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('hermes-mail').count()) throw new Error('Le roster montre le bloc brut.')
+
+  // Open questions: one field per question, only the filled ones go back, in one turn.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test questions')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const questions = page.locator('.questions-card')
+  await questions.waitFor({ timeout: 5_000 })
+  if (await questions.locator('textarea').count() !== 3) throw new Error('Il faut un champ par question.')
+  if (await questions.getByRole('button', { name: 'Envoyer les réponses' }).isEnabled()) throw new Error('Envoi possible sans réponse.')
+  await questions.getByLabel('Avec quoi le client est-il reparti au bout des 5 jours ?').fill('Un plan sur 90 jours.')
+  await questions.getByLabel('Le bloc dirigeants reste-t-il au tutoiement ?').fill('Oui.')
+  await delay(500)
+  await questions.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}questions-card.png` })
+  const promptsBeforeAnswers = promptCalls
+  await questions.getByRole('button', { name: 'Envoyer les réponses' }).click()
+  for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeAnswers; attempt += 1) await delay(50)
+  if (promptCalls !== promptsBeforeAnswers + 1) throw new Error('Envoyer les réponses doit lancer un seul tour.')
+  for (const expected of ['Mes réponses à tes questions :', '1. Avec quoi le client', '   Un plan sur 90 jours.', '3. Le bloc dirigeants', '   Oui.']) {
+    if (!lastPromptText.includes(expected)) throw new Error(`Réponses sans « ${expected} ».`)
+  }
+  if (lastPromptText.includes('seule personne')) throw new Error('Une question vide est partie.')
+  await page.locator('.mail-note').getByText('2 réponses envoyées').waitFor({ timeout: 3_000 })
+  await delay(500)
 
   // A video started during streaming keeps playing when the message ends: same element, same playback.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test média en direct')
@@ -1547,8 +1599,20 @@ try {
   // Reconnect button: visible status, recovery without reloading the page, open chat resubscribed.
   const refresh = page.getByRole('button', { name: 'Reconnecter Hermes' })
   const connection = page.locator('.connection-label')
+
+  // Dropped gateway: back on its own, without a click, with the open chat resubscribed.
+  await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })
+  const resumesBeforeDrop = sessionResumeCalls
+  for (const client of wss.clients) client.terminate()
+  await connection.getByText('Hermes connecté').waitFor({ timeout: 8_000 })
+  for (let attempt = 0; attempt < 50 && sessionResumeCalls === resumesBeforeDrop; attempt += 1) await delay(100)
+  if (sessionResumeCalls === resumesBeforeDrop) throw new Error('Reconnexion automatique : chat ouvert non réabonné.')
+  await delay(500)
+  // Gateway still away: the automatic attempts fail and the status stays "déconnecté" until the click.
+  forcedAuthStatus = 503
   for (const client of wss.clients) client.terminate()
   await connection.getByText('Hermes déconnecté').waitFor({ timeout: 5_000 })
+  forcedAuthStatus = 0
   const resumesBeforeRefresh = sessionResumeCalls
   await refresh.click()
   await connection.getByText('Hermes connecté').waitFor({ timeout: 5_000 })

@@ -52,6 +52,16 @@
     "freeAnswer": "Réponse libre à {{name}}",
     "sendAnswer": "Envoyer la réponse"
   },
+  "questions": {
+    "intro": "Mes réponses à tes questions :",
+    "placeholder": "Ta réponse…",
+    "progress": "{{filled}} sur {{total}} remplie(s)",
+    "send": "Envoyer les réponses",
+    "shortcut": "⌘ Entrée pour envoyer",
+    "sent_one": "Réponse envoyée",
+    "sent_other": "{{count}} réponses envoyées",
+    "again": "Répondre à nouveau"
+  },
   "mail": {
     "approved": "Mail approuvé : {{subject}}",
     "discarded": "Brouillon écarté : {{subject}}",

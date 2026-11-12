@@ -136,7 +136,9 @@
     "session": "Session",
     "sessionHint": "Oublie les identifiants enregistrés sur ce Mac",
     "logout": "Se déconnecter",
-    "version": "Version"
+    "version": "Version",
+    "notifications": "Notifications",
+    "notificationsHint": "Quand un bot a fini ou attend ta réponse, sauf si son chat est sous tes yeux"
   },
   "vault": {
     "unresponsive": "Le coffre ne répond pas.",

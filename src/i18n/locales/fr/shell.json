@@ -180,5 +180,10 @@
       "text_to_speech": "Génère de l’audio",
       "cronjob_manage": "Gère ses routines"
     }
+  },
+  "notifications": {
+    "done": "A terminé",
+    "question": "Te pose une question",
+    "approval": "Attend ton approbation"
   }
 }

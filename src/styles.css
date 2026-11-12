@@ -30,11 +30,11 @@
 }
 
 :root[data-theme='dark'] {
-  --bg: #0d1619;
-  --sidebar: #0a1214;
-  --surface: #0f1a1d;
-  --surface-soft: #182528;
-  --surface-raised: #1b2a2e;
+  --bg: #000000;
+  --sidebar: #000000;
+  --surface: #000000;
+  --surface-soft: #1a1a1a;
+  --surface-raised: #222222;
   --hover: #e8f1ef0f;
   --selected: #e8f1ef14;
   --text: #e8f1ef;
@@ -492,11 +492,12 @@ a { color: inherit; }
   --selected: rgb(255 255 255 / 78%);
 }
 :root[data-theme='dark'] {
-  --bg: #091114;
+  /* Pure black page, neutral grey panels. */
+  --bg: #000000;
   --accent: #3cb4c4;
-  --glass: rgb(22 36 40 / 52%);
-  --glass-strong: rgb(32 50 55 / 66%);
-  --glass-soft: rgb(32 50 55 / 30%);
+  --glass: rgb(26 26 26 / 72%);
+  --glass-strong: rgb(38 38 38 / 78%);
+  --glass-soft: rgb(38 38 38 / 40%);
   --glass-line: rgb(255 255 255 / 7%);
   --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 10%), inset 0 0 0 .5px rgb(255 255 255 / 8%);
   --glass-shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 18px 44px -18px rgb(0 0 0 / 70%);
@@ -517,7 +518,8 @@ body::before {
   filter: blur(42px) saturate(125%);
   opacity: .62;
 }
-:root[data-theme='dark'] body::before { opacity: .7; }
+:root[data-theme='dark'] body::before { opacity: 0; }
+:root[data-theme='dark'] body { background: #000000; }
 .app-shell, .chat-panel, .login-page, .app-loading { background: transparent; }
 
 /* Blur only on what passes over the content. Behind the fixed panels there is only the
@@ -691,6 +693,15 @@ body::before {
 .mail-card-footer button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .mail-card-footer button.is-primary { padding: 0 16px; background: var(--text); color: var(--bg); font-weight: 560; }
 .mail-card-footer button.is-primary:hover:not(:disabled) { background: var(--text); color: var(--bg); opacity: .88; }
+.questions-card { display: flex; flex-direction: column; margin: 10px 0; padding: 14px 16px 12px; border-radius: 14px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border-strong); }
+.questions-list { margin: 10px 0 0; padding: 0; list-style: none; counter-reset: question; }
+.questions-list li { counter-increment: question; padding: 8px 0 10px; border-bottom: .5px solid var(--border); }
+.questions-list li:last-child { border-bottom: 0; }
+.questions-list label { display: flex; flex-direction: column; gap: 6px; }
+.questions-text { color: var(--text); font-size: 13.5px; line-height: 20px; }
+.questions-text::before { content: counter(question) ". "; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.questions-card textarea.questions-answer { width: 100%; min-height: 34px; max-height: 260px; padding: 7px 10px; border: 0; outline: 0; border-radius: 8px; background: var(--surface-soft); color: var(--text); font: inherit; font-size: 13.5px; line-height: 20px; resize: vertical; field-sizing: content; }
+.questions-card textarea.questions-answer:focus { box-shadow: inset 0 0 0 1px var(--border-strong); }
 .mail-note { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; }
 .mail-note.is-muted { color: var(--text-tertiary); }
 .mail-note button { margin-left: 6px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }

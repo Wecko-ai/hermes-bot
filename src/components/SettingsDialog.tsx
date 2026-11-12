@@ -80,6 +80,10 @@ function GeneralTab({ onChooseTheme }: Pick<SettingsDialogProps, 'onChooseTheme'
         <Segments<TextSize> label={t('settings.textSize')} value={settings.textSize} options={[{ id: 'small', label: t('settings.textSizeOptions.small') }, { id: 'normal', label: t('settings.textSizeOptions.normal') }, { id: 'large', label: t('settings.textSizeOptions.large') }]} onChange={(textSize) => updateSettings({ textSize })} />
       </Row>
       <Toggle label={t('settings.reduceMotion')} hint={t('settings.reduceMotionHint')} checked={settings.reduceMotion} onChange={(reduceMotion) => updateSettings({ reduceMotion })} />
+      <Toggle label={t('settings.notifications')} hint={t('settings.notificationsHint')} checked={settings.notifications} onChange={(notifications) => {
+        updateSettings({ notifications })
+        if (notifications && typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission()
+      }} />
     </>
   )
 }

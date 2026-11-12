@@ -26,6 +26,8 @@ export interface AppSettings {
   hiddenModels: string[]
   /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
   localModel: string
+  /** macOS notification when a bot finishes a turn or waits on an answer, unless its chat is in view. */
+  notifications: boolean
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -54,6 +56,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     showHidden: flag(value.showHidden, false),
     hiddenModels: Array.isArray(value.hiddenModels) ? value.hiddenModels.filter((key): key is string => typeof key === 'string') : [],
     localModel: typeof value.localModel === 'string' ? value.localModel : '',
+    notifications: flag(value.notifications, true),
   }
 }
 
