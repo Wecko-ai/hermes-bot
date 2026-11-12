@@ -275,6 +275,7 @@ const wss = new WebSocketServer({
 let profilesListCalls = 0
 let promptCalls = 0
 const modelMutations = []
+const routeChecks = []
 
 const profiles = [{
   name: 'nova', model: 'claude-opus-5-5', description: 'Coordinateur',
@@ -413,6 +414,11 @@ wss.on('connection', (socket) => {
           { slug: 'absent', name: 'Non connecté', authenticated: false, models: ['modele-interdit'] },
         ],
       })
+    }
+    if (frame.method === 'setup.runtime_check') {
+      routeChecks.push(frame.params)
+      if (frame.params.provider === 'lmstudio') return reply({ ok: false, provider: 'lmstudio', model: 'gemma-local', error: 'No usable credentials found for lmstudio.' })
+      return reply({ ok: true, provider: frame.params.provider, model: 'claude-opus-5-5' })
     }
     if (frame.method === 'session.mutate') {
       modelMutations.push(frame.params)
@@ -1501,6 +1507,21 @@ try {
   if (lastMutation?.expected_revision !== 4 || lastMutation?.expected_generation !== 1) throw new Error(`Clôtures inattendues: ${JSON.stringify(lastMutation)}`)
   if (lastMutation?.payload?.model !== 'claude-sonnet-5-5' || lastMutation?.payload?.provider !== 'anthropic' || lastMutation?.payload?.confirm !== 'confirm-test') throw new Error(`Mutation inattendue: ${JSON.stringify(lastMutation)}`)
   if (!lastMutation?.request_id || lastMutation.request_id === modelMutations[0].request_id) throw new Error('La confirmation doit avoir une nouvelle request_id.')
+  if (!routeChecks.some((check) => check.profile === 'orion' && check.provider === 'anthropic')) throw new Error(`La route doit être vérifiée avant le changement: ${JSON.stringify(routeChecks)}`)
+
+  // A provider with no usable key is marked in the picker, and choosing it asks first: refused, nothing is switched.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('/model gemma')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const noKeyRow = page.locator('.model-option[data-model="gemma-local"]')
+  await noKeyRow.locator('.model-option-tag.is-unusable').getByText('Sans clé').waitFor({ timeout: 5_000 })
+  const routeDialog = new Promise((resolve) => page.once('dialog', (dialog) => { resolve(dialog.message()); void dialog.dismiss() }))
+  await noKeyRow.click()
+  const routeMessage = await routeDialog
+  if (!String(routeMessage).includes('No usable credentials found for lmstudio.')) throw new Error(`Avertissement de route inattendu: ${routeMessage}`)
+  await page.waitForTimeout(300)
+  if (modelMutations.length !== 2) throw new Error('Un changement refusé vers une route sans clé a été envoyé.')
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
+  await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
 
   // Settings: theme, text, send key, then a hidden model leaves the picker and comes back in one click.
   const openSettings = async () => {

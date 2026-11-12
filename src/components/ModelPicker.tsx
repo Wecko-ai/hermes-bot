@@ -11,6 +11,8 @@ interface ModelPickerProps {
   profileModel: string
   loading: boolean
   error: string
+  /** Providers the gateway says cannot serve this bot (no usable key), with its reason. */
+  unusable?: Record<string, string>
   initialQuery: string
   onSelect: (option: ModelOption) => void | Promise<void>
   onClose: () => void
@@ -65,7 +67,7 @@ function saveOpenGroups(slugs: string[]) {
   try { localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(slugs)) } catch { /* storage unavailable */ }
 }
 
-export function ModelPicker({ options, current, profileModel, loading, error, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
+export function ModelPicker({ options, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState(initialQuery)
   const [openGroups, setOpenGroups] = useState(readOpenGroups)
@@ -220,19 +222,21 @@ export function ModelPicker({ options, current, profileModel, loading, error, in
                     {group.models.map((option) => {
                       const key = modelKey(option)
                       const isCurrent = option.model === current
+                      const issue = unusable[option.provider]
                       return (
                         <button
                           key={key}
-                          className={`model-option ${isCurrent ? 'is-current' : ''} ${active?.key === key ? 'is-active' : ''} ${pendingKey === key ? 'is-pending' : ''}`}
+                          className={`model-option ${isCurrent ? 'is-current' : ''} ${active?.key === key ? 'is-active' : ''} ${pendingKey === key ? 'is-pending' : ''} ${issue ? 'is-unusable' : ''}`}
                           data-model={option.model}
                           data-row={key}
-                          title={option.model}
+                          title={issue ? `${option.model} · ${issue}` : option.model}
                           tabIndex={-1}
                           onMouseMove={() => setActiveKey(key)}
                           onClick={() => choose(option)}
                         >
                           <span className="model-option-name">{modelLabel(option.model)}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
+                          {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
                           {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
                           {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                           {isCurrent && <Check className="model-option-check" size={15} />}

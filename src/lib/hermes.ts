@@ -662,6 +662,30 @@ export async function switchModel(client: HermesClient, chat: ActiveChat, option
   throw new Error(i18n.t('hermes.modelRefused'))
 }
 
+/**
+ * Free readiness check of one provider for this bot (`setup.runtime_check`): the gateway reads the
+ * profile's config and `.env`, no model is called. A route without a usable key otherwise only fails
+ * when the next turn builds its agent, and Hermes then falls into its fallback chain. Returns the
+ * gateway's reason, or `null` when the route is fine or the answer is unknown (older gateway, probe
+ * still running, timeout): an unknown answer never blocks a switch.
+ */
+export async function checkModelRoute(client: HermesClient, profile: string, provider: string): Promise<{ error: string } | null> {
+  if (!provider) return null
+  try {
+    const result = asObject(await client.request('setup.runtime_check', { profile, provider }, 8_000))
+    return result.ok === false ? { error: asString(result.error) || i18n.t('hermes.routeUnusable') } : null
+  } catch {
+    return null
+  }
+}
+
+/** One check per distinct provider, in parallel. Only the providers that cannot serve the bot are returned, with their reason. */
+export async function checkModelRoutes(client: HermesClient, profile: string, providers: string[]): Promise<Record<string, string>> {
+  const unique = [...new Set(providers.filter(Boolean))]
+  const answers = await Promise.all(unique.map(async (provider) => [provider, await checkModelRoute(client, profile, provider)] as const))
+  return Object.fromEntries(answers.flatMap(([provider, issue]) => issue ? [[provider, issue.error]] : []))
+}
+
 const firstNumber = (...values: unknown[]) => values.find((value): value is number => typeof value === 'number' && Number.isFinite(value))
 
 /** Accepts both Hermes views: `Usage` (status bar) and the `session.stats` counters. */

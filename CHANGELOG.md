@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Model picker: before a conversation switches model, HermesBot asks the gateway whether that provider can serve the bot (`setup.runtime_check`, no model call). A provider with no usable key shows "No key" in the picker, and choosing it asks first, with the gateway's reason. Without the check, the next turn failed before reaching the model.
 - "Standing by" status: a bot with no turn but with subagents or background processes still running gets a calm ring and its own label; hovering it says how many. "Working" keeps the priority.
 - Subagents block in the chat, read only: goal, status, duration, last tool and final summary of each delegated child, and the end of its live transcript on click.
 - Caveman mode (Settings > Conversations): bots answer in few words, with the same facts. Off by default. Only their chat replies change; an approved mail goes out with nothing added.

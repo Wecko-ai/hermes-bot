@@ -25,6 +25,7 @@
     "confirmModel": "Confirm {{model}}?",
     "modelDeferred": "{{model}} will be used on the next turn.",
     "modelSwitchRefused": "Model change refused.",
+    "modelRouteUnusable": "{{provider}} cannot serve this bot: {{error}}\n\nIts next turn would fail before reaching the model. Switch anyway?",
     "disconnectedValidate": "Hermes is disconnected: sign in again, then confirm once more.",
     "alreadyResolved": "The bot was no longer waiting for this answer: it timed out or was already answered.",
     "answerNotSentWith": "Answer not delivered: {{message}}",

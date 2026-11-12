@@ -398,6 +398,8 @@ a { color: inherit; }
 .model-option.is-current .model-option-name { font-weight: 600; }
 .model-option-tag { flex: none; padding: 1px 6px; border-radius: 6px; background: var(--hover); color: var(--text-secondary); font-size: 10px; font-weight: 550; }
 .model-option-tag.is-plan { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.model-option-tag.is-unusable { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.model-option.is-unusable .model-option-name { color: var(--text-tertiary); }
 .model-option-price { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .model-option-check { flex: none; margin-left: auto; color: var(--accent); }
 .model-option-price + .model-option-check { margin-left: 0; }

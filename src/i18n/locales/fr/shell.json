@@ -25,6 +25,7 @@
     "confirmModel": "Confirmer {{model}} ?",
     "modelDeferred": "{{model}} sera utilisé au prochain tour.",
     "modelSwitchRefused": "Changement de modèle refusé.",
+    "modelRouteUnusable": "{{provider}} ne peut pas servir ce bot : {{error}}\n\nSon prochain tour échouerait avant d’atteindre le modèle. Changer quand même ?",
     "disconnectedValidate": "Hermes est déconnecté : reconnecte-toi, puis valide de nouveau.",
     "alreadyResolved": "Le bot n’attendait plus cette réponse : délai dépassé ou réponse déjà donnée.",
     "answerNotSentWith": "Réponse non transmise : {{message}}",

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
 
 const chat: ActiveChat = {
   profile: 'orion',
@@ -298,5 +298,32 @@ describe('questions et accords en plein tour', () => {
     const approval = parsePendingPrompt('chat-orion', { kind: 'approval', prompt_id: 'a1', execution_generation: 3, choices: ['once', 'deny'], command: 'rm x' })!
     await answerPrompt(client, 'orion', approval, 'deny')
     expect(request).toHaveBeenLastCalledWith('approval.respond', { profile: 'orion', session_id: 'chat-orion', execution_generation: 3, prompt_id: 'a1', choice: 'deny' })
+  })
+})
+
+describe('vérification de la route avant un changement de modèle', () => {
+  it('demande setup.runtime_check pour ce bot et ce fournisseur, et rend la raison d’un refus', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: false, provider: 'openrouter', error: 'No usable credentials found for openrouter.' })
+    const issue = await checkModelRoute({ request } as unknown as HermesClient, 'orion', 'openrouter')
+
+    expect(request).toHaveBeenCalledWith('setup.runtime_check', { profile: 'orion', provider: 'openrouter' }, 8_000)
+    expect(issue).toEqual({ error: 'No usable credentials found for openrouter.' })
+  })
+
+  it('laisse passer une route servie, une réponse inconnue et une gateway qui ne connaît pas la méthode', async () => {
+    const ok = vi.fn().mockResolvedValue({ ok: true, provider: 'anthropic' })
+    const odd = vi.fn().mockResolvedValue({})
+    const unknown = vi.fn().mockRejectedValue(new HermesRpcError('unknown method', {}, -32601))
+    for (const request of [ok, odd, unknown]) {
+      expect(await checkModelRoute({ request } as unknown as HermesClient, 'orion', 'anthropic')).toBeNull()
+    }
+  })
+
+  it('vérifie chaque fournisseur une seule fois et ne garde que ceux qui ne peuvent pas servir', async () => {
+    const request = vi.fn(async (_method: string, params: { provider: string }) => params.provider === 'openrouter' ? { ok: false, error: 'No key.' } : { ok: true })
+    const issues = await checkModelRoutes({ request } as unknown as HermesClient, 'orion', ['anthropic', 'openrouter', 'anthropic', ''])
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(issues).toEqual({ openrouter: 'No key.' })
   })
 })

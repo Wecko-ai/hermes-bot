@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
-import { answerPrompt, attachFile, attachImageBytes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive } from './lib/subagents'
@@ -150,6 +150,8 @@ export default function App() {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState('')
+  // Providers that cannot serve the open bot (gateway readiness check), kept with the bot they were checked for.
+  const [routeIssues, setRouteIssues] = useState<{ profile: string; issues: Record<string, string> }>({ profile: '', issues: {} })
   const [documents, setDocuments] = useState<OpenDocument[]>([])
   const [railTab, setRailTab] = useState(BOT_RAIL_TAB)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -1016,9 +1018,13 @@ export default function App() {
     if (DEMO) return
     setModelsLoading(true)
     setModelsError('')
-    loadModelOptions(client, selected, useChatStore.getState().activeChat?.sessionId).then((result) => {
+    const profile = selected
+    loadModelOptions(client, profile, useChatStore.getState().activeChat?.sessionId).then((result) => {
       setModelOptions(result.options)
       if (result.current) setChatModel((value) => value || result.current)
+      // The rows appear at once; the routes without a usable key are marked when the checks answer.
+      void checkModelRoutes(client, profile, result.options.map((option) => option.provider))
+        .then((issues) => setRouteIssues({ profile, issues }))
     }).catch((error) => {
       setModelsError(error instanceof Error ? error.message : i18n.t('app.modelsUnavailable'))
     }).finally(() => setModelsLoading(false))
@@ -1028,6 +1034,13 @@ export default function App() {
     const chat = useChatStore.getState().activeChat
     if (!chat) return
     try {
+      // Checked again at the moment of the switch: a route with no usable key would only fail when
+      // the next turn builds its agent, after the conversation has already left the working model.
+      const issue = await checkModelRoute(client, chat.profile, option.provider)
+      if (issue) {
+        setRouteIssues((value) => ({ profile: chat.profile, issues: { ...(value.profile === chat.profile ? value.issues : {}), [option.provider]: issue.error } }))
+        if (!window.confirm(i18n.t('app.modelRouteUnusable', { provider: option.providerName, error: issue.error }))) return
+      }
       let result = await switchModel(client, chat, option)
       if (result?.confirm_required && typeof result.confirm === 'string') {
         if (!window.confirm(result.confirm_message || i18n.t('app.confirmModel', { model: option.model }))) return
@@ -1166,6 +1179,7 @@ export default function App() {
             profileModel={selectedBot.model}
             loading={modelsLoading}
             error={modelsError}
+            unusable={routeIssues.profile === selected ? routeIssues.issues : undefined}
             initialQuery={modelQuery}
             onSelect={selectModel}
             onClose={() => setModelQuery(null)}
