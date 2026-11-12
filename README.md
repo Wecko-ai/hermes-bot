@@ -121,6 +121,20 @@ Every Hermes profile shows as a bot, except `default` and a profile named `notif
 
 If nothing answers on the gateway address, the desktop app can open an SSH tunnel to the machine that runs Hermes. Set `sshHost` (see Settings) to an SSH host alias that connects without a password prompt. The tunnel forwards port 9120 and closes with the app.
 
+### Open it from a phone or a tablet
+
+The server stays on `127.0.0.1`. To reach it from your other devices, put a private proxy in front of it, such as [Tailscale Serve](https://tailscale.com/kb/1312/serve), and list the address those devices use in `remoteOrigins`:
+
+```bash
+tailscale serve --bg --http 4340 http://127.0.0.1:4330
+```
+
+```json
+{ "remoteOrigins": ["http://my-mac.example.ts.net:4340", "http://my-mac:4340"] }
+```
+
+Restart the app after changing it. A window opened from such an address signs in with the Hermes username and password only: no sign-in without a password, no password kept in the Keychain, and no shared-Chrome vault. The proxy must keep the `Host` header the device sent (Tailscale Serve does), and should only be reachable by your own devices.
+
 ## Desktop app
 
 ```bash
@@ -141,6 +155,7 @@ All settings are optional. Each one is an environment variable, or a key of `con
 | `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Address of the Hermes gateway |
 | `HERMES_BROWSER_ORIGIN` | `browserOrigin` | same as the gateway | `Origin` header sent to the gateway, when it only trusts its public address behind a reverse proxy |
 | `HERMES_SSH_HOST` | `sshHost` | none | SSH host alias for the tunnel to a remote gateway |
+| `HERMESBOT_REMOTE_ORIGINS` | `remoteOrigins` | none | Addresses of a private proxy the window may also be opened from (comma-separated, or a list in `config.json`) |
 | `HERMES_HOME` | `hermesHome` | `~/.hermes` | Home of the Hermes on this Mac, for the sign-in without a password |
 | `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat |
 | `HERMESBOT_ANIMATIONS` | `animationsDir` | `animations/` in the data folder | Folder of bot animations |
@@ -169,7 +184,7 @@ window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4
 
 ## Security
 
-- The local server listens on `127.0.0.1` only and rejects requests whose `Host` or `Origin` is not local.
+- The local server listens on `127.0.0.1` only and rejects requests whose `Host` or `Origin` is not local, or not one of the `remoteOrigins` you listed. A window opened from a remote origin needs the Hermes password, and never gets the sign-in without a password, the Keychain or the shared-Chrome vault.
 - Hermes cookies and tickets stay in the server process. The window only gets an opaque session id.
 - Bot output is treated as hostile. No remote image or resource ever loads. Bot files only pass through the local server, with a fixed content type and no SVG. HTML documents run in a sandboxed iframe with no network and no access to the app.
 - HermesBot trusts whatever answers on the gateway address. A local process that took that port would receive your password, but it would already run with your rights.

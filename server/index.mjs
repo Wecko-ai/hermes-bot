@@ -25,6 +25,11 @@ const LOCAL_ORIGINS = new Set([
   `http://${HOST}:${PORT}`,
   `http://localhost:${PORT}`,
 ])
+const LOCAL_HOSTS = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`])
+// Opened from another device through a private proxy (see remoteOrigins in config.cjs).
+const REMOTE_ORIGINS = new Set(CONFIG.remoteOrigins)
+const REMOTE_HOSTS = new Set([...REMOTE_ORIGINS].map((value) => new URL(value).host))
+const WINDOW_ORIGINS = new Set([...LOCAL_ORIGINS, ...REMOTE_ORIGINS])
 // A Hermes gateway without a password, its default setup on one machine: see local-gateway.mjs.
 const localGateway = createLocalGateway({ gatewayOrigin: HERMES_ORIGIN, hermesHome: CONFIG.hermesHome })
 // Signing in without a password needs a proof that the caller is the person who runs this server: any
@@ -46,9 +51,16 @@ function json(response, status, body, extraHeaders = {}) {
 
 function localRequest(request) {
   const host = request.headers.host || ''
-  if (!new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]).has(host)) return false
   const origin = request.headers.origin
-  return !origin || LOCAL_ORIGINS.has(origin)
+  if (LOCAL_HOSTS.has(host)) return !origin || LOCAL_ORIGINS.has(origin)
+  // A remote window: its Host and its Origin must name the same configured address.
+  if (REMOTE_HOSTS.has(host)) return !origin || (REMOTE_ORIGINS.has(origin) && new URL(origin).host === host)
+  return false
+}
+
+/** Request from a window opened through remoteOrigins: password sign-in only, no Keychain, no vault. */
+function remoteRequest(request) {
+  return !LOCAL_HOSTS.has(request.headers.host || '')
 }
 
 async function bodyJson(request, limit = 32_768) {
@@ -225,7 +237,7 @@ async function handleLogin(request, response) {
   const upstream = await passwordLogin(request, { provider, username, password })
   if (!upstream.ok) return proxyJson(response, upstream)
   // Checked: encrypted by the Keychain, never sent back to the interface. Unchecked: whatever was kept is forgotten.
-  if (credentialStore) {
+  if (credentialStore && !remoteRequest(request)) {
     if (body.remember === true) credentialStore.save(JSON.stringify({ provider, username, password }))
     else credentialStore.clear()
   }
@@ -280,8 +292,8 @@ async function handleRestore(request, response) {
 }
 
 async function handleLogout(request, response) {
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  credentialStore?.clear()
+  if (!WINDOW_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!remoteRequest(request)) credentialStore?.clear()
   const session = browserSession(request)
   // A session without a password has nothing to close on the Hermes side.
   if (session?.kind !== 'local') {
@@ -540,7 +552,7 @@ function localChatMessages(body) {
 }
 
 async function handleLocalChat(request, response) {
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!WINDOW_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   const body = await bodyJson(request, LOCAL_CHAT_MAX_BYTES)
   const messages = localChatMessages(body)
@@ -609,6 +621,7 @@ async function pollVaultRequests() {
 }
 
 function handleBrowserVaultEvents(request, response) {
+  if (remoteRequest(request)) return json(response, 403, { error: 'forbidden_origin' })
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   response.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -634,6 +647,7 @@ function handleBrowserVaultEvents(request, response) {
 
 /** App window to the vault: session and local origin required, as for Hermes. */
 async function handleBrowserVaultAdmin(request, response, pathname) {
+  if (remoteRequest(request)) return json(response, 403, { error: 'forbidden_origin' })
   if (request.method === 'POST' && !LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   const session = browserSession(request)
   if (!session) return json(response, 401, { error: 'unauthenticated' })
@@ -666,7 +680,7 @@ const CONTENT_SECURITY_POLICY = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  `connect-src 'self' ws://${HOST}:${PORT} ws://localhost:${PORT}`,
+  `connect-src 'self' ws://${HOST}:${PORT} ws://localhost:${PORT}${[...REMOTE_ORIGINS].map((value) => ` ${value.replace(/^http/, 'ws')}`).join('')}`,
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",
@@ -773,6 +787,7 @@ const server = http.createServer(async (request, response) => {
       return await handleLogin(request, response)
     }
     if (url.pathname === '/api/auth/options' && request.method === 'GET') {
+      if (remoteRequest(request)) return json(response, 200, { remember: false, local: { available: false, reason: 'remote' } })
       return json(response, 200, { remember: Boolean(credentialStore), local: await localSignInState() })
     }
     if (url.pathname === '/api/auth/local' && request.method === 'POST') {
@@ -840,7 +855,7 @@ const wss = new WebSocketServer({
 
 server.on('upgrade', async (request, socket, head) => {
   try {
-    if (!localRequest(request) || !LOCAL_ORIGINS.has(request.headers.origin)) throw Object.assign(new Error('forbidden'), { status: 403 })
+    if (!localRequest(request) || !WINDOW_ORIGINS.has(request.headers.origin)) throw Object.assign(new Error('forbidden'), { status: 403 })
     const url = new URL(request.url || '/', `http://${HOST}:${PORT}`)
     if (url.pathname !== '/api/ws') {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n')

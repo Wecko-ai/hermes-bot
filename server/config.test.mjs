@@ -48,6 +48,15 @@ describe('configuration locale', () => {
     expect(config.animationsDir).toBe(path.join(root, 'private', 'animations'))
   })
 
+  it('lit les adresses distantes et écarte celles qui ne sont pas une origine', () => {
+    const { root, home } = fixture({
+      userConfig: { remoteOrigins: ['https://mini.example.ts.net', 'https://x.example/path', 'file:///etc', 42, 'https://mini.example.ts.net'] },
+    })
+    const config = loadConfig({ env: { HERMESBOT_REMOTE_ORIGINS: 'http://mini:4340' }, platform: 'darwin', home, root })
+    expect(config.remoteOrigins).toEqual(['http://mini:4340', 'https://mini.example.ts.net'])
+    expect(loadConfig({ env: {}, platform: 'darwin', home: fixture().home, root: fixture().root }).remoteOrigins).toEqual([])
+  })
+
   it('écarte les valeurs invalides au lieu de les transmettre', () => {
     const { root, home } = fixture({
       userConfig: {

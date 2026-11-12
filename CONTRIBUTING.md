@@ -25,7 +25,7 @@ npm run test:e2e   # end-to-end run against a simulated gateway (needs Google Ch
 
 ## Rules the code relies on
 
-- The local server only listens on `127.0.0.1` and checks `Host` and `Origin`.
+- The local server only listens on `127.0.0.1` and checks `Host` and `Origin` (local, or one of the configured `remoteOrigins`).
 - Hermes tokens and cookies stay on the server side. The window only gets an opaque session id.
 - Bot replies may contain hostile content: no remote image ever loads, bot files only go through `/api/media` and `/api/document`, and HTML documents stay in a sandboxed iframe with no network. Do not relax these policies.
 - A message sent to a bot may cost money. Nothing in the app sends one without a user action.
