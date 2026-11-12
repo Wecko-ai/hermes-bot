@@ -31,6 +31,7 @@ import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
+import { syncSharedSettings } from './lib/shared-settings'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
@@ -626,6 +627,7 @@ export default function App() {
       const preferred = (defaultBot && roster.bots.find((bot) => bot.slug === defaultBot && !bot.hidden)) || roster.bots.find((bot) => !bot.hidden)
       if (preferred) setSelected((current) => current || preferred.slug)
       void loadLocalModels().then(setLocalModels)
+      void syncSharedSettings()
       if (roster.bots.length === 0) setNotice(i18n.t('app.noVisibleBots'))
     } catch (error) {
       setConnected(false)
@@ -727,9 +729,11 @@ export default function App() {
     ]).then(([chatResult, routineResult]) => {
       if (requestId !== chatRequestRef.current) return
       // After a disconnection, the turn may have ended without us: only the recency test then protects the cache.
-      const preserveLive = !resumed && Boolean(cached && (useChatStore.getState().activeChat?.running || useChatStore.getState().streaming))
+      // The cache as it is now: a message sent while the history was loading must not vanish.
+      const latest = getCached(profile) || cached
+      const preserveLive = !resumed && Boolean(latest && (useChatStore.getState().activeChat?.running || useChatStore.getState().streaming))
       if (chatResult.status === 'fulfilled') {
-        const nextMessages = resolveSyncedMessages(cached, chatResult.value.messages, preserveLive)
+        const nextMessages = resolveSyncedMessages(latest, chatResult.value.messages, preserveLive)
         const nextRoutines = routineResult.status === 'fulfilled' ? routineResult.value : cached?.routines || []
         applySyncedChat(profile, { chat: chatResult.value.chat, messages: nextMessages, routines: nextRoutines }, { preserveLive, resumed })
         const openPrompts = chatResult.value.prompts

@@ -76,6 +76,9 @@ const MEDIA_FIXTURES = {
 }
 const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).length
 const mediaRequests = []
+// Shared settings file: already written by another HermesBot app (the Mac's other window, or a second Mac).
+let sharedSettingsFile = JSON.stringify({ version: 1, hiddenModels: ['custom:omlx:qwen-masque'] })
+const sharedSettingsWrites = []
 // Status forced on /api/auth/me: 503 for an unreachable gateway, 401 for an expired session.
 let forcedAuthStatus = 0
 // Each login gets a numbered cookie; expiring sessions means refusing past numbers.
@@ -239,6 +242,24 @@ const mock = http.createServer((request, response) => {
     }))
   }
   if (url.pathname === '/api/cron/jobs') return response.end(JSON.stringify([{ id: 'routine-test', name: 'Nova: Routine test', enabled: true, schedule_display: '0 9 * * *', next_run_at: '2025-01-07T02:00:00Z' }]))
+  // The settings file the Mac and iPhone apps share, on the gateway's machine.
+  if (url.pathname === '/api/fs/read-text' || url.pathname === '/api/fs/write-text') {
+    if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
+    if (url.pathname === '/api/fs/read-text') {
+      if (url.searchParams.get('path') !== '~/.hermes/hermesbot-settings.json' || sharedSettingsFile === null) { response.statusCode = 404; return response.end(JSON.stringify({ detail: 'Not found' })) }
+      return response.end(JSON.stringify({ text: sharedSettingsFile, path: '/Users/test/.hermes/hermesbot-settings.json' }))
+    }
+    let raw = ''
+    request.on('data', (chunk) => { raw += chunk })
+    request.on('end', () => {
+      const body = JSON.parse(raw || '{}')
+      if (body.path !== '~/.hermes/hermesbot-settings.json') { response.statusCode = 403; return response.end('{}') }
+      sharedSettingsFile = body.content
+      sharedSettingsWrites.push(JSON.parse(body.content))
+      response.end(JSON.stringify({ ok: true }))
+    })
+    return
+  }
   if (url.pathname === '/api/fs/download' || url.pathname === '/api/files/stream') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
     return serveMediaFixture(request, response, url, url.pathname === '/api/fs/download' ? 'download' : 'stream')
@@ -450,8 +471,10 @@ wss.on('connection', (socket) => {
         return
       }
       if (/^(?:Vois avec|Regarde ça|Test mode)/.test(frame.params.text)) {
+        // The fake history does not keep this prompt: a slower reply leaves time to check its bubble.
+        const end = frame.params.text.startsWith('Regarde ça') ? 1500 : 90
         at(30, 'message.start', { turn_id: 'turn-piece' })
-        at(90, 'message.complete', { turn_id: 'turn-piece', text: 'Bien reçu.', status: 'complete' })
+        at(end, 'message.complete', { turn_id: 'turn-piece', text: 'Bien reçu.', status: 'complete' })
         return
       }
       if (frame.params.text.startsWith('Test mail')) {
@@ -788,7 +811,8 @@ try {
   // The sent image shows in the bubble (gateway path), not as an "[Image : x]" label.
   await page.locator('.message-user', { hasText: '[Fichier : film.mp4]' }).last().locator('.cited-files.is-sent img').waitFor({ timeout: 5_000 })
   if (await page.locator('.message-user').getByText('[Image : vignette.png]').count()) throw new Error('L’image envoyée reste une étiquette.')
-  if (!mediaRequests.some((item) => item.path === '/x/vignette.png')) throw new Error('L’image envoyée n’est pas relue depuis la gateway.')
+  for (let wait = 0; wait < 30 && !mediaRequests.some((item) => item.path === '/x/vignette.png'); wait++) await page.waitForTimeout(100)
+  if (!mediaRequests.some((item) => item.path === '/x/vignette.png')) throw new Error(`L’image envoyée n’est pas relue depuis la gateway : ${JSON.stringify(mediaRequests.slice(-3))}`)
   // History: Hermes's vision note becomes the image, its text is hidden.
   if (await page.locator('.messages-scroll').getByText('The user sent an image').count()) throw new Error('La note de vision de Hermes est visible.')
   if (!mediaRequests.some((item) => item.path === '/Users/test/cache/upload_envoi.png')) throw new Error('L’image envoyée de l’historique n’est pas chargée.')
@@ -1533,9 +1557,17 @@ try {
   await page.waitForTimeout(400)
   await page.screenshot({ path: `${SCREENSHOTS}settings-models-dark.png` })
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  // Every change goes to the gateway's shared file, read by the iPhone app.
+  const sharedHidden = () => JSON.parse(sharedSettingsFile).hiddenModels
+  for (let wait = 0; wait < 20 && !sharedHidden().some((key) => key.endsWith(':kimi-k3')); wait++) await page.waitForTimeout(100)
+  if (!sharedHidden().some((key) => key.endsWith(':kimi-k3')) || !sharedHidden().includes('custom:omlx:qwen-masque')) throw new Error(`Modèles masqués non partagés : ${sharedSettingsFile}`)
   await settingsDialog.getByRole('button', { name: 'Tout afficher' }).click()
+  // Only the listed models come back: a model hidden elsewhere and absent here stays hidden.
+  const onlyForeign = () => sharedHidden().length === 1 && sharedHidden()[0] === 'custom:omlx:qwen-masque'
+  for (let wait = 0; wait < 20 && !onlyForeign(); wait++) await page.waitForTimeout(100)
+  if (!onlyForeign()) throw new Error(`« Tout afficher » non partagé : ${sharedSettingsFile}`)
   const savedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('hermesbot-settings')))
-  if (savedSettings.hiddenModels.length !== 0 || savedSettings.sendKey !== 'enter' || savedSettings.textSize !== 'normal') throw new Error(`Réglages mal enregistrés : ${JSON.stringify(savedSettings)}`)
+  if (savedSettings.hiddenModels.join() !== 'custom:omlx:qwen-masque' || savedSettings.sendKey !== 'enter' || savedSettings.textSize !== 'normal') throw new Error(`Réglages mal enregistrés : ${JSON.stringify(savedSettings)}`)
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 

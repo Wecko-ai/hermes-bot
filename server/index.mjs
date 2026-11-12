@@ -10,6 +10,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
 import configModule from './config.cjs'
 import { createLocalGateway } from './local-gateway.mjs'
+import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, parseSharedSettings, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
 
 const CONFIG = configModule.loadConfig()
 const HOST = '127.0.0.1'
@@ -323,6 +324,26 @@ async function handleLocalSignIn(request, response) {
   if (!gateway.ok) return json(response, 409, { error: 'local_unavailable', reason: gateway.reason })
   const session = createSession([], 'local')
   return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(session) })
+}
+
+async function handleSharedSettings(request, response) {
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (request.method === 'GET') {
+    const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: SHARED_SETTINGS_PATH })}`)
+    if (upstream.status === 404) return json(response, 200, { exists: false, settings: {} })
+    if (!upstream.ok) return json(response, upstream.status, { error: 'shared_settings_unreadable' })
+    const body = await upstream.json().catch(() => ({}))
+    return json(response, 200, { exists: true, settings: parseSharedSettings(body.text) })
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const settings = sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES))
+  const upstream = await hermesFetch(request, '/api/fs/write-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: SHARED_SETTINGS_PATH, content: sharedSettingsText(settings) }),
+  })
+  if (!upstream.ok) return json(response, upstream.status, { error: 'shared_settings_unwritable' })
+  return json(response, 200, { ok: true, settings })
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
@@ -783,6 +804,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       return await handleLogout(request, response)
+    }
+    if (url.pathname === '/api/shared-settings' && (request.method === 'GET' || request.method === 'PUT')) {
+      return await handleSharedSettings(request, response)
     }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)
