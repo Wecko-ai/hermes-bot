@@ -822,6 +822,8 @@ export default function App() {
       return
     }
     setSelected(bot.slug)
+    // Typing right after the click goes to this bot: the field takes the keyboard as soon as it can.
+    setFocusSignal((value) => value + 1)
     if (!DEMO) showProfileFromList(bot.slug)
     updateBot(bot.slug, { unread: 0 })
     if (DEMO) {

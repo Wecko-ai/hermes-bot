@@ -1475,6 +1475,10 @@ try {
   await page.locator('[data-bot=orion]').click()
   await page.locator('.message-assistant').getByText('Réponse Hermes simulée.').first().waitFor()
   if (profilesListCalls !== rosterCallsBeforeSwitch) throw new Error('Cache: un changement de bot a relu le roster.')
+  // Typing right after choosing a bot writes to it, without a second click in the field.
+  await page.keyboard.type('Direct')
+  if (await page.getByRole('textbox', { name: 'Message à Orion' }).inputValue() !== 'Direct') throw new Error('Le champ de saisie ne prend pas le clavier à l’ouverture d’un bot.')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('')
 
   if (await page.locator('.usage-readout').count()) throw new Error('Contexte et tok/s doivent être masqués par défaut.')
   await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()

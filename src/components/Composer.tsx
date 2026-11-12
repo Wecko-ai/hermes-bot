@@ -84,9 +84,16 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const menuOpen = options.length > 0
   const activeOption = Math.min(mentionIndex, Math.max(0, options.length - 1))
 
+  // A focus asked while the field is disabled (the conversation is still loading) waits for it to be enabled.
+  const focusWantedRef = useRef(false)
   useEffect(() => {
-    if (focusSignal > 0) textareaRef.current?.focus()
+    if (focusSignal > 0) focusWantedRef.current = true
   }, [focusSignal])
+  useEffect(() => {
+    if (!focusWantedRef.current || disabled) return
+    focusWantedRef.current = false
+    textareaRef.current?.focus()
+  }, [focusSignal, disabled])
 
   useEffect(() => {
     const textarea = textareaRef.current
