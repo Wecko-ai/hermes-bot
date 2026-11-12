@@ -8,7 +8,7 @@ import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive } from './lib/subagents'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
-import { workLine } from './lib/work-summary'
+import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
@@ -298,9 +298,11 @@ export default function App() {
         setRunning(true)
       }
       if (event.type === 'tool.start') {
-        setActivity(typeof payload.name === 'string' ? payload.name.replaceAll('_', ' ') : i18n.t('app.toolRunning'))
+        setActivity(typeof payload.name === 'string' && payload.name ? toolLabel(payload.name) : i18n.t('app.toolRunning'))
       }
       if (event.type === 'tool.complete') setActivity('')
+      // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
+      if (event.type === 'message.interim') setStreaming('')
       if (event.type === 'message.complete') {
         const status = typeof payload.status === 'string' ? payload.status : 'complete'
         const finalUsage = parseUsage(payload.usage)

@@ -4,7 +4,7 @@ import { Check, Copy, ArrowDown, ChevronDown } from 'lucide-react'
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AgentMessage, Bot, ChatMessage } from '../types'
-import { BotAvatar, statusLabel } from './BotAvatar'
+import { BotAvatar } from './BotAvatar'
 import { LiveAvatar } from './LiveAvatar'
 import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaEmbed'
 import { MailBlock, MailContext } from './MailCard'
@@ -13,6 +13,7 @@ import { splitOpenQuestions } from '../lib/questions'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE } from '../lib/mail'
+import { stepIds } from '../lib/turns'
 import { mayBecomeSilent } from '../lib/hermes'
 import { messageDay, shortTime } from '../lib/time'
 
@@ -289,14 +290,19 @@ interface MessageListProps {
   /** Id of the current turn: the final message reuses it, so the bubble is not remounted. */
   streamKey: string
   running: boolean
+  /** Action of the app in progress (sending, stopping, a tool): first choice for the working line. */
   activity: string
+  /** What the bot is doing, from the turn's events (its last step, its current tool, its task list). */
+  workText: string
+  /** The local chat has no tools and no steps: its reply is streamed in its bubble as it is written. */
+  streamReply?: boolean
   loading: boolean
   onSuggestion: (text: string) => void
   onOpenDocument: (profile: string, media: MediaRef) => void
   onOpenBot: (slug: string) => void
 }
 
-export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, loading, onSuggestion, onOpenDocument, onOpenBot }: MessageListProps) {
+export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onOpenBot }: MessageListProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -305,12 +311,18 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const intentAtRef = useRef(0)
   const [showJump, setShowJump] = useState(false)
   const [viewer, setViewer] = useState<ViewerState | null>(null)
-  const visibleMessages = messages.filter((message) => message.agent || (!message.technical && message.role !== 'system' && message.role !== 'tool'))
+  // One message per turn: the bot's steps (text written before a tool call) fold into the working line,
+  // and its reply is not streamed, it appears whole when the turn ends.
+  const steps = useMemo(() => stepIds(messages, running, bot.slug), [messages, running, bot.slug])
+  const visibleMessages = messages.filter((message) => !steps.has(message.id) && (message.agent || (!message.technical && message.role !== 'system' && message.role !== 'tool')))
   // A `NOREPLY` being written never shows: the bot at work is shown instead.
-  const silentStream = Boolean(streaming) && mayBecomeSilent(streaming)
-  const items = streaming && !silentStream
+  const liveReply = streamReply && Boolean(streaming) && !mayBecomeSilent(streaming)
+  const items = liveReply
     ? [...visibleMessages, { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage]
     : visibleMessages
+  const working = (running || Boolean(streaming)) && !liveReply
+  // A mail card being written is never shown raw: the line says so until the card arrives.
+  const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : workText) || t('messages.working', { name: bot.name })
   const count = items.length
   const profile = bot.slug
   const mailContext = useMemo(() => ({ profile, running, approved: approvedMailIds(messages), onApprove: onSuggestion }), [profile, running, messages, onSuggestion])
@@ -417,11 +429,11 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             </div>
           )
         })}
-        {running && (!streaming || silentStream) && (
-          <div className="working-row">
-            <LiveAvatar bot={{ ...bot, status: bot.status === 'idle' || bot.status === 'done' ? 'working' : bot.status }} size={26} />
-            <div><strong>{bot.name} · {statusLabel(bot.status === 'idle' ? 'working' : bot.status)}</strong>{activity && <span>{activity}</span>}</div>
-            <span className="typing-dots"><i /><i /><i /></span>
+        {working && (
+          <div className="working-row" role="status" aria-live="polite">
+            <LiveAvatar bot={{ ...bot, status: bot.status === 'idle' || bot.status === 'done' ? 'working' : bot.status }} size={24} />
+            {/* A new caption slides in; the sheen runs over whatever is written. */}
+            <span className="working-caption" key={caption} title={caption}>{caption}</span>
           </div>
         )}
         <div ref={endRef} className="messages-end" />

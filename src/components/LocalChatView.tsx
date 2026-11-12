@@ -95,7 +95,7 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
           <button className="plain-icon" aria-label={t('localChat.clear')} disabled={!messages.length && !running} onClick={reset}><RotateCcw size={16} /></button>
         </div>
       </header>
-      <MessageList bot={bot} bots={[]} messages={messages} streaming={streaming} streamKey={streamKey} running={running} activity={activity} loading={false} onSuggestion={suggestion} onOpenDocument={noop} onOpenBot={noop} />
+      <MessageList bot={bot} bots={[]} messages={messages} streaming={streaming} streamKey={streamKey} running={running} activity={activity} workText="" streamReply loading={false} onSuggestion={suggestion} onOpenDocument={noop} onOpenBot={noop} />
       <Composer minimal bot={bot} bots={[]} running={running} disabled={false} focusSignal={focusSignal} onSend={send} onStop={stop} onNotice={onNotice} modelLabel="" onOpenModels={noop} usage={null} showUsage={false} onToggleUsage={noop} />
     </main>
   )

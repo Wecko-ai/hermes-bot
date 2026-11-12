@@ -464,6 +464,17 @@ wss.on('connection', (socket) => {
         at(2600, 'message.complete', { turn_id: 'turn-media', text: final, status: 'complete' })
         return
       }
+      if (frame.params.text === 'Test étapes') {
+        at(30, 'message.start', { turn_id: 'turn-steps' })
+        at(80, 'message.delta', { turn_id: 'turn-steps', segment: 0, offset: 0, text: 'Je regarde le code.' })
+        at(120, 'message.interim', { turn_id: 'turn-steps', segment: 0, text: 'Je regarde le code.', already_streamed: true })
+        at(160, 'tool.start', { tool_id: 'step-tool', name: 'terminal', context: 'npm test' })
+        at(1300, 'tool.complete', { tool_id: 'step-tool', name: 'terminal' })
+        at(3300, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 0, text: 'Les tests ' })
+        at(3600, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 10, text: 'passent.' })
+        at(4000, 'message.complete', { turn_id: 'turn-steps', text: 'Les tests passent.', status: 'complete' })
+        return
+      }
       lastPromptText = frame.params.text
       lastApiText = frame.params.api_text
       if (frame.params.text === 'Test question') {
@@ -1261,7 +1272,7 @@ try {
     await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   }
   await askMail('m1')
-  await page.locator('.mail-note.is-muted').getByText('Brouillon de mail en cours').waitFor({ timeout: 3_000 })
+  await page.locator('.working-caption').getByText('Brouillon de mail en cours').waitFor({ timeout: 3_000 })
   if (await page.locator('.messages-column').getByText('Draft-Id').count()) throw new Error('Le bloc de mail brut est visible.')
   const card = page.locator('.mail-card')
   await card.waitFor({ timeout: 5_000 })
@@ -1321,20 +1332,34 @@ try {
   await page.locator('.mail-note').getByText('2 réponses envoyées').waitFor({ timeout: 3_000 })
   await delay(500)
 
-  // A video started during streaming keeps playing when the message ends: same element, same playback.
+  // One message per turn: while the bot writes, only its working line shows; the video comes with the reply.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test média en direct')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
-  await page.locator('.message.is-streaming video.media-video').waitFor({ timeout: 5_000 })
-  await page.locator('.message.is-streaming video.media-video').evaluate(async (video) => {
-    video.dataset.e2eMarker = 'pendant'
-    video.muted = true
-    video.loop = true
-    await video.play()
-  })
-  await page.locator('.message-assistant:not(.is-streaming)').getByText('Et la suite du texte.').waitFor({ timeout: 6_000 })
-  const liveVideo = await page.locator('.message-assistant:not(.is-streaming) video.media-video').last().evaluate((video) => ({ marker: video.dataset.e2eMarker, paused: video.paused }))
-  if (liveVideo.marker !== 'pendant') throw new Error('La vidéo a été recréée à la fin du streaming.')
-  if (liveVideo.paused) throw new Error('La vidéo s’est arrêtée à la fin du streaming.')
+  await page.locator('.working-row .working-caption').waitFor({ timeout: 5_000 })
+  await delay(600)
+  if (await page.locator('.message.is-streaming').count()) throw new Error('Une réponse en cours d’écriture ne doit plus avoir de bulle.')
+  await page.locator('.message-assistant').getByText('Et la suite du texte.').waitFor({ timeout: 6_000 })
+  if (await page.locator('.message-assistant').filter({ hasText: 'Et la suite du texte.' }).locator('video.media-video').count() !== 1) throw new Error('La vidéo doit arriver une fois, avec la réponse.')
+  await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
+
+  // The bot's steps fold into the working line: its caption follows them, and only the reply stays in the thread.
+  const stepsBefore = await page.locator('.message-assistant').count()
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test étapes')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await page.locator('.working-caption').getByText('Lance une commande').waitFor({ timeout: 3_000 })
+  await page.locator('.working-row .live-avatar.is-working').waitFor({ timeout: 2_000 })
+  if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('Une étape du bot est restée dans le fil.')
+  await page.locator('.working-caption').getByText('Je regarde le code.').waitFor({ timeout: 3_000 })
+  await page.locator('.working-row').screenshot({ path: `${SCREENSHOTS}working-line.png` })
+  await page.locator('.message-assistant').getByText('Les tests passent.').waitFor({ timeout: 5_000 })
+  await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
+  if (await page.locator('.message-assistant').count() !== stepsBefore + 1) throw new Error('Un tour avec étapes doit laisser un seul message du bot.')
+  if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('L’étape est réapparue à la fin du tour.')
+  if (await page.locator('.details-panel').isVisible()) {
+    await page.locator('.details-panel').getByRole('tab', { name: /Activité/ }).click()
+    await page.locator('.details-panel').screenshot({ path: `${SCREENSHOTS}details-activity.png` })
+    await page.locator('.details-panel').getByRole('tab', { name: 'Routines' }).click()
+  }
 
   // A NOREPLY typed letter by letter never appears in the thread, even during streaming.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test silence')
@@ -2062,7 +2087,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo qui continue après le streaming), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

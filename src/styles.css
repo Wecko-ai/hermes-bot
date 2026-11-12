@@ -207,10 +207,24 @@ a { color: inherit; }
 .system-message { align-self: center; max-width: 85%; margin: 10px 0 18px; color: var(--text-tertiary); font-size: 10px; text-align: center; }
 .stream-caret { display: inline-block; width: 5px; height: 14px; margin-left: 3px; vertical-align: -2px; border-radius: 2px; background: var(--text-tertiary); animation: caret-blink 0.9s step-end infinite; }
 @keyframes caret-blink { 50% { opacity: 0; } }
-.working-row { display: flex; align-items: center; gap: 9px; margin: 3px 0 18px; color: var(--text-secondary); }
-.working-row > div { display: flex; flex-direction: column; }
-.working-row strong { font-size: 11px; font-weight: 550; }
-.working-row span { color: var(--text-tertiary); font-size: 10px; }
+/* The bot at work: its live avatar and one line, swept by a sheen, that says what it is doing. */
+.working-row { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 18px; padding-left: 2px; }
+.working-row > .live-avatar, .working-row > .bot-avatar { flex: none; }
+/* Muted text with a lighter band (30% of the line) crossing it every 1.6 s: the image is three lines wide,
+   so the band starts and ends outside the text. */
+.working-caption {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14.5px; line-height: 22px; color: var(--text-tertiary);
+  background: linear-gradient(90deg, var(--text-tertiary) 45%, var(--text) 50%, var(--text-tertiary) 55%) 100% 0 / 300% 100% no-repeat;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  animation: working-sheen 1.6s linear infinite, working-caption-in 220ms var(--ease-out) both;
+}
+@keyframes working-sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes working-caption-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .working-caption { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+}
+:root[data-motion='reduce'] .working-caption { animation: none; background: none; -webkit-text-fill-color: currentColor; }
 .typing-dots { display: inline-flex; gap: 3px; margin-left: 2px; }
 .typing-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--text-tertiary); animation: typing 1.2s infinite; }
 .typing-dots i:nth-child(2) { animation-delay: 140ms; }
@@ -620,8 +634,7 @@ body::before {
 .message.is-entering { animation: message-in 420ms var(--spring) both; }
 .message.is-streaming { animation: message-in 320ms var(--ease-out) both; box-shadow: var(--glass-highlight), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 26px -18px color-mix(in srgb, var(--accent) 80%, transparent); }
 @keyframes message-in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
-.working-row { width: fit-content; padding: 6px 13px 6px 7px; border-radius: 999px; background: var(--glass-strong); box-shadow: var(--glass-highlight), var(--glass-shadow); animation: message-in 320ms var(--ease-out) both; }
-.working-row strong { color: var(--text); }
+.working-row { animation: message-in 320ms var(--ease-out) both; }
 .jump-latest { border: 0; background: var(--glass-strong); box-shadow: var(--glass-highlight), var(--glass-shadow); animation: jump-in 260ms var(--spring) both; }
 @keyframes jump-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.96); } }
 .message-content code { background: color-mix(in srgb, var(--text) 7%, transparent); }
@@ -1048,3 +1061,45 @@ button.agent-note-name:hover { background: var(--hover); }
 .login-card { border-radius: 16px; }
 .logo-mark { display: block; width: 46px; height: 46px; }
 .settings-select { min-width: 180px; max-width: 260px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 13px; }
+
+/* Readable controls: the composer bar and the details panel at a size that reads at a glance,
+   with the same glass. These rules come last on purpose: they replace the smaller ones above. */
+.composer-hint { gap: 8px; padding: 9px 4px 0; font-size: 12px; }
+.mode-switch, .delivery-switch { height: 30px; padding: 2px; gap: 2px; border-radius: 11px; background: color-mix(in srgb, var(--text) 6%, transparent); box-shadow: inset 0 0 0 .5px var(--glass-line); }
+.delivery-switch { margin-left: 0; }
+.mode-switch button, .delivery-switch button { height: 26px; border-radius: 9px; }
+.mode-switch button { gap: 6px; padding: 0 11px; font-size: 11.5px; font-weight: 650; letter-spacing: .05em; }
+.mode-switch i { width: 7px; height: 7px; }
+.mode-switch .is-active i { box-shadow: 0 0 0 3px color-mix(in srgb, var(--mode) 22%, transparent); }
+.delivery-switch button { padding: 0 12px; font-size: 12.5px; font-weight: 600; }
+.mode-switch button.is-active, .delivery-switch button.is-active { box-shadow: var(--glass-highlight), 0 1px 3px rgb(0 0 0 / 12%); }
+.composer-hint-keys { margin-left: 4px; color: var(--text-tertiary); font-size: 12px; }
+.composer-status { gap: 6px; }
+.usage-readout { color: var(--text-secondary); font-size: 12px; }
+.usage-toggle, .model-chip { height: 30px; gap: 5px; padding: 0 10px; border-radius: 10px; color: var(--text-secondary); font-size: 12.5px; font-weight: 550; }
+.usage-toggle { width: 30px; justify-content: center; padding: 0; }
+.model-chip { background: color-mix(in srgb, var(--text) 6%, transparent); box-shadow: inset 0 0 0 .5px var(--glass-line); }
+.usage-toggle:hover, .model-chip:hover, .usage-toggle.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text); }
+
+.details-tabs { gap: 3px; margin-top: 20px; padding-bottom: 12px; }
+.details-tabs button { gap: 6px; padding: 6px 8px; border-radius: 9px; font-size: 12.5px; font-weight: 500; }
+.details-tabs button span { min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.details-section-heading { margin-bottom: 12px; color: var(--text); font-size: 14px; font-weight: 600; }
+.details-empty { font-size: 13px; line-height: 19px; }
+/* Activity: one card per entry, its time in a pill that never wraps. */
+.activity-row { display: flex; flex-direction: column; gap: 7px; margin-bottom: 8px; padding: 11px 12px; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--text) 4.5%, transparent); box-shadow: inset 0 0 0 .5px var(--glass-line); }
+.activity-row > span { align-self: flex-start; padding: 2px 8px; border-radius: 7px; background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text-secondary); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
+.activity-row p { color: color-mix(in srgb, var(--text) 86%, transparent); font-size: 12px; line-height: 1.6; max-height: 18em; }
+/* A step the bot wrote before a tool call is prose, not a log line. */
+.activity-row.is-step p { font-family: inherit; font-size: 13.5px; line-height: 1.55; color: var(--text); }
+@media (max-width: 800px) {
+  .details-tabs button { padding: 6px 7px; font-size: 12px; }
+}
+/* The bar never runs under the details panel: the hint only takes the room left, and when the controls
+   themselves do not fit, the model and usage controls go to a second line. */
+.composer-hint { flex-wrap: wrap; row-gap: 6px; }
+.composer-hint-keys { flex: 1 1 0; }
+/* Details tabs on one line: they scroll sideways when the panel is narrower than their names. */
+.details-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-right: 22px; scroll-padding-inline: 12px 26px; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent); }
+.details-tabs::-webkit-scrollbar { display: none; }
+.details-tabs button { flex: none; }

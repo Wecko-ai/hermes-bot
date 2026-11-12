@@ -24,6 +24,7 @@
     "chooseModel": "Choose the model"
   },
   "messages": {
+    "working": "{{name}} is working…",
     "citedFile_one": "Cited file",
     "citedFile_other": "{{count}} cited files",
     "imageFallback": "Image",

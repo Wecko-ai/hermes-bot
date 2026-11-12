@@ -24,6 +24,7 @@
     "chooseModel": "Choisir le modèle"
   },
   "messages": {
+    "working": "{{name}} travaille…",
     "citedFile_one": "Fichier cité",
     "citedFile_other": "{{count}} fichiers cités",
     "imageFallback": "Image",

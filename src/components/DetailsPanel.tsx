@@ -10,6 +10,7 @@ import { UsageTab, type UsageDetails } from './UsageTab'
 import { dateTime, relativeTime, shortTime } from '../lib/time'
 import { conversationMedia, type MediaRef } from '../lib/media'
 import { workLine, type WorkSummary } from '../lib/work-summary'
+import { stepIds } from '../lib/turns'
 import { backgroundSummary, effectiveStatus } from '../lib/background'
 
 function cleanRoutineName(name: string, bot: Bot) {
@@ -47,8 +48,10 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
   // The Usage tab stays open from one bot to the next: that is where they get compared.
   useEffect(() => setTab((current) => current === 'usage' ? 'usage' : 'routines'), [bot.slug])
   const active = routines.filter((routine) => routine.enabled).length
-  // Messages between bots live in the thread (“Orion messaged Iris”), no longer in Activity.
-  const activity = messages.filter((message) => !message.agent && (message.technical || message.role === 'system' || message.role === 'tool')).slice(-30).reverse()
+  // Messages between bots live in the thread (“Orion messaged Iris”), no longer in Activity. The bot's
+  // steps, folded out of the thread, are kept here.
+  const steps = useMemo(() => stepIds(messages, running, bot.slug), [messages, running, bot.slug])
+  const activity = messages.filter((message) => steps.has(message.id) || (!message.agent && (message.technical || message.role === 'system' || message.role === 'tool'))).slice(-30).reverse()
   const activeDocument = documents.find((document) => document.id === railTab)
   const media = useMemo(() => conversationMedia(messages), [messages])
   const [viewer, setViewer] = useState<ViewerState | null>(null)
@@ -90,11 +93,11 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
           </section>
         )}
         <div className="details-tabs" role="tablist" aria-label={t('details.infoTabs')}>
-          <button role="tab" aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={() => setTab('routines')}>{t('details.tabs.routines')}</button>
-          <button role="tab" aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={() => setTab('activity')}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
-          <button role="tab" aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={() => setTab('media')}>{t('details.tabs.media')}</button>
-          <button role="tab" aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={() => setTab('usage')}>{t('details.tabs.usage')}</button>
-          <button role="tab" aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={() => setTab('about')}>{t('details.tabs.about')}</button>
+          <button role="tab" aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={(event) => { setTab('routines'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.routines')}</button>
+          <button role="tab" aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={(event) => { setTab('activity'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
+          <button role="tab" aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={(event) => { setTab('media'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.media')}</button>
+          <button role="tab" aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={(event) => { setTab('usage'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.usage')}</button>
+          <button role="tab" aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={(event) => { setTab('about'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.about')}</button>
         </div>
 
         {tab === 'routines' && <section className="details-section">
@@ -119,7 +122,7 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
           <div className="details-section-heading"><span>{t('details.activityHeading')}</span><Activity size={14} /></div>
           {activity.length === 0 && <p className="details-empty">{t('details.activityEmpty')}</p>}
           {activity.map((message) => (
-            <article className="activity-row" key={message.id}>
+            <article className={`activity-row ${steps.has(message.id) ? 'is-step' : ''}`} key={message.id}>
               <span>{shortTime(message.createdAt)}</span>
               <p>{message.content}</p>
             </article>

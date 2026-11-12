@@ -158,6 +158,7 @@ export function ChatView(props: ChatViewProps) {
         streamKey={props.streamKey}
         running={props.running}
         activity={props.activity}
+        workText={props.workText}
         loading={props.loading}
         onSuggestion={(text) => { void props.onSend(text, []) }}
         onOpenDocument={props.onOpenDocument}
