@@ -88,6 +88,12 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',
+    // Extra addresses the window may be opened from, through a private proxy such as `tailscale serve`.
+    // The server still listens on 127.0.0.1. Such a window signs in with the Hermes password only.
+    remoteOrigins: [...new Set([
+      ...String(env.HERMESBOT_REMOTE_ORIGINS || '').split(','),
+      ...(Array.isArray(raw.remoteOrigins) ? raw.remoteOrigins : []),
+    ].map((value) => origin(value)).filter(Boolean))].slice(0, 8),
     ollamaOrigin: origin(env.OLLAMA_ORIGIN) || origin(raw.ollamaOrigin) || 'http://127.0.0.1:11434',
     localChat: {
       model: text(env.HERMESBOT_LOCAL_MODEL) || text(localChat.model),
