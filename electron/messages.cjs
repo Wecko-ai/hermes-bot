@@ -9,7 +9,7 @@ const MESSAGES = {
     forbiddenOrigin: () => 'Origin refused.',
     dictationConsent: () => ({
       message: 'Use the microphone for dictation in this window?',
-      detail: 'This window shows HermesBot as served by another copy of HermesBot on this Mac, under another user account. Allow it to turn on the microphone when you click the dictation button? You will not be asked again.',
+      detail: 'This window shows HermesBot as served by another copy of HermesBot on this Mac, under another user account. Allow it to turn on the microphone when you click the dictation button? This holds until you quit HermesBot.',
       buttons: ['Allow', 'Don’t Allow'],
     }),
   },
@@ -21,7 +21,7 @@ const MESSAGES = {
     forbiddenOrigin: () => 'Origine refusée.',
     dictationConsent: () => ({
       message: 'Utiliser le micro pour la dictée dans cette fenêtre ?',
-      detail: 'Cette fenêtre affiche HermesBot servi par une autre copie de HermesBot sur ce Mac, sous un autre compte. L’autoriser à allumer le micro quand tu cliques sur le bouton de dictée ? La question ne sera plus posée.',
+      detail: 'Cette fenêtre affiche HermesBot servi par une autre copie de HermesBot sur ce Mac, sous un autre compte. L’autoriser à allumer le micro quand tu cliques sur le bouton de dictée ? Valable jusqu’à ce que tu quittes HermesBot.',
       buttons: ['Autoriser', 'Ne pas autoriser'],
     }),
   },

@@ -5,7 +5,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 ## Unreleased
 
 - Dictation that works in the desktop app: the microphone button uses the speech recognition of macOS through a small native helper (on the device when the language allows it, never through HermesBot's server). While it listens, a pill shows a stop button, a timer and the microphone level; Stop keeps the text to edit, Send sends at once. The old button relied on a browser API that cannot work in Electron.
-- The microphone can only be opened by a real click or key press in the window, in front, for two minutes at most; a page served by another copy of the app has to be allowed once.
+- The microphone can only be opened by a real click (or Enter) in the window, in front, for two minutes at most, with a badge on the Dock icon while it is open; a page served by another copy of the app has to be allowed at each launch.
 - Send button in black and white, flat; the stop-the-turn button shows a music-style pause.
 - Loading screen: the logo beats like a heart with "Loading…" under it, instead of a progress bar; the logo no longer shows a light rim.
 - New bot: the "+" at the top of the roster creates a bot (name, colour, shape). Its chat opens at once and the bot introduces itself and asks for its role.

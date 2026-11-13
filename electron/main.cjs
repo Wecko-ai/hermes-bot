@@ -207,6 +207,8 @@ const dictation = createDictation({
   send: (event) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hermes-bot:dictation-event', event)
   },
+  // While the microphone is open, a mark on the Dock icon that the page cannot hide (macOS adds its own indicator).
+  onMicrophone: (open) => app.dock?.setBadge(open ? '●' : ''),
 })
 
 async function createWindow() {
@@ -257,11 +259,12 @@ async function createWindow() {
     if (localKey && mainWindow && details.webContentsId === mainWindow.webContents.id) headers['X-HermesBot-Local-Key'] = localKey
     callback({ requestHeaders: headers })
   })
-  // Dictation: real presses of the user in this window, seen here, are what may open a session; a page cannot
-  // fake them. The microphone closes as soon as the window is no longer in front (the page does too, but the
-  // main process does not count on it): `stop` turns it off at once and lets the words already said through.
-  mainWindow.webContents.on('before-input-event', (_event, input) => { if (input.type === 'keyDown') dictationGate?.noteGesture() })
-  mainWindow.webContents.on('before-mouse-event', (_event, mouse) => { if (mouse.type === 'mouseDown') dictationGate?.noteGesture() })
+  // Dictation: a deliberate press of the user in this window (a click, Enter or Space), seen here, is what may
+  // open a session; a page cannot fake it, and typing does not count (dictation-gate.cjs). The microphone closes
+  // as soon as the window is no longer in front (the page does too, but the main process does not count on it):
+  // `stop` turns it off at once and lets the words already said through.
+  mainWindow.webContents.on('before-input-event', (_event, input) => dictationGate?.noteInput(input))
+  mainWindow.webContents.on('before-mouse-event', (_event, mouse) => dictationGate?.noteInput(mouse))
   for (const name of ['blur', 'hide', 'minimize']) {
     mainWindow.on(name, () => {
       dictationGate?.disarm()
@@ -300,26 +303,13 @@ const fromWindow = (event) => Boolean(mainWindow)
   && Boolean(event.senderFrame) && !event.senderFrame.parent
   && event.senderFrame.url.startsWith(`${ORIGIN}/`)
 
-// In client mode, the user's agreement to the microphone, kept in this process's own data folder.
-const consentFile = () => path.join(app.getPath('userData'), 'dictation-consent.json')
-function readConsent() {
-  try {
-    return JSON.parse(fs.readFileSync(consentFile(), 'utf8')).allowed === true ? 'granted' : undefined
-  } catch {
-    return undefined
-  }
-}
+// In client mode, the user's agreement to the microphone, for this launch only: nothing is kept on disk.
 let consentAsked = null
 async function askConsent() {
   const copy = text().dictationConsent()
   const options = { type: 'question', message: copy.message, detail: copy.detail, buttons: copy.buttons, defaultId: 1, cancelId: 1 }
   const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
-  const allowed = response === 0
-  if (allowed) {
-    fs.mkdirSync(path.dirname(consentFile()), { recursive: true })
-    fs.writeFileSync(consentFile(), JSON.stringify({ allowed: true }), { mode: 0o600 })
-  }
-  return allowed
+  return response === 0
 }
 
 ipcMain.handle('hermes-bot:dictation-prepare', async (event, localeId) => {
@@ -341,7 +331,7 @@ ipcMain.handle('hermes-bot:dictation-start', (event, options) => {
   if (!fromWindow(event) || !dictationGate) return false
   const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
   if (!dictationGate.takeStart({ focused: mainWindow.isFocused(), visible })) return false
-  return dictation.start(options)
+  return dictation.start(options, { maxListenMs: dictationGate.maxListenMs() })
 })
 // Stopping is always safe: it only turns the microphone off.
 ipcMain.handle('hermes-bot:dictation-stop', (event) => { if (fromWindow(event)) dictation.stop() })
@@ -355,7 +345,9 @@ app.whenReady().then(async () => {
     await ensureHermes()
     await startServer()
   }
-  dictationGate = createDictationGate({ clientMode, consent: clientMode ? readConsent() : undefined })
+  dictationGate = createDictationGate({ clientMode })
+  // An agreement an earlier build kept on disk no longer counts: gone.
+  fs.rmSync(path.join(app.getPath('userData'), 'dictation-consent.json'), { force: true })
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

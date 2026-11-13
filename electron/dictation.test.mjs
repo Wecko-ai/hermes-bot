@@ -30,9 +30,11 @@ function engine({ helperPresent = true } = {}) {
   const children = []
   const calls = []
   const events = []
+  const microphone = []
   const dictation = createDictation({
     helperPath: '/helper',
     send: (event) => events.push(event),
+    onMicrophone: (open) => microphone.push(open),
     exists: () => helperPresent,
     spawnImpl: (file, args, options) => {
       calls.push({ file, args, options })
@@ -41,7 +43,7 @@ function engine({ helperPresent = true } = {}) {
       return child
     },
   })
-  return { dictation, children, calls, events }
+  return { dictation, children, calls, events, microphone }
 }
 
 describe('dictation arguments', () => {
@@ -58,6 +60,9 @@ describe('dictation arguments', () => {
     expect(listenArguments({ localeId: 'en-US', onDevice: 'yes', listenForMs: 1e9, pauseForMs: -5 }))
       .toEqual(['listen', '--locale', 'en-US', '--listen-for-ms', '120000', '--pause-for-ms', '500'])
     expect(listenArguments({ localeId: 'en-US', listenForMs: Number.NaN })).toContain('60000')
+    // Client mode allows one minute.
+    expect(listenArguments({ localeId: 'en-US', listenForMs: 120_000 }, 60_000)).toContain('60000')
+    expect(listenArguments({ localeId: 'en-US', listenForMs: 30_000 }, 60_000)).toContain('30000')
     expect(listenArguments({ localeId: 'fr FR' })).toBeNull()
     expect(listenArguments(null)).toBeNull()
   })
@@ -224,5 +229,38 @@ describe('dictation engine', () => {
     expect(await second).toBe(true)
     children[1].say({ type: 'words', text: 'new', final: false })
     expect(events).toEqual([{ type: 'words', text: 'new', final: false }])
+  })
+  it('the microphone sign: on while listening, off at the end of audio, at done, error, stop, cancel and exit', async () => {
+    const run = async (end) => {
+      const setup = engine()
+      const started = setup.dictation.start({ localeId: 'fr-FR' })
+      setup.children[0].say({ type: 'listening' })
+      await started
+      expect(setup.microphone).toEqual([true])
+      end(setup)
+      return setup.microphone
+    }
+    expect(await run(({ children }) => children[0].say({ type: 'audioEnd' }))).toEqual([true, false])
+    expect(await run(({ children }) => children[0].say({ type: 'error', code: 'error_network' }))).toEqual([true, false])
+    expect(await run(({ children }) => { children[0].say({ type: 'words', text: 'a', final: true }); children[0].say({ type: 'done' }) })).toEqual([true, false])
+    expect(await run(({ dictation }) => dictation.stop())).toEqual([true, false])
+    expect(await run(({ dictation }) => dictation.cancel())).toEqual([true, false])
+    expect(await run(({ children }) => children[0].exit(9))).toEqual([true, false])
+  })
+
+  it('a stop asked before the microphone runs never shows the sign', async () => {
+    const { dictation, children, microphone } = engine()
+    const started = dictation.start({ localeId: 'fr-FR' })
+    dictation.stop()
+    children[0].say({ type: 'listening' })
+    await started
+    expect(microphone).toEqual([])
+  })
+
+  it('caps the session at what the caller allows', async () => {
+    const { dictation, calls } = engine()
+    void dictation.start({ localeId: 'fr-FR', listenForMs: 120_000 }, { maxListenMs: 60_000 })
+    expect(calls[0].args).toContain('60000')
+    expect(calls[0].args).not.toContain('120000')
   })
 })

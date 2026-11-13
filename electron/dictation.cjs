@@ -33,12 +33,13 @@ function validLocale(value) {
 const clamp = (value, min, max, fallback) => (typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(Math.round(value), min), max) : fallback)
 
 /** The helper's arguments for a session, or null when the options are not acceptable. */
-function listenArguments(options) {
+function listenArguments(options, maxListenMs = 120_000) {
   if (!options || typeof options !== 'object') return null
   const locale = validLocale(options.localeId)
   if (!locale) return null
-  // Two minutes at most, whatever the page asks (it asks one).
-  const listenFor = clamp(options.listenForMs, 1_000, 120_000, 60_000)
+  // Never longer than the caller allows (two minutes, one in client mode), whatever the page asks.
+  const longest = clamp(maxListenMs, 1_000, 120_000, 120_000)
+  const listenFor = clamp(options.listenForMs, 1_000, longest, Math.min(60_000, longest))
   const pauseFor = clamp(options.pauseForMs, 500, 60_000, 4_500)
   return [
     'listen', '--locale', locale,
@@ -117,11 +118,19 @@ function lineReader(onLine) {
  * The dictation engine of the main process.
  * - helperPath: the helper binary; absent → every `prepare` answers "unavailable".
  * - send(event): delivers an event to the page.
+ * - onMicrophone(open): called when the microphone opens and when it closes, whatever the way (a sign the page
+ *   cannot hide: main.cjs puts a mark on the Dock icon).
  */
-function createDictation({ helperPath, send, spawnImpl = spawn, exists = (file) => fs.existsSync(file) }) {
+function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl = spawn, exists = (file) => fs.existsSync(file) }) {
   let session = null
   let preparing = null
   let sessionCount = 0
+  let microphone = false
+  const setMicrophone = (open) => {
+    if (open === microphone) return
+    microphone = open
+    onMicrophone(open)
+  }
 
   const available = () => Boolean(helperPath) && exists(helperPath)
 
@@ -160,14 +169,17 @@ function createDictation({ helperPath, send, spawnImpl = spawn, exists = (file) 
   }
 
   function end(current) {
-    if (session === current) session = null
+    if (session === current) {
+      session = null
+      setMicrophone(false)
+    }
     clearTimeout(current.startTimer)
     clearTimeout(current.limitTimer)
   }
 
   /** Starts a session. Resolves true once the microphone runs, false otherwise (an error event says why). */
-  function start(options) {
-    const args = listenArguments(options)
+  function start(options, { maxListenMs } = {}) {
+    const args = listenArguments(options, maxListenMs)
     if (!args || !available()) return Promise.resolve(false)
     if (session) cancel()
     const listenFor = Number(args[args.indexOf('--listen-for-ms') + 1])
@@ -191,9 +203,11 @@ function createDictation({ helperPath, send, spawnImpl = spawn, exists = (file) 
         if (event.type === 'listening') {
           current.started = true
           clearTimeout(current.startTimer)
+          if (session === current && !current.stopRequested) setMicrophone(true)
           settle(true)
           return
         }
+        if (event.type === 'audioEnd' && session === current) setMicrophone(false)
         if (event.type === 'done' || event.type === 'error') {
           current.finished = true
           end(current)
@@ -229,7 +243,11 @@ function createDictation({ helperPath, send, spawnImpl = spawn, exists = (file) 
   /** Closes the microphone; the final result follows as events. */
   function stop() {
     const current = session
-    if (current && !current.cancelled && current.child.stdin.writable) current.child.stdin.write('stop\n')
+    if (!current || current.cancelled) return
+    // The helper closes the microphone on this line; the sign goes off with the request.
+    current.stopRequested = true
+    setMicrophone(false)
+    if (current.child.stdin.writable) current.child.stdin.write('stop\n')
   }
 
   /** Abandons the session: nothing more reaches the page, and the helper is gone shortly after. */
