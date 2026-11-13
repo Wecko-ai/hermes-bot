@@ -14,7 +14,6 @@ import type { PendingPrompt } from '../lib/hermes'
 import { SubagentsPanel } from './SubagentsPanel'
 import type { SubagentRow } from '../lib/subagents'
 import { backgroundSummary, type SubagentTail } from '../lib/background'
-import { locale } from '../i18n'
 
 interface ChatViewProps {
   /** The local chat is on screen: this view stays mounted, to keep its draft and position. */
@@ -68,6 +67,10 @@ export function ChatView(props: ChatViewProps) {
   const detail = phase === 'working' ? props.workText || props.activity : ''
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
+  // Matches counted by the message list, the current one (-1 before the first Enter) and a counter that makes each Enter scroll.
+  const [matchCount, setMatchCount] = useState(0)
+  const [position, setPosition] = useState(-1)
+  const [jump, setJump] = useState(0)
   const composerRef = useRef<ComposerHandle>(null)
   const [dragging, setDragging] = useState(false)
   // Moving from one child to another fires enter and leave: only the count tells whether we left the zone.
@@ -97,9 +100,14 @@ export function ChatView(props: ChatViewProps) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
-  const visibleMessages = query.trim()
-    ? props.messages.filter((message) => message.content.toLocaleLowerCase(locale()).includes(query.trim().toLocaleLowerCase(locale())))
-    : props.messages
+  const closeSearch = () => { setSearchOpen(false); setQuery(''); setPosition(-1) }
+  // Enter goes to the most recent match, then to older ones and wraps; Shift+Enter goes the other way.
+  const step = (older: boolean) => {
+    if (!matchCount) return
+    setPosition((current) => (current < 0 ? (older ? matchCount - 1 : 0) : (current + (older ? -1 : 1) + matchCount) % matchCount))
+    setJump((value) => value + 1)
+  }
+  const counter = !query.trim() ? '' : matchCount === 0 ? t('chat.noResults') : position >= 0 ? t('chat.position', { current: position + 1, total: matchCount }) : t('chat.results', { count: matchCount })
   return (
     <main
       className="chat-panel"
@@ -138,22 +146,29 @@ export function ChatView(props: ChatViewProps) {
           </div>
         </div>
         <div className="chat-header-actions">
-          <button className={`plain-icon chat-search-button ${searchOpen ? 'is-active' : ''}`} aria-label={t('chat.searchConversation')} onClick={() => { setSearchOpen((value) => !value); setQuery('') }}><Search size={17} /></button>
+          <button className={`plain-icon chat-search-button ${searchOpen ? 'is-active' : ''}`} aria-label={t('chat.searchConversation')} onClick={() => { if (searchOpen) closeSearch(); else setSearchOpen(true) }}><Search size={17} /></button>
           <button className={`plain-icon ${props.detailsOpen ? 'is-active' : ''}`} aria-label={t('chat.showDetails')} onClick={props.onToggleDetails}><PanelRight size={18} /></button>
         </div>
       </header>
       {searchOpen && (
         <div className="chat-search-bar">
           <Search size={15} />
-          <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('chat.searchPlaceholder')} aria-label={t('chat.searchLabel')} autoFocus />
-          <span>{query ? t('chat.results', { count: visibleMessages.length }) : ''}</span>
-          <button className="plain-icon" aria-label={t('chat.closeSearch')} onClick={() => { setSearchOpen(false); setQuery('') }}><X size={15} /></button>
+          <input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setPosition(-1) }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') { event.preventDefault(); step(!event.shiftKey) }
+              else if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
+            }}
+            placeholder={t('chat.searchPlaceholder')} aria-label={t('chat.searchLabel')} autoFocus />
+          <span className="chat-search-count" role="status" aria-live="polite">{counter}</span>
+          <button className="plain-icon" aria-label={t('chat.closeSearch')} onClick={closeSearch}><X size={15} /></button>
         </div>
       )}
       <MessageList
         bot={waiting ? liveBot : bot}
         bots={props.bots}
-        messages={visibleMessages}
+        messages={props.messages}
+        search={{ query, position, jump }}
+        onSearchCount={(count) => { setMatchCount(count); setPosition((current) => (current >= count ? -1 : current)) }}
         streaming={props.streaming}
         streamKey={props.streamKey}
         running={props.running}

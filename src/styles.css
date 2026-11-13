@@ -154,14 +154,13 @@ a { color: inherit; }
 .chat-header-actions { margin-left: auto; display: flex; gap: 2px; -webkit-app-region: no-drag; }
 .chat-search-bar { height: 42px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 13px; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--text-tertiary); }
 .chat-search-bar input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
-.chat-search-bar > span { flex: none; font-size: 10px; }
+.chat-search-bar > span { flex: none; font-size: 12px; min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; }
 .mobile-menu { display: none; -webkit-app-region: no-drag; }
 .messages-viewport { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .messages-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .messages-column { width: min(100%, 880px); min-height: 100%; margin: 0 auto; padding: 24px 16px 12px; display: flex; flex-direction: column; }
 .messages-end { height: 1px; flex: none; }
-.jump-latest { position: absolute; left: 50%; bottom: 12px; z-index: 4; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px 11px; border: .5px solid var(--border); border-radius: 999px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--text-secondary); font-size: 11px; }
-.jump-latest:hover { color: var(--text); background: var(--surface-soft); }
+.jump-latest { position: absolute; left: 50%; bottom: 14px; z-index: 4; transform: translateX(-50%); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--text); }
 .day-separator { margin: 22px 0 18px; color: var(--text-tertiary); font-size: 10px; text-align: center; text-transform: capitalize; }
 .message { display: flex; flex-direction: column; margin: 0 0 10px; position: relative; }
 .message-content { font-size: 14.5px; line-height: 23px; overflow-wrap: anywhere; }
@@ -602,7 +601,6 @@ body::before {
 .live-avatar-motion { display: block; width: 122%; height: 122%; max-width: none; margin: -11%; object-fit: contain; pointer-events: none; user-select: none; }
 :root[data-theme='dark'] .live-avatar-motion.is-contrast { filter: invert(1) hue-rotate(180deg); }
 .live-avatar-halo { position: absolute; inset: -18%; z-index: 0; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--avatar-glow, var(--avatar-color)) 50%, transparent), transparent); animation: halo-breathe 1.9s ease-in-out infinite; }
-.live-avatar.is-working::after { content: ''; position: absolute; inset: -4px; z-index: 2; border-radius: 50%; padding: 1.5px; pointer-events: none; background: conic-gradient(transparent 0 52%, color-mix(in srgb, var(--avatar-glow, var(--avatar-color)) 85%, white) 78%, transparent 96%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: ring-spin 1.5s linear infinite; }
 .live-avatar.is-done { animation: avatar-pop 560ms var(--spring); }
 /* Standing by: a still, thin ring. Never animated: the bot has no turn. */
 .live-avatar.is-standby::after { content: ''; position: absolute; inset: -3.5px; z-index: 2; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--standby) 78%, transparent), 0 0 0 4px color-mix(in srgb, var(--standby) 14%, transparent); }
@@ -635,7 +633,10 @@ body::before {
 .message.is-streaming { animation: message-in 320ms var(--ease-out) both; box-shadow: var(--glass-highlight), 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent), 0 10px 26px -18px color-mix(in srgb, var(--accent) 80%, transparent); }
 @keyframes message-in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
 .working-row { animation: message-in 320ms var(--ease-out) both; }
-.jump-latest { border: 0; background: var(--glass-strong); box-shadow: var(--glass-highlight), var(--glass-shadow); animation: jump-in 260ms var(--spring) both; }
+.jump-latest { background: var(--glass-strong); box-shadow: var(--glass-highlight), var(--glass-shadow), 0 0 0 1.5px color-mix(in srgb, var(--text) 24%, transparent); animation: jump-in 260ms var(--spring) both; transition: transform 160ms var(--spring), box-shadow 160ms; }
+.jump-latest:hover { box-shadow: var(--glass-highlight), var(--glass-shadow), 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent); }
+.jump-latest:active { transform: translateX(-50%) scale(.92); }
+@media (prefers-reduced-motion: reduce) { .jump-latest { animation: none; transition: none; } }
 @keyframes jump-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.96); } }
 .message-content code { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .message-content pre { background: #12222a; box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%); }
@@ -1099,7 +1100,23 @@ button.agent-note-name:hover { background: var(--hover); }
    themselves do not fit, the model and usage controls go to a second line. */
 .composer-hint { flex-wrap: wrap; row-gap: 6px; }
 .composer-hint-keys { flex: 1 1 0; }
+/* Chat guide in Settings: key chips on the left, one short line each. */
+.chat-guide { margin-top: 16px; padding-top: 14px; border-top: .5px solid var(--glass-line); }
+.chat-guide h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.chat-guide dl { margin: 0; }
+.chat-guide-item { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; align-items: center; gap: 12px; min-height: 30px; padding: 3px 0; }
+.chat-guide dt { display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-guide dd { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 16px; }
+.chat-guide kbd { font-family: inherit; min-width: 22px; padding: 2px 7px; border: .5px solid var(--glass-line); border-radius: 7px; background: var(--glass-strong); box-shadow: inset 0 1px 0 var(--glass-highlight); color: var(--text); font-size: 12px; font-weight: 560; line-height: 16px; text-align: center; }
+@media (max-width: 640px) { .chat-guide-item { grid-template-columns: 1fr; gap: 3px; } }
 /* Details tabs on one line: they scroll sideways when the panel is narrower than their names. */
 .details-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-right: 22px; scroll-padding-inline: 12px 26px; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent); }
 .details-tabs::-webkit-scrollbar { display: none; }
 .details-tabs button { flex: none; }
+
+/* Find in the conversation: Custom Highlight API (no DOM change), with a flash fallback. */
+::highlight(search-hit) { background-color: rgb(255 204 0 / 40%); color: inherit; }
+::highlight(search-current) { background-color: rgb(255 140 0 / 85%); color: #1a1200; }
+.message.search-flash .message-content { animation: search-flash 1.3s var(--ease-out) both; }
+@keyframes search-flash { 0%, 60% { background: rgb(255 204 0 / 30%); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .message.search-flash .message-content { animation: none; background: rgb(255 204 0 / 30%); } }

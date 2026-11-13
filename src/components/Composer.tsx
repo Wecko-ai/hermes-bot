@@ -336,7 +336,6 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           </div>
         )}
         {busy && <span className="composer-hint-keys" aria-live="polite">{delivery === 'wait' ? t('composer.hintWait') : delivery === 'queue' ? t('composer.hintQueue', { name: bot.name }) : t('composer.hintPriority', { name: bot.name })}</span>}
-        {!busy && <span className="composer-hint-keys">{sendKey === 'enter' ? t('composer.hintEnter') : t('composer.hintCmdEnter')}{minimal ? '' : t('composer.hintExtras')}</span>}
         {!minimal && <div className="composer-status">
           {showUsage && <span className="usage-readout">{formatUsage(usage)}</span>}
           <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label={t('composer.usageToggle')} aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={15} /></button>

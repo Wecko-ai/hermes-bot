@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hiddenModelKey, parseSettings, selectableModels, withModelsVisible } from './settings'
+import { hiddenModelKey, parseSettings, selectableModels, withModelsVisible, withPinned } from './settings'
 import type { ModelOption } from '../types'
 
 const option = (model: string, provider = 'anthropic'): ModelOption => ({ model, provider, providerName: provider })
@@ -12,7 +12,19 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', caveman: false, activitySort: false, showHidden: false, hiddenModels: [], localModel: '', notifications: true })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], localModel: '', notifications: true })
+  })
+
+  it('garde les bots épinglés dans leur ordre, sans valeur étrangère', () => {
+    expect(parseSettings('{"pinnedBots":["orion",3,"nova"]}').pinnedBots).toEqual(['orion', 'nova'])
+    expect(parseSettings('{"pinnedBots":"orion"}').pinnedBots).toEqual([])
+  })
+
+  it('épingle à la suite et désépingle sans doublon', () => {
+    expect(withPinned(['orion'], 'nova', true)).toEqual(['orion', 'nova'])
+    expect(withPinned(['orion', 'nova'], 'orion', true)).toEqual(['nova', 'orion'])
+    expect(withPinned(['orion', 'nova'], 'orion', false)).toEqual(['nova'])
+    expect(withPinned([], 'orion', false)).toEqual([])
   })
 
   it('garde le mode caveman choisi et refuse une valeur qui n’est pas un booléen', () => {

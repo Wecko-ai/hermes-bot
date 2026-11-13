@@ -3,6 +3,9 @@ import { splitUserImages, withoutFileRefs } from './attachments'
 import { withoutMentionNote } from './mentions'
 import { agentChatMessages, agentMessagesFromRow } from './inter-agent'
 import { getAppConfig } from './app-config'
+import { isRemovedProfile } from './bot-manage'
+import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
+import { UNASSIGNED_SECTION_ID, UNASSIGNED_SECTION_NAME } from './roster-groups'
 import { i18n } from '../i18n'
 
 type Json = Record<string, unknown>
@@ -110,13 +113,15 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   if (!content && !sent.images.length) return agents
   const silent = isSilentMessage(content)
   const fromGateway = role === 'user' && isGatewayMessage(content, asString(message.display_kind))
+  // The first turn of a bot created here: Activity only, never a bubble of the user.
+  const kickoff = role === 'user' && isKickoffMessage(content)
   // Raw history: the assistant’s text, then its `message_agent` calls.
   return [{
     id,
     role,
     content,
     createdAt,
-    technical: silent || fromGateway || role === 'system' || role === 'tool',
+    technical: silent || fromGateway || kickoff || role === 'system' || role === 'tool',
     ...(sent.images.length ? { images: sent.images } : {}),
   }, ...agents]
 }
@@ -427,7 +432,8 @@ const SYSTEM_PROFILES = new Set(['notify'])
 
 function isRosterProfile(profile: Json): boolean {
   const slug = asString(profile.name)
-  return Boolean(slug) && !profile.is_default && !SYSTEM_PROFILES.has(slug)
+  // A bot deleted from this app keeps its profile: only its mark takes it out of the roster.
+  return Boolean(slug) && !profile.is_default && !SYSTEM_PROFILES.has(slug) && !isRemovedProfile(profile.ui_meta)
 }
 
 export async function loadRoster(client: HermesClient, browserOwner: () => Promise<string | Array<string | BrowserTurn>> = loadBrowserOwner): Promise<RosterResponse> {
@@ -436,7 +442,7 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
     .map(asBrowserTurn).filter((turn): turn is BrowserTurn => turn !== null)
   const profiles = Array.isArray(result?.profiles) ? result.profiles : []
   // A profile without a `hermes-bots` card (bot created outside the app, no section) stays visible, under “Non classés”.
-  // Only `default` and the technical profiles without a chat (SYSTEM_PROFILES) stay out of the roster.
+  // Only `default`, the technical profiles without a chat (SYSTEM_PROFILES) and the bots deleted here stay out of the roster.
   const botProfiles = profiles.map(asObject).filter((profile: Json) => isRosterProfile(profile))
   const live = (await loadLiveStatuses(client, botProfiles.map((profile: Json) => asString(profile.name)))).statuses
   const bots = profiles.flatMap((value: unknown, index: number) => {
@@ -462,8 +468,8 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
       provider: asString(profile.provider) || undefined,
       name: asString(metadata.title || profile.display_name, slug),
       role: asString(metadata.description || profile.description, i18n.t('hermes.defaultRole')),
-      section: asString(metadata.sectionName, 'Non classés'),
-      sectionId: asString(metadata.sectionId, 'unassigned'),
+      section: asString(metadata.sectionName) || UNASSIGNED_SECTION_NAME,
+      sectionId: asString(metadata.sectionId) || UNASSIGNED_SECTION_ID,
       model: asString(profile.model, 'Hermes'),
       status,
       workerActive,
@@ -471,7 +477,8 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
       workTitle: browserWorking ? i18n.t('hermes.drivingChrome') : workerActive ? asString(worker.title) || undefined : undefined,
       preview: (() => {
         const preview = asString(canonical.preview, i18n.t('hermes.noMessage'))
-        return isSilentMessage(preview) || isGatewayMessage(preview) ? '' : cleanUserText(preview)
+        // Hermes previews the first user message: for a bot created here, the kickoff sentence.
+        return isSilentMessage(preview) || isGatewayMessage(preview) || isKickoffPreview(preview) ? '' : cleanUserText(preview)
       })(),
       timestamp: isoDate(canonical.last_active ?? canonical.started_at),
       // The Bot Chat does not move during a background task: worker_session and last_session fill in.

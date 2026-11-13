@@ -22,6 +22,8 @@ export interface AppSettings {
   caveman: boolean
   activitySort: boolean
   showHidden: boolean
+  /** Bots pinned at the top of the sidebar, in the order they were pinned. Kept on this Mac only. */
+  pinnedBots: string[]
   /** Hide list, not an allow list: a newly released model is still offered. */
   hiddenModels: string[]
   /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
@@ -44,6 +46,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) value = parsed as Record<string, unknown>
   } catch { /* unreadable settings: default values */ }
   const flag = (field: unknown, fallback: boolean) => typeof field === 'boolean' ? field : fallback
+  const strings = (field: unknown) => Array.isArray(field) ? field.filter((key): key is string => typeof key === 'string') : []
   return {
     language: oneOf(value.language, LANGUAGES, 'system'),
     theme: oneOf(value.theme, THEMES, oneOf(legacy('hermesbot-theme'), THEMES, 'system')),
@@ -54,7 +57,8 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     caveman: flag(value.caveman, false),
     activitySort: flag(value.activitySort, legacy('hermesbot-sort') === 'activity'),
     showHidden: flag(value.showHidden, false),
-    hiddenModels: Array.isArray(value.hiddenModels) ? value.hiddenModels.filter((key): key is string => typeof key === 'string') : [],
+    pinnedBots: strings(value.pinnedBots),
+    hiddenModels: strings(value.hiddenModels),
     localModel: typeof value.localModel === 'string' ? value.localModel : '',
     notifications: flag(value.notifications, true),
   }
@@ -87,6 +91,12 @@ function subscribe(listener: () => void) {
 export const subscribeSettings = subscribe
 
 export const useSettings = () => useSyncExternalStore(subscribe, getSettings)
+
+/** Pins or unpins a bot. A new pin goes after the others: the pinned group keeps its order. */
+export function withPinned(pinned: readonly string[], slug: string, pin: boolean): string[] {
+  const others = pinned.filter((item) => item !== slug)
+  return pin ? [...others, slug] : others
+}
 
 /** The same model at two providers is set separately. */
 export const hiddenModelKey = (option: ModelOverride) => `${option.provider}:${option.model}`

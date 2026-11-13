@@ -32,12 +32,16 @@ import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
 import { syncSharedSettings } from './lib/shared-settings'
+import { botActionError, runBotAction, type BotAction } from './lib/bot-actions'
+import { createBot, createdBotEntry, loadProfileNames, withCreatedBot, type BotDraft } from './lib/bot-create'
+import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboarding'
+import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, type NotificationKind } from './lib/notifications'
+import { notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
@@ -48,6 +52,8 @@ const BACKGROUND_MS = 15_000
 /** The open conversation’s processes and children, only while something may still run (Hermes Desktop: 1 to 5 s). */
 const CHAT_BACKGROUND_MS = 5_000
 const BUSY = new Set(['working', 'thinking', 'waiting'])
+/** Tries at opening the chat of a bot just created, before saying Hermes needs a moment (about 9 s in all). */
+const NEW_BOT_OPEN_RETRIES = 3
 const asText = (value: unknown) => typeof value === 'string' ? value : ''
 
 const demoLanguage = (): DemoLanguage => (i18n.language === 'fr' ? 'fr' : 'en')
@@ -126,7 +132,7 @@ export default function App() {
   const browserVaultRequests = useRequestsStore((state) => state.browserVaultRequests)
   const subagentRows = useSubagentsStore((state) => state.rows)
   const chatProcesses = useSubagentsStore((state) => state.processes)
-  const [detailsOpen, setDetailsOpen] = useState(() => window.innerWidth >= 1180)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const settings = useSettings()
   const appConfig = useAppConfig()
@@ -164,6 +170,10 @@ export default function App() {
   const [localStarted, setLocalStarted] = useState(false)
   const [localRunning, setLocalRunning] = useState(false)
   const [localModels, setLocalModels] = useState<LocalModels | null>(null)
+  const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newBotRetry, setNewBotRetry] = useState<{ slug: string; name: string } | null>(null)
+  // Bots just created here whose chat has not opened yet, by slug.
+  const freshBotsRef = useRef(new Map<string, FreshBot>())
 
   /** A turn followed live on this socket: its own events say when it ends. */
   const followedLive = (slug: string) => {
@@ -319,7 +329,9 @@ export default function App() {
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)
           updateCachedChat(current.profile, { running: false })
-          updateBot(current.profile, { preview: finalText, timestamp: message.createdAt, status: 'idle' })
+          // No status here: markDone below sets it. An “idle” in between would hide the end of the turn
+          // from the notifications, which only see a working bot become “done”.
+          updateBot(current.profile, { preview: finalText, timestamp: message.createdAt })
         }
         if (isSilentMessage(finalText)) {
           const message: ChatMessage = { id: `silent-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true }
@@ -399,7 +411,7 @@ export default function App() {
       if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
       const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
       if (!bot || bot.hidden) return
-      const last = kind === 'done' ? [...(getCached(slug)?.messages || [])].reverse().find((message) => message.role === 'assistant' && !message.technical)?.content : undefined
+      const last = kind === 'done' ? turnReply(getCached(slug)?.messages || []) : undefined
       const excerpt = notificationExcerpt(last)
       // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
       const body = excerpt || i18n.t(`notifications.${kind}`)
@@ -482,13 +494,16 @@ export default function App() {
 
   // Turns of each bot, profile by profile: a bot woken by another bot goes “Working” within
   // a few seconds, without waiting for the roster re-read or for its chat to be opened. `sessions.changed`
-  // brings the next read forward.
+  // brings the next read forward. A hidden window keeps reading while a bot works, and on `sessions.changed`:
+  // that is how the end of a turn reaches the notifications while the app is in the background.
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
     let busy = false
     let lastPoll = 0
-    const poll = () => {
-      if (busy || document.hidden || useRosterStore.getState().bots.length === 0) return
+    const poll = (announced = false) => {
+      const bots = useRosterStore.getState().bots
+      if (busy || bots.length === 0) return
+      if (document.hidden && !announced && !watchWhileHidden(bots)) return
       busy = true
       lastPoll = Date.now()
       loadLiveStatuses(client, useRosterStore.getState().bots.filter((bot) => bot.sessionId).map((bot) => bot.slug)).then(({ statuses, answered }) => {
@@ -508,9 +523,9 @@ export default function App() {
         }
       }).finally(() => { busy = false })
     }
-    const timer = setInterval(poll, LIVE_STATUS_MS)
+    const timer = setInterval(() => poll(), LIVE_STATUS_MS)
     const unsubscribe = client.onEvent((event) => {
-      if (event.type === 'sessions.changed' && Date.now() - lastPoll > 2_000) poll()
+      if (event.type === 'sessions.changed' && Date.now() - lastPoll > 2_000) poll(true)
     })
     return () => { clearInterval(timer); unsubscribe() }
   }, [auth, client])
@@ -744,6 +759,21 @@ export default function App() {
         const openPrompts = chatResult.value.prompts
         replaceSessionPrompts(chatResult.value.chat.sessionId, openPrompts)
         if (chatResult.value.chat.running) updateBot(profile, { status: openPrompts.length ? 'waiting' : 'working' })
+        const fresh = freshBotsRef.current.get(profile)
+        if (fresh) {
+          freshBotsRef.current.delete(profile)
+          setNewBotRetry(null)
+          void kickOffNewBot(client, chatResult.value, fresh, demoLanguage(), (message, error) => markSendFailed(profile, message, error))
+        }
+      } else if (!cached && freshBotsRef.current.has(profile)) {
+        // A profile Hermes has just created may not be served at once: a few tries, then a way to try again.
+        const fresh = freshBotsRef.current.get(profile)!
+        if (fresh.attempts < NEW_BOT_OPEN_RETRIES) {
+          fresh.attempts += 1
+          setTimeout(() => { if (freshBotsRef.current.get(profile) === fresh && useRosterStore.getState().selected === profile) void syncChat(profile) }, 750 * 2 ** fresh.attempts)
+          return
+        }
+        setNewBotRetry({ slug: profile, name: fresh.title })
       } else if (!cached) {
         setNotice(chatResult.reason instanceof Error ? chatResult.reason.message : i18n.t('app.chatOpenFailed'))
       }
@@ -1008,6 +1038,70 @@ export default function App() {
     }
   }
 
+  /** New bot dialog, Create: the profile and its card, the bot in the roster, then its chat. Rejects when the profile was not created. */
+  const createNewBot = async (draft: BotDraft) => {
+    const entry = createdBotEntry(draft)
+    if (DEMO) {
+      setBots((current) => withCreatedBot(current, entry))
+      setNewBotOpen(false)
+      selectBot(entry)
+      introduceDemoBot(entry.slug, entry.name, demoLanguage())
+      return
+    }
+    const created = await createBot(client, draft)
+    try {
+      const roster = await loadRoster(client)
+      setBots((current) => withCreatedBot(mergeRoster(current, roster.bots, useRosterStore.getState().selected, (slug) => getCached(slug)?.chat.running === true), entry))
+    } catch {
+      setBots((current) => withCreatedBot(current, entry))
+    }
+    // No model can serve it yet: no first turn, it would only fail.
+    freshBotsRef.current.set(draft.slug, { slug: draft.slug, title: draft.title, kickoff: !created.modelIssue, attempts: 0 })
+    setNewBotOpen(false)
+    const notes = [
+      created.modelIssue ? i18n.t('newBot.needsModel', { name: draft.title, error: created.modelIssue }) : '',
+      created.cardError ? i18n.t('newBot.cardFailed', { name: draft.title, reason: botActionError(created.cardError) }) : '',
+    ].filter(Boolean)
+    if (notes.length) setNotice(notes.join(' '))
+    selectBot(useRosterStore.getState().bots.find((bot) => bot.slug === draft.slug) ?? entry)
+  }
+
+  // Stable: the dialog reads Hermes' profiles once, when it opens.
+  const loadKnownProfiles = useCallback(() => loadProfileNames(client), [client])
+
+  const retryNewBot = (slug: string) => {
+    setNewBotRetry(null)
+    const fresh = freshBotsRef.current.get(slug)
+    if (fresh) fresh.attempts = 0
+    const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+    if (bot && (localOpenRef.current || useRosterStore.getState().selected !== slug)) {
+      selectBot(bot)
+      return
+    }
+    setChatLoading(true)
+    void syncChat(slug)
+  }
+
+  /** Bot menu actions. In the demo nothing goes to Hermes: the roster on screen changes alone. */
+  const botAction = (bot: Bot, action: BotAction) => runBotAction(bot, action, {
+    client: DEMO ? null : client,
+    patchBot: updateBot,
+    dropBot: (slug) => {
+      const remaining = useRosterStore.getState().bots.filter((item) => item.slug !== slug)
+      setBots(remaining)
+      // The open bot was deleted: the next visible one opens instead.
+      const next = remaining.find((item) => !item.hidden)
+      if (useRosterStore.getState().selected === slug && next) {
+        if (localOpenRef.current) setSelected(next.slug)
+        else selectBot(next)
+      }
+    },
+    refresh: async () => {
+      const roster = await loadRoster(client)
+      setBots((current) => mergeRoster(current, roster.bots, useRosterStore.getState().selected, (slug) => getCached(slug)?.chat.running === true))
+    },
+  })
+
   const chooseTheme = (theme: ThemeChoice, origin?: { x: number; y: number }) => {
     const nextDark = theme === 'system' ? systemDark : theme === 'dark'
     if (nextDark === dark) updateSettings({ theme })
@@ -1119,6 +1213,7 @@ export default function App() {
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
   const openBrowserVaultRequest = browserVaultRequests[0]
+  const newBotDialog = newBotOpen && <NewBotDialog bots={bots} connected={DEMO || connected} loadKnown={DEMO ? null : loadKnownProfiles} onCreate={createNewBot} onClose={() => setNewBotOpen(false)} />
 
   if (auth === 'checking') {
     return <LoadingScreen label={t('loading.opening')} />
@@ -1126,7 +1221,8 @@ export default function App() {
   if (auth === 'login') return <Login onLogin={login} onLocalSignIn={retryLocalSignIn} error={authError || notice} />
   if (!selectedBot) {
     if (!rosterLoaded) return <LoadingScreen label={t('loading.bots')} />
-    return <div className="app-loading"><p>{t('loading.none')}</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? t('loading.reconnecting') : t('loading.reconnect')}</button></div>
+    // No bot yet (a fresh Hermes): the first one can be created from here.
+    return <div className="app-loading"><p>{t('loading.none')}</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? t('loading.reconnecting') : t('loading.reconnect')}</button>{connected && <button className="connection-retry" onClick={() => setNewBotOpen(true)}>{t('sidebar.newBot')}</button>}{newBotDialog}</div>
   }
 
   return (
@@ -1139,13 +1235,14 @@ export default function App() {
         onReconnect={reconnect}
         onLogout={logout}
         workSummaries={workSummaries}
-        dark={dark}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
         onSelect={selectBot}
-        onNewMessage={() => { setFocusSignal((value) => value + 1); setMobileOpen(false) }}
-        onToggleTheme={(origin) => chooseTheme(dark ? 'light' : 'dark', origin)}
+        onNewBot={() => { setNewBotOpen(true); setMobileOpen(false) }}
         onOpenSettings={() => setSettingsTab('general')}
+        canManage={DEMO || connected}
+        onBotAction={botAction}
+        onNotice={setNotice}
       />
       <ChatView
         hidden={localOpen}
@@ -1232,6 +1329,8 @@ export default function App() {
           onLogout={logout}
         />
       )}
+      {newBotDialog}
+      {newBotRetry && !notice && <NewBotRetry name={newBotRetry.name} onRetry={() => retryNewBot(newBotRetry.slug)} onClose={() => setNewBotRetry(null)} />}
       {notice && <div className="toast" role="status"><AlertCircle size={17} /><span>{notice}</span><button aria-label={t('app.close')} onClick={() => setNotice('')}><X size={15} /></button></div>}
       {DEMO && <div className="demo-badge">{t('app.demoBadge')}</div>}
     </div>

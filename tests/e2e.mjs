@@ -273,7 +273,20 @@ const wss = new WebSocketServer({
   handleProtocols: (protocols) => protocols.has('hermes-gateway-v1') ? 'hermes-gateway-v1' : false,
 })
 let profilesListCalls = 0
+// `profiles.configure` as Hermes writes `ui_meta`: per-key merge, `null` deletes, per-key compare-and-swap.
+const configureCalls = []
+// The next writes find that another app wrote the card just before them (a conflict, then a re-read).
+let configureConflicts = 0
+// A gateway that does not know the method.
+let configureMissing = false
 let promptCalls = 0
+// New bot (the "+" of the sidebar): `profiles.create` as Hermes answers it, the lazy Bot Chat it gets, its first turn.
+const createCalls = []
+const sessionCreateCalls = []
+const sessionTitleCalls = []
+const newBotPrompts = []
+const newBotHistory = {}
+const NEW_BOT_REPLY = 'Bonjour, je suis Léa Martin, ton nouveau bot. Quel rôle veux-tu me confier ? Dis-moi ce dont je dois m’occuper.'
 const modelMutations = []
 const routeChecks = []
 
@@ -294,6 +307,36 @@ const profiles = [{
   canonical_session: { id: 'chat-notify', resolved_id: 'chat-notify' },
   ui_meta: {},
 }]
+
+// A bot added for the right-click menu steps only, then taken out again.
+const atlasProfile = {
+  name: 'atlas', model: 'claude-opus-5-5', description: 'Prépare les itinéraires',
+  canonical_session: { id: 'chat-atlas', resolved_id: 'chat-atlas', preview: 'Trois trajets comparés.', last_active: Date.now() - 3_600_000, running: false },
+  ui_meta: { 'hermes-bots': { title: 'Atlas', description: 'Prépare les itinéraires', sectionId: 'produit', sectionName: 'Produit', shape: 'hex', color: 'blue', created: 1 } },
+  ui_meta_revisions: { 'hermes-bots': 3 },
+}
+
+function configureProfile(params) {
+  configureCalls.push(structuredClone(params))
+  const profile = profiles.find((item) => item.name === params.name)
+  if (!profile) return { error: { code: 4064, message: `profile '${params.name}' not found` } }
+  const revisions = profile.ui_meta_revisions ||= {}
+  if (configureConflicts > 0) {
+    configureConflicts -= 1
+    revisions['hermes-bots'] = (revisions['hermes-bots'] || 0) + 1
+  }
+  const incoming = params.ui_meta || {}
+  const expected = params.ui_meta_expected_revisions
+  const conflicts = Object.fromEntries(Object.keys(expected ? incoming : {}).filter((key) => expected[key] !== (revisions[key] || 0)).map((key) => [key, { expected: expected[key], actual: revisions[key] || 0 }]))
+  if (Object.keys(conflicts).length) return { result: { ok: false, applied: { ui_meta: false, ui_meta_conflicts: conflicts } } }
+  profile.ui_meta = { ...profile.ui_meta }
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === null) delete profile.ui_meta[key]
+    else profile.ui_meta[key] = structuredClone(value)
+    revisions[key] = (revisions[key] || 0) + 1
+  }
+  return { result: { ok: true, applied: { ui_meta: true, ui_meta_revisions: Object.fromEntries(Object.keys(incoming).map((key) => [key, revisions[key]])) } } }
+}
 
 function send(socket, value) { socket.send(JSON.stringify(value)) }
 /** An event pushed by the gateway outside any request (a child working in the background). */
@@ -322,6 +365,40 @@ wss.on('connection', (socket) => {
     if (frame.method === 'profiles.list') {
       profilesListCalls += 1
       return reply({ profiles: emptyRoster ? [] : profiles, bot_mode_protocol: true })
+    }
+    if (frame.method === 'profiles.configure') {
+      if (configureMissing) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: -32601, message: 'unknown method: profiles.configure' } })
+      const { result, error } = configureProfile(frame.params)
+      return error ? send(socket, { jsonrpc: '2.0', id: frame.id, error }) : reply(result)
+    }
+    if (frame.method === 'profiles.create') {
+      createCalls.push(structuredClone(frame.params))
+      const name = String(frame.params.name || '').trim()
+      const refuse = (code, message) => send(socket, { jsonrpc: '2.0', id: frame.id, error: { code, message } })
+      if (!name) return refuse(4061, 'name required')
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name) || ['hermes', 'default', 'test', 'tmp', 'root', 'sudo'].includes(name)) return refuse(4062, `'${name}' is not a valid profile name.`)
+      if (profiles.some((item) => item.name === name)) return refuse(4062, `A profile named '${name}' already exists.`)
+      // No card and no Bot Chat yet: Hermes creates the profile only.
+      profiles.splice(profiles.findIndex((item) => item.is_default), 0, { name, model: 'claude-opus-5-5', description: '', canonical_session: null, ui_meta: {}, ui_meta_revisions: {} })
+      return reply({ ok: true, name, path: `/x/profiles/${name}`, soul_written: true, model_set: false, mirrored: { env: true, auth: 'shared', model_inherited: true, voice: false } })
+    }
+    if (frame.method === 'session.list') {
+      const profile = profiles.find((item) => item.name === frame.params.profile)
+      return reply({ sessions: profile?.canonical_session ? [{ id: profile.canonical_session.id, resolved_id: profile.canonical_session.resolved_id, title: 'Bot Chat', root_title: 'Bot Chat' }] : [] })
+    }
+    if (frame.method === 'session.create') {
+      sessionCreateCalls.push(structuredClone(frame.params))
+      const id = `chat-${frame.params.profile}`
+      newBotHistory[id] ||= []
+      return reply({ session_id: id, stored_session_id: id, message_count: 0, messages: [], info: {} })
+    }
+    if (frame.method === 'session.title') {
+      sessionTitleCalls.push(structuredClone(frame.params))
+      return reply({ pending: false, title: frame.params.title })
+    }
+    if (frame.method === 'session.resume' && newBotHistory[frame.params.session_id]) {
+      sessionResumeCalls += 1
+      return reply({ session_id: frame.params.session_id, revision: 1, execution_generation: 1, running: false, subscription_id: 'sub-test', open_requests: [], prompts: [], messages: structuredClone(newBotHistory[frame.params.session_id]) })
     }
     if (frame.method === 'session.resume') {
       sessionResumeCalls += 1
@@ -456,6 +533,19 @@ wss.on('connection', (socket) => {
       const sessionId = frame.params.session_id
       reply({ admission_id: 'admission-test', status: 'started', execution_generation: 1 })
       const at = (ms, type, payload) => setTimeout(() => send(socket, event(sessionId, type, payload)), ms)
+      if (newBotHistory[sessionId]) {
+        // A bot created in the app: the history keeps the text, the model reads `api_text`; its answer asks for its role.
+        newBotPrompts.push(structuredClone(frame.params))
+        const history = newBotHistory[sessionId]
+        history.push({ row_id: history.length + 1, role: 'user', content: frame.params.text, timestamp: Date.now() })
+        // Hermes keeps the lazy Bot Chat at its first prompt; its preview is the first user message.
+        const owner = profiles.find((item) => `chat-${item.name}` === sessionId)
+        if (owner && !owner.canonical_session) owner.canonical_session = { id: sessionId, resolved_id: sessionId, preview: frame.params.text, last_active: Date.now(), running: false }
+        at(30, 'message.start', { turn_id: 'turn-intro' })
+        setTimeout(() => history.push({ row_id: history.length + 1, role: 'assistant', content: NEW_BOT_REPLY, timestamp: Date.now() }), 1790)
+        at(1800, 'message.complete', { turn_id: 'turn-intro', text: NEW_BOT_REPLY, status: 'complete' })
+        return
+      }
       if (frame.params.text === 'Test média en direct') {
         const final = 'Voici la vidéo :\n\nMEDIA:/Users/test/videos/video.mp4\n\nEt la suite du texte.'
         at(30, 'message.start', { turn_id: 'turn-media' })
@@ -470,9 +560,11 @@ wss.on('connection', (socket) => {
         at(120, 'message.interim', { turn_id: 'turn-steps', segment: 0, text: 'Je regarde le code.', already_streamed: true })
         at(160, 'tool.start', { tool_id: 'step-tool', name: 'terminal', context: 'npm test' })
         at(1300, 'tool.complete', { tool_id: 'step-tool', name: 'terminal' })
-        at(3300, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 0, text: 'Les tests ' })
-        at(3600, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 10, text: 'passent.' })
-        at(4000, 'message.complete', { turn_id: 'turn-steps', text: 'Les tests passent.', status: 'complete' })
+        // The app publishes a bot's work summary every 4 s: the step must stay the caption for longer than
+        // that after the tool ends, whatever the phase of that timer when the turn starts.
+        at(6100, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 0, text: 'Les tests ' })
+        at(6400, 'message.delta', { turn_id: 'turn-steps', segment: 1, offset: 10, text: 'passent.' })
+        at(6800, 'message.complete', { turn_id: 'turn-steps', text: 'Les tests passent.', status: 'complete' })
         return
       }
       lastPromptText = frame.params.text
@@ -506,6 +598,24 @@ wss.on('connection', (socket) => {
         const text = ['Voici la page.', '', '## Questions ouvertes', '1. Avec quoi le client est-il reparti au bout des 5 jours ?', '2. L’Intensif est-il pour une seule personne ?', '3. Le bloc dirigeants reste-t-il au tutoiement ?'].join('\n')
         at(30, 'message.start', { turn_id: 'turn-questions' })
         at(300, 'message.complete', { turn_id: 'turn-questions', text, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test questions libres') {
+        const text = ['Avant de lancer, deux points.', '', 'Tes réponses avant de lancer', '', '1. Le repli en cascade te va, ou tu veux le repli strict ?', '2. Carbon : on garde l’article ou on le retire ?', '3. Tu veux voir la carte sur stage toi-même, ou mon contrôle suffit ?', '', 'Je lance dès que j’ai tout.'].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-free-questions' })
+        at(300, 'message.complete', { turn_id: 'turn-free-questions', text, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test liens') {
+        const text = 'Voir [le lien Markdown](https://example.com/md) et aussi https://example.com/bare pour la suite.'
+        at(30, 'message.start', { turn_id: 'turn-links' })
+        at(300, 'message.complete', { turn_id: 'turn-links', text, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test recherche') {
+        const text = ['Zéphyr est le premier mot.', '', 'Le deuxième paragraphe parle d’autre chose, puis de zephyr en minuscules.', '', 'Et pour finir ZÉPHYR en capitales.'].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-search' })
+        at(300, 'message.complete', { turn_id: 'turn-search', text, status: 'complete' })
         return
       }
       if (frame.params.text === 'Test silence') {
@@ -688,8 +798,16 @@ try {
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await page.locator('.bot-row').count() !== 3) throw new Error('Le roster doit montrer Nova, Orion et le chat local, sans les profils système.')
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
+  // The right-hand panel stays closed after login and after switching bots; only its toggle opens it.
+  if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après la connexion.')
+  await page.locator('[data-bot=orion]').click()
+  await page.getByRole('textbox', { name: 'Message à Orion' }).waitFor({ timeout: 5_000 })
+  if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après un changement de bot.')
+  await page.locator('[data-bot=nova]').click()
+  await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 5_000 })
   await page.getByRole('textbox', { name: 'Message à Nova' }).fill('Test animation')
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
+  await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
   await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 5_000 })
   await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 2_500 })
   // Status visible at a glance: banner, roster row, chat header.
@@ -1032,12 +1150,20 @@ try {
   await page.getByRole('button', { name: 'Fermer rapport.pdf' }).click()
   await page.getByRole('tab', { name: 'Routines' }).click()
 
-  // Dark theme: same glass, control capture, then back to light.
-  await page.getByRole('button', { name: 'Passer au thème sombre' }).click()
+  // Dark theme: same glass, control capture, then back to light. The theme is chosen in Settings only.
+  if (await page.getByRole('button', { name: /Passer au thème/ }).count()) throw new Error('Le bouton de thème est encore dans la vue principale.')
+  const chooseThemeInSettings = async (name) => {
+    await page.getByRole('button', { name: 'Réglages', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Réglages' })
+    await dialog.getByRole('radio', { name }).click()
+    await dialog.press('Escape')
+    await dialog.waitFor({ state: 'detached', timeout: 3_000 })
+  }
+  await chooseThemeInSettings('Sombre')
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
   await delay(400)
   await page.screenshot({ path: `${SCREENSHOTS}glass-dark.png` })
-  await page.getByRole('button', { name: 'Passer au thème clair' }).click()
+  await chooseThemeInSettings('Clair')
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
 
   // Background turn of an already open bot: "Au travail" right away, then "Terminé".
@@ -1078,8 +1204,14 @@ try {
   for (const client of wss.clients) send(client, event('chat-orion', 'tool.start', { tool_id: 'b', name: 'terminal', context: 'curl -H "Authorization: Bearer secret-test"' }))
   await page.locator('.work-card').getByText('Lance une commande').waitFor({ timeout: 7_000 })
   if (await page.getByText('secret-test').count()) throw new Error('La commande d’un terminal est affichée.')
+  // The open bot's turn ends while the window is in the background: notified like any other bot.
+  await page.evaluate(() => { window.__hasFocus = document.hasFocus; document.hasFocus = () => false })
+  const sentBeforeOpenDone = (await notificationsSent()).length
   for (const client of wss.clients) send(client, event('chat-orion', 'message.complete', { turn_id: 'turn-etape', text: 'Étape terminée.', status: 'complete' }))
   await page.locator('.work-card').waitFor({ state: 'detached', timeout: 3_000 })
+  const openDone = (await notificationsSent()).slice(sentBeforeOpenDone)
+  await page.evaluate(() => { document.hasFocus = window.__hasFocus })
+  if (openDone.length !== 1 || openDone[0].tag !== 'hermesbot-orion' || openDone[0].body !== 'Étape terminée.') throw new Error(`Fin de tour du bot ouvert, fenêtre en arrière-plan : ${JSON.stringify(openDone)}`)
 
   // Vault and approvals: the gateway asks, the app answers with the same id, nothing secret remains.
   if (capabilityCalls === 0) throw new Error('client.capabilities n’a pas été annoncé.')
@@ -1332,6 +1464,89 @@ try {
   await page.locator('.mail-note').getByText('2 réponses envoyées').waitFor({ timeout: 3_000 })
   await delay(500)
 
+  // Questions without a dedicated heading, in the latest reply: a form too; a plain Markdown reply once something follows.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test questions libres')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await questions.waitFor({ timeout: 5_000 })
+  if (await questions.locator('textarea').count() !== 3) throw new Error('Il faut un champ par question, même sans titre « Questions ouvertes ».')
+  await questions.getByRole('heading').or(questions.locator('header')).first().getByText('Tes réponses avant de lancer').waitFor({ timeout: 2_000 })
+  await page.locator('.message-assistant').filter({ hasText: 'Je lance dès que j’ai tout.' }).waitFor({ timeout: 2_000 })
+  await questions.getByLabel('Carbon : on garde l’article ou on le retire ?').fill('On le retire.')
+  await questions.getByLabel('Tu veux voir la carte sur stage toi-même, ou mon contrôle suffit ?').fill('Ton contrôle suffit.')
+  const promptsBeforeFree = promptCalls
+  await questions.getByRole('button', { name: 'Envoyer les réponses' }).click()
+  for (let attempt = 0; attempt < 40 && promptCalls === promptsBeforeFree; attempt += 1) await delay(50)
+  if (promptCalls !== promptsBeforeFree + 1) throw new Error('Envoyer les réponses libres doit lancer un seul tour.')
+  for (const expected of ['Mes réponses à tes questions :', '2. Carbon : on garde l’article ou on le retire ?', '   On le retire.', '3. Tu veux voir la carte', '   Ton contrôle suffit.']) {
+    if (!lastPromptText.includes(expected)) throw new Error(`Réponses libres sans « ${expected} ».`)
+  }
+  if (lastPromptText.includes('repli en cascade')) throw new Error('Une question vide est partie.')
+  // Nothing follows the bot's questions any more: the older reply is plain Markdown again, nothing lost.
+  await page.locator('.questions-card').waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.message-assistant').getByText('Carbon : on garde l’article ou on le retire ?').waitFor({ timeout: 2_000 })
+  await page.locator('.message-user').filter({ hasText: 'On le retire.' }).waitFor({ timeout: 2_000 })
+  await delay(800)
+
+  // Links in a bot message open in a new page: a Markdown link and a bare URL.
+  await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>ok</title>ok' }))
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test liens')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const linkMessage = page.locator('.message-assistant').filter({ hasText: 'pour la suite.' })
+  await linkMessage.waitFor({ timeout: 5_000 })
+  for (const [name, url] of [['le lien Markdown', 'https://example.com/md'], ['https://example.com/bare', 'https://example.com/bare']]) {
+    const popup = page.context().waitForEvent('page', { timeout: 5_000 })
+    await linkMessage.getByRole('link', { name }).click()
+    const opened = await popup
+    await opened.waitForLoadState('domcontentloaded').catch(() => {})
+    if (opened.url() !== url) throw new Error(`Le lien « ${name} » ouvre ${opened.url()} au lieu de ${url}.`)
+    await opened.close()
+  }
+  await delay(300)
+
+  // Search in the conversation: Enter goes to the most recent match, then older ones, with a position counter.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test recherche')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await page.locator('.message-assistant').filter({ hasText: 'en capitales' }).waitFor({ timeout: 5_000 })
+  await delay(800)
+  await page.getByRole('button', { name: 'Rechercher dans la conversation' }).click()
+  const searchInput = page.getByRole('textbox', { name: 'Texte à rechercher' })
+  await searchInput.fill('zephyr')
+  await page.locator('.chat-search-count').getByText('3 résultats').waitFor({ timeout: 2_000 })
+  const highlightState = () => page.evaluate(() => {
+    const current = CSS.highlights.get('search-current')
+    const range = current && [...current][0]
+    const view = document.querySelector('.messages-scroll').getBoundingClientRect()
+    if (!range) return { hits: CSS.highlights.get('search-hit')?.size ?? 0, current: false }
+    const box = range.getBoundingClientRect()
+    return { hits: CSS.highlights.get('search-hit')?.size ?? 0, current: true, visible: box.top >= view.top && box.bottom <= view.bottom, top: Math.round(box.top), text: range.toString() }
+  })
+  const before = await highlightState()
+  if (before.hits !== 3 || before.current) throw new Error(`Les 3 occurrences doivent être surlignées avant Entrée : ${JSON.stringify(before)}`)
+  if (await page.locator('.message').count() < 10) throw new Error('La recherche ne doit plus filtrer la conversation.')
+  await searchInput.press('Enter')
+  await page.locator('.chat-search-count').getByText('3 / 3').waitFor({ timeout: 2_000 })
+  const first = await highlightState()
+  if (!first.current || !first.visible || first.text !== 'ZÉPHYR') throw new Error(`Entrée doit amener à la dernière occurrence, visible : ${JSON.stringify(first)}`)
+  await searchInput.press('Enter')
+  await page.locator('.chat-search-count').getByText('2 / 3').waitFor({ timeout: 2_000 })
+  const second = await highlightState()
+  if (!second.visible || second.text !== 'zephyr') throw new Error(`Entrée suivant doit aller à l’occurrence précédente : ${JSON.stringify(second)}`)
+  await searchInput.press('Enter')
+  await searchInput.press('Enter')
+  await page.locator('.chat-search-count').getByText('3 / 3').waitFor({ timeout: 2_000 })
+  await searchInput.press('Shift+Enter')
+  await page.locator('.chat-search-count').getByText('1 / 3').waitFor({ timeout: 2_000 })
+  const wrapped = await highlightState()
+  if (!wrapped.visible || wrapped.text !== 'Zéphyr') throw new Error(`Maj+Entrée doit boucler vers la première : ${JSON.stringify(wrapped)}`)
+  await searchInput.fill('introuvable-xyz')
+  await page.locator('.chat-search-count').getByText('Aucun résultat').waitFor({ timeout: 2_000 })
+  await searchInput.fill('zephyr')
+  await searchInput.press('Escape')
+  await page.locator('.chat-search-bar').waitFor({ state: 'detached', timeout: 2_000 })
+  if (await page.evaluate(() => CSS.highlights.has('search-hit') || CSS.highlights.has('search-current'))) throw new Error('Fermer la recherche doit retirer les surlignages.')
+  await page.locator('.messages-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight })
+  await delay(300)
+
   // One message per turn: while the bot writes, only its working line shows; the video comes with the reply.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test média en direct')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
@@ -1349,9 +1564,9 @@ try {
   await page.locator('.working-caption').getByText('Lance une commande').waitFor({ timeout: 3_000 })
   await page.locator('.working-row .live-avatar.is-working').waitFor({ timeout: 2_000 })
   if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('Une étape du bot est restée dans le fil.')
-  await page.locator('.working-caption').getByText('Je regarde le code.').waitFor({ timeout: 3_000 })
+  await page.locator('.working-caption').getByText('Je regarde le code.').waitFor({ timeout: 6_000 })
   await page.locator('.working-row').screenshot({ path: `${SCREENSHOTS}working-line.png` })
-  await page.locator('.message-assistant').getByText('Les tests passent.').waitFor({ timeout: 5_000 })
+  await page.locator('.message-assistant').getByText('Les tests passent.').waitFor({ timeout: 8_000 })
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
   if (await page.locator('.message-assistant').count() !== stepsBefore + 1) throw new Error('Un tour avec étapes doit laisser un seul message du bot.')
   if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('L’étape est réapparue à la fin du tour.')
@@ -1569,11 +1784,26 @@ try {
   const largeText = await page.locator('.composer textarea').first().evaluate((element) => getComputedStyle(element).fontSize)
   if (largeText !== '16px') throw new Error(`Taille du texte non appliquée : ${largeText}`)
   await settingsDialog.getByRole('radio', { name: 'Normale' }).click()
+  // Test notification: the same kind as a bot's, then what macOS did with it.
+  const sentBeforeTest = (await notificationsSent()).length
+  await settingsDialog.getByRole('button', { name: 'Envoyer', exact: true }).click()
+  for (let wait = 0; wait < 20 && (await notificationsSent()).length === sentBeforeTest; wait++) await page.waitForTimeout(50)
+  const testSent = (await notificationsSent()).slice(sentBeforeTest)
+  if (testSent.length !== 1 || testSent[0].tag !== 'hermesbot-test' || testSent[0].title !== 'HermesBot') throw new Error(`Notification de test : ${JSON.stringify(testSent)}`)
+  await page.evaluate(() => window.__notifications.at(-1).onshow?.())
+  await settingsDialog.getByText('Envoyée. Rien à l’écran ?', { exact: false }).waitFor({ timeout: 3_000 })
   await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
   await settingsDialog.getByRole('radio', { name: '⌘ Entrée' }).click()
+  // The chat guide follows the send key.
+  const guideSend = settingsDialog.locator('.chat-guide-item').filter({ hasText: 'Envoyer le message' })
+  await guideSend.locator('kbd').nth(0).getByText('⌘').waitFor({ timeout: 2_000 })
+  await guideSend.locator('kbd').nth(1).getByText('Entrée').waitFor({ timeout: 2_000 })
+  await settingsDialog.locator('.chat-guide-item').filter({ hasText: 'Nouvelle ligne' }).locator('kbd').getByText('Entrée', { exact: true }).waitFor({ timeout: 2_000 })
+  await settingsDialog.locator('.chat-guide').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}settings-chat-guide.png` })
   await settingsDialog.press('Escape')
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
-  await page.locator('.composer-hint-keys').first().getByText('⌘ Entrée pour envoyer').waitFor({ timeout: 3_000 })
+  if (await page.locator('.composer-hint-keys').count()) throw new Error('Plus de texte d’aide sous le champ de saisie quand le bot est au repos.')
   const promptsBeforeKeys = promptCalls
   const composerField = page.getByRole('textbox', { name: 'Message à Orion' })
   await composerField.fill('une ligne')
@@ -1673,10 +1903,16 @@ try {
   await delay(600)
   const scrollTop = await page.locator('.messages-scroll').evaluate((element) => element.scrollTop)
   if (scrollTop !== scrolledTo) throw new Error(`Le scroll a été déplacé pendant la réponse: ${scrolledTo} → ${scrollTop}`)
-  await page.locator('.jump-latest').click()
-  await delay(600)
-  const jumpedScrollTop = await page.locator('.messages-scroll').evaluate((element) => element.scrollTop)
-  if (jumpedScrollTop === 0) throw new Error('Le bouton Nouveaux messages ne descend pas.')
+  // Jump button: icon only, round, and the jump is instant (no smooth scroll to wait for).
+  const jump = page.getByRole('button', { name: 'Nouveaux messages' })
+  const jumpBox = await jump.boundingBox()
+  if (!jumpBox || jumpBox.width < 38 || Math.abs(jumpBox.width - jumpBox.height) > 1) throw new Error(`Le bouton du bas doit être un rond d’environ 40 px : ${JSON.stringify(jumpBox)}`)
+  if ((await jump.innerText()).trim()) throw new Error('Le bouton du bas ne doit plus porter de texte.')
+  await jump.click()
+  await delay(50)
+  const jumpedAtBottom = await page.locator('.messages-scroll').evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+  if (jumpedAtBottom > 40) throw new Error(`Le bouton du bas n’a pas amené tout en bas, instantanément (reste ${jumpedAtBottom} px).`)
+  if (await page.locator('.jump-latest').count()) throw new Error('Le bouton du bas doit disparaître une fois en bas.')
 
   // Abrupt gateway cut (code 1006): the server must survive, then sending must resume.
   for (const client of wss.clients) client.terminate()
@@ -1775,6 +2011,312 @@ try {
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Retour aux groupes : ${await rosterOrder()}`)
+
+  // Bot menu (right click): keyboard, Esc, outside click, window edge, then each action on a bot added for these steps.
+  profiles.splice(profiles.findIndex((item) => item.is_default), 0, atlasProfile)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  const atlasRow = page.locator('[data-bot=atlas]')
+  await atlasRow.waitFor({ timeout: 15_000 })
+  const botMenu = page.locator('.bot-menu:not(.is-sub)')
+  const sectionsMenu = page.getByRole('menu', { name: 'Sections' })
+  const menuItem = (name) => botMenu.getByRole('menuitem', { name, exact: true })
+  const focusedText = () => page.evaluate(() => document.activeElement?.textContent || '')
+  const openAtlasMenu = async () => {
+    await atlasRow.click({ button: 'right' })
+    await botMenu.waitFor({ timeout: 3_000 })
+    await page.waitForFunction(() => document.activeElement?.closest('.bot-menu'), null, { timeout: 2_000 })
+  }
+  const inSection = (name) => page.locator('.bot-section', { has: page.locator('.section-heading', { hasText: name }) }).locator('[data-bot=atlas]')
+  await openAtlasMenu()
+  if (await botMenu.getAttribute('aria-label') !== 'Actions pour Atlas') throw new Error(`Nom du menu : ${await botMenu.getAttribute('aria-label')}`)
+  const menuLabels = (await botMenu.locator('[role^="menuitem"]').allTextContents()).join(' | ')
+  if (menuLabels !== 'Épingler | Déplacer vers | Marquer comme lu | Renommer le bot | Copier l’ID de conversation | Masquer de la barre latérale | Supprimer') throw new Error(`Menu du bot : ${menuLabels}`)
+  if (await menuItem('Marquer comme lu').getAttribute('aria-disabled') !== 'true') throw new Error('« Marquer comme lu » est actif sans message non lu.')
+  if (await focusedText() !== 'Épingler') throw new Error(`Le menu ne prend pas le clavier : ${await focusedText()}`)
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  if (await focusedText() !== 'Renommer le bot') throw new Error(`Les flèches ne sautent pas l’élément inactif : ${await focusedText()}`)
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowRight')
+  await sectionsMenu.waitFor({ timeout: 2_000 })
+  await page.waitForFunction(() => document.activeElement?.closest('[role=menu]')?.getAttribute('aria-label') === 'Sections', null, { timeout: 2_000 })
+  await page.keyboard.press('ArrowLeft')
+  await sectionsMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  if (await focusedText() !== 'Déplacer vers') throw new Error(`← ne revient pas au menu : ${await focusedText()}`)
+  await menuItem('Déplacer vers').hover()
+  await sectionsMenu.waitFor({ timeout: 2_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}bot-menu.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}bot-menu-dark.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await page.keyboard.press('Escape')
+  await sectionsMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  await page.keyboard.press('Escape')
+  await botMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  await page.waitForFunction(() => document.activeElement?.getAttribute('data-bot') === 'atlas', null, { timeout: 2_000 })
+  await openAtlasMenu()
+  await page.locator('.sidebar-filter-row > span').first().click()
+  await botMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  // Near the bottom of the window the menu opens upwards, and stays inside.
+  const atlasBox = await atlasRow.boundingBox()
+  await page.setViewportSize({ width: 1280, height: Math.round(atlasBox.y + atlasBox.height + 90) })
+  await atlasRow.click({ button: 'right', position: { x: atlasBox.width - 8, y: atlasBox.height - 4 } })
+  await botMenu.waitFor({ timeout: 3_000 })
+  const edgeBox = await botMenu.boundingBox()
+  const edgeView = page.viewportSize()
+  if (edgeBox.y < 0 || edgeBox.y + edgeBox.height > edgeView.height || edgeBox.x + edgeBox.width > edgeView.width) throw new Error(`Menu hors de la fenêtre : ${JSON.stringify(edgeBox)} dans ${JSON.stringify(edgeView)}`)
+  await page.keyboard.press('Escape')
+  await botMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  await page.setViewportSize({ width: 1280, height: 800 })
+
+  // Move to: the card is written with the revision read; another app's write in between means one re-read.
+  configureCalls.length = 0
+  configureConflicts = 1
+  await openAtlasMenu()
+  await menuItem('Déplacer vers').hover()
+  await sectionsMenu.waitFor({ timeout: 2_000 })
+  const sectionChoices = await sectionsMenu.locator('[role="menuitemradio"]').evaluateAll((items) => items.map((item) => `${item.textContent}${item.getAttribute('aria-checked') === 'true' ? '*' : ''}`))
+  if (sectionChoices.join(' | ') !== 'Direction | Produit* | Non classés') throw new Error(`Sections proposées : ${sectionChoices.join(' | ')}`)
+  await sectionsMenu.getByRole('menuitemradio', { name: 'Direction' }).click()
+  await inSection('Direction').waitFor({ timeout: 5_000 })
+  const movedCard = configureCalls[1]?.ui_meta?.['hermes-bots']
+  if (configureCalls.length !== 2 || configureCalls[0].ui_meta_expected_revisions['hermes-bots'] !== 3 || configureCalls[1].ui_meta_expected_revisions['hermes-bots'] !== 4) throw new Error(`Écriture de la section : ${JSON.stringify(configureCalls)}`)
+  if (configureCalls[1].name !== 'atlas' || movedCard.sectionId !== 'direction' || movedCard.sectionName !== 'Direction' || movedCard.title !== 'Atlas' || movedCard.shape !== 'hex' || movedCard.created !== 1) throw new Error(`Carte déplacée : ${JSON.stringify(movedCard)}`)
+  // New section: a name, Enter, and the bot is filed there.
+  configureCalls.length = 0
+  await openAtlasMenu()
+  await menuItem('Déplacer vers').hover()
+  await sectionsMenu.getByRole('menuitem', { name: 'Nouvelle section…' }).click()
+  const sectionField = sectionsMenu.getByRole('textbox', { name: 'Nom de la section' })
+  await sectionField.fill('Voyage')
+  await sectionField.press('Enter')
+  await inSection('Voyage').waitFor({ timeout: 5_000 })
+  if (!/^sec-/.test(configureCalls[0]?.ui_meta?.['hermes-bots']?.sectionId || '')) throw new Error(`Nouvelle section : ${JSON.stringify(configureCalls)}`)
+
+  // Pin: a "Pinned" group at the top, in both sorts, kept after a reload, with no copy below; nothing goes to Hermes.
+  configureCalls.length = 0
+  const pinnedGroup = page.locator('.bot-section.is-pinned')
+  const firstHeading = () => page.locator('.section-heading span').first().textContent()
+  await openAtlasMenu()
+  await menuItem('Épingler').click()
+  await pinnedGroup.locator('[data-bot=atlas]').waitFor({ timeout: 3_000 })
+  if (await firstHeading() !== 'Épinglés') throw new Error(`Premier groupe : ${await firstHeading()}`)
+  if (await atlasRow.count() !== 1 || await inSection('Voyage').count()) throw new Error('Un bot épinglé est répété dans sa section.')
+  if (configureCalls.length) throw new Error('Épingler a écrit chez Hermes.')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await pinnedGroup.locator('[data-bot=atlas]').waitFor({ timeout: 15_000 })
+  await page.getByRole('button', { name: 'Activité', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.section-heading').length === 1, null, { timeout: 3_000 })
+  if (await firstHeading() !== 'Épinglés' || await pinnedGroup.locator('[data-bot]').count() !== 1) throw new Error('Le groupe épinglé manque dans le classement par activité.')
+  await page.getByRole('button', { name: 'Groupes', exact: true }).click()
+  await page.locator('.section-heading', { hasText: 'Direction' }).waitFor({ timeout: 3_000 })
+
+  // Rename: the display name only, the profile keeps its name.
+  configureCalls.length = 0
+  await openAtlasMenu()
+  if (await menuItem('Désépingler').count() !== 1) throw new Error('Le menu d’un bot épinglé ne propose pas de le désépingler.')
+  await menuItem('Renommer le bot').click()
+  const renameDialog = page.getByRole('dialog', { name: 'Renommer Atlas' })
+  await renameDialog.waitFor({ timeout: 3_000 })
+  const nameField = renameDialog.getByRole('textbox', { name: 'Nom affiché' })
+  if (await nameField.inputValue() !== 'Atlas') throw new Error(`Nom proposé : ${await nameField.inputValue()}`)
+  await renameDialog.getByText('Le profil Hermes reste « atlas »', { exact: false }).waitFor({ timeout: 2_000 })
+  await nameField.fill('Atlas Prime')
+  await nameField.press('Enter')
+  await renameDialog.waitFor({ state: 'detached', timeout: 5_000 })
+  await atlasRow.locator('.bot-row-name').getByText('Atlas Prime', { exact: true }).waitFor({ timeout: 3_000 })
+  if (configureCalls.at(-1)?.name !== 'atlas' || configureCalls.at(-1).ui_meta['hermes-bots'].title !== 'Atlas Prime' || configureCalls.at(-1).ui_meta['hermes-bots'].sectionName !== 'Voyage') throw new Error(`Renommage : ${JSON.stringify(configureCalls)}`)
+
+  // Mark as read: only when there is something unread.
+  for (const client of wss.clients) send(client, event('chat-atlas', 'message.complete', { text: 'Itinéraire prêt.' }))
+  await atlasRow.locator('.unread-badge').waitFor({ timeout: 3_000 })
+  await openAtlasMenu()
+  await menuItem('Marquer comme lu').click()
+  await atlasRow.locator('.unread-badge').waitFor({ state: 'detached', timeout: 3_000 })
+
+  // Copy the Bot Chat id, with a short confirmation.
+  await openAtlasMenu()
+  await menuItem('Copier l’ID de conversation').click()
+  await botMenu.getByText('ID de conversation copié').waitFor({ timeout: 2_000 })
+  await botMenu.waitFor({ state: 'detached', timeout: 3_000 })
+  const copiedId = await page.evaluate(() => navigator.clipboard.readText())
+  if (copiedId !== 'chat-atlas') throw new Error(`ID copié : ${copiedId}`)
+
+  // A gateway without the method: a clear message, and the roster does not change.
+  configureMissing = true
+  await openAtlasMenu()
+  await menuItem('Masquer de la barre latérale').click()
+  await page.locator('.toast').getByText('Ce Hermes ne sait pas modifier les bots', { exact: false }).waitFor({ timeout: 5_000 })
+  if (await atlasRow.count() !== 1 || await atlasRow.evaluate((row) => row.classList.contains('is-hidden'))) throw new Error('Un masquage refusé par Hermes a changé le roster.')
+  await page.locator('.toast button').click()
+  configureMissing = false
+
+  // Hide: in the card, as Hermes Desktop does; the hidden bots view brings it back.
+  configureCalls.length = 0
+  await openAtlasMenu()
+  await menuItem('Masquer de la barre latérale').click()
+  await atlasRow.waitFor({ state: 'detached', timeout: 5_000 })
+  if (configureCalls.at(-1)?.ui_meta?.['hermes-bots']?.hidden !== true) throw new Error(`Masquage : ${JSON.stringify(configureCalls)}`)
+  await page.getByRole('button', { name: 'Afficher les bots cachés' }).click()
+  await page.locator('[data-bot=atlas].is-hidden').waitFor({ timeout: 3_000 })
+  await openAtlasMenu()
+  await menuItem('Afficher dans la barre latérale').click()
+  await page.locator('[data-bot=atlas]:not(.is-hidden)').waitFor({ timeout: 5_000 })
+  if (configureCalls.at(-1)?.ui_meta?.['hermes-bots']?.hidden !== false) throw new Error(`Retour du bot masqué : ${JSON.stringify(configureCalls)}`)
+
+  // Delete: a dialog that says what happens; cancelled, nothing is written; confirmed, the bot leaves the roster
+  // for good, its profile stays, its previous card is kept beside the mark.
+  configureCalls.length = 0
+  const deleteDialog = page.getByRole('alertdialog', { name: 'Supprimer Atlas Prime de HermesBot ?' })
+  await openAtlasMenu()
+  await menuItem('Supprimer').click()
+  await deleteDialog.waitFor({ timeout: 3_000 })
+  await deleteDialog.getByText('hermes profile delete atlas', { exact: true }).waitFor({ timeout: 2_000 })
+  await deleteDialog.getByText('Rien n’est effacé', { exact: false }).waitFor({ timeout: 2_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}bot-delete.png` })
+  await page.keyboard.press('Escape')
+  await deleteDialog.waitFor({ state: 'detached', timeout: 2_000 })
+  if (configureCalls.length) throw new Error('Annuler la suppression a écrit chez Hermes.')
+  await openAtlasMenu()
+  await menuItem('Supprimer').click()
+  await deleteDialog.getByRole('button', { name: 'Supprimer de HermesBot' }).click()
+  await deleteDialog.waitFor({ state: 'detached', timeout: 5_000 })
+  await atlasRow.waitFor({ state: 'detached', timeout: 5_000 })
+  const removal = configureCalls.at(-1)
+  const removedMark = removal?.ui_meta?.['hermesbot-removed']
+  if (removal?.name !== 'atlas' || removal.ui_meta['hermes-bots'].hidden !== true || removedMark?.card?.title !== 'Atlas Prime' || removedMark.card.hidden !== false || !removedMark.removed_at
+    || removal.ui_meta_expected_revisions?.['hermesbot-removed'] !== 0 || typeof removal.ui_meta_expected_revisions['hermes-bots'] !== 'number') throw new Error(`Suppression : ${JSON.stringify(removal)}`)
+  if ((await page.evaluate(() => JSON.parse(localStorage.getItem('hermesbot-settings')).pinnedBots)).includes('atlas')) throw new Error('Un bot supprimé reste épinglé.')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
+  if (await atlasRow.count()) throw new Error('Un bot supprimé revient au rechargement.')
+
+  // New bot (the "+" at the top of the sidebar): a name, then a look, then its chat, where it introduces itself and
+  // asks for its role. Atlas, deleted just above, keeps its Hermes profile: its name is still taken there.
+  const KICKOFF = 'New bot: introduce yourself and ask me what your role is.'
+  const newBotButton = page.getByRole('button', { name: 'Nouveau bot', exact: true })
+  const newBotDialog = page.getByRole('dialog', { name: 'Nouveau bot' })
+  const botNameField = newBotDialog.getByRole('textbox', { name: 'Nom' })
+  const nameHint = newBotDialog.locator('.new-bot-hint')
+  const nextButton = newBotDialog.getByRole('button', { name: 'Suivant' })
+  const createButton = newBotDialog.getByRole('button', { name: 'Créer' })
+  const colorChoices = newBotDialog.getByRole('radiogroup', { name: 'Couleur' })
+  const shapeChoices = newBotDialog.getByRole('radiogroup', { name: 'Forme' })
+  await newBotButton.click()
+  await newBotDialog.waitFor({ timeout: 3_000 })
+  await page.waitForFunction(() => document.activeElement?.closest('[role=dialog]') && document.activeElement.tagName === 'INPUT', null, { timeout: 2_000 })
+  await page.keyboard.press('Escape')
+  await newBotDialog.waitFor({ state: 'detached', timeout: 2_000 })
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Nouveau bot', null, { timeout: 2_000 })
+  await newBotButton.click()
+  await botNameField.waitFor({ timeout: 3_000 })
+  if (!(await nextButton.isDisabled())) throw new Error('Suivant est actif sans nom.')
+  // Taken in the roster, taken by a profile the roster hides, reserved, kept by a deleted bot, nothing usable.
+  for (const [typed, expected] of [['Nova', 'Hermes a déjà un profil nommé « nova »'], ['Notify', 'Hermes a déjà un profil nommé « notify »'], ['Default', '« default » est réservé par Hermes'], ['Atlas', '« atlas » existe encore dans Hermes'], ['!!!', 'Mets au moins une lettre ou un chiffre']]) {
+    await botNameField.fill(typed)
+    await nameHint.filter({ hasText: expected }).waitFor({ timeout: 3_000 })
+    if (!(await nextButton.isDisabled()) || await botNameField.getAttribute('aria-invalid') !== 'true') throw new Error(`« ${typed} » n’est pas signalé.`)
+  }
+  await botNameField.fill('Atlas')
+  await nameHint.filter({ hasText: 'efface-le pour de bon avec hermes profile delete atlas' }).waitFor({ timeout: 2_000 })
+  // A name another app takes meanwhile: Hermes refuses it (4062), the dialog goes back to the name and says so.
+  await botNameField.fill('Iris')
+  await nameHint.getByText('Profil Hermes : iris', { exact: true }).waitFor({ timeout: 2_000 })
+  profiles.splice(profiles.findIndex((item) => item.is_default), 0, { name: 'iris', model: 'claude-opus-5-5', description: '', ui_meta: {} })
+  await botNameField.press('Enter')
+  await colorChoices.waitFor({ timeout: 2_000 })
+  await createButton.click()
+  await nameHint.filter({ hasText: 'Hermes a déjà un profil nommé « iris »' }).waitFor({ timeout: 5_000 })
+  await page.waitForFunction(() => document.activeElement?.tagName === 'INPUT' && document.activeElement.closest('[role=dialog]'), null, { timeout: 2_000 })
+  profiles.splice(profiles.findIndex((item) => item.name === 'iris'), 1)
+  if (createCalls.length !== 1 || createCalls[0].name !== 'iris') throw new Error(`Création refusée : ${JSON.stringify(createCalls)}`)
+  // A free name: the profile name is shown as it will be created.
+  await botNameField.fill('Léa Martin')
+  await nameHint.getByText('Profil Hermes : lea-martin', { exact: true }).waitFor({ timeout: 2_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}new-bot-name.png` })
+  await botNameField.press('Enter')
+  await colorChoices.waitFor({ timeout: 2_000 })
+  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'radio' && document.activeElement.getAttribute('aria-checked') === 'true', null, { timeout: 2_000 })
+  // Preselected: a color and a shape the bots on screen do not use yet. The preview follows every choice.
+  const previewLook = () => newBotDialog.locator('.new-bot-preview .bot-avatar').evaluate((avatar) => ({ color: avatar.style.getPropertyValue('--avatar-color'), shape: avatar.querySelector('svg g')?.innerHTML || '' }))
+  const checkedName = (group) => group.locator('[aria-checked="true"]').getAttribute('aria-label')
+  if (await checkedName(colorChoices) !== 'Violet' || await checkedName(shapeChoices) !== 'Galet') throw new Error(`Apparence proposée : ${await checkedName(colorChoices)}, ${await checkedName(shapeChoices)}`)
+  const firstLook = await previewLook()
+  await colorChoices.getByRole('radio', { name: 'Vert' }).click()
+  await shapeChoices.getByRole('radio', { name: 'Nuage' }).click()
+  const chosenLook = await previewLook()
+  if (chosenLook.color !== '#3FA66B' || !chosenLook.shape.includes('M11 34a8 8') || chosenLook.shape === firstLook.shape) throw new Error(`Aperçu : ${JSON.stringify({ firstLook, chosenLook })}`)
+  // The keyboard of a radio group: arrows move the choice.
+  await shapeChoices.getByRole('radio', { name: 'Nuage' }).press('ArrowRight')
+  if (await checkedName(shapeChoices) !== 'Goutte') throw new Error(`→ dans les formes : ${await checkedName(shapeChoices)}`)
+  await page.keyboard.press('ArrowLeft')
+  if (await checkedName(shapeChoices) !== 'Nuage') throw new Error(`← dans les formes : ${await checkedName(shapeChoices)}`)
+  await newBotDialog.getByText('Léa Martin se présentera et te demandera son rôle tout de suite', { exact: false }).waitFor({ timeout: 2_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}new-bot-look.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}new-bot-look-dark.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  // Create, clicked twice: one profile, its card, then its chat, selected.
+  createCalls.length = 0
+  configureCalls.length = 0
+  await createButton.dblclick()
+  await newBotDialog.waitFor({ state: 'detached', timeout: 10_000 })
+  const created = createCalls[0]
+  if (createCalls.length !== 1 || created.name !== 'lea-martin' || created.share_auth !== true || 'clone_from' in created || !String(created.soul).startsWith('# Léa Martin\n')) throw new Error(`Création : ${JSON.stringify(createCalls)}`)
+  const leaCard = configureCalls.find((call) => call.name === 'lea-martin')?.ui_meta?.['hermes-bots']
+  if (!leaCard || leaCard.title !== 'Léa Martin' || leaCard.shape !== 'cloud' || leaCard.color !== '#3FA66B' || leaCard.imageKind !== 'shape' || typeof leaCard.created !== 'number') throw new Error(`Fiche du nouveau bot : ${JSON.stringify(configureCalls)}`)
+  const leaRow = page.locator('[data-bot="lea-martin"]')
+  await page.locator('[data-bot="lea-martin"].is-selected').waitFor({ timeout: 5_000 })
+  await page.locator('.bot-section', { has: page.locator('.section-heading', { hasText: 'Non classés' }) }).locator('[data-bot="lea-martin"]').waitFor({ timeout: 3_000 })
+  const rowLook = await leaRow.locator('.bot-avatar').first().evaluate((avatar) => ({ color: avatar.style.getPropertyValue('--avatar-color'), shape: avatar.querySelector('svg g')?.innerHTML || '' }))
+  if (rowLook.color !== '#3FA66B' || !rowLook.shape.includes('M11 34a8 8')) throw new Error(`Avatar du nouveau bot : ${JSON.stringify(rowLook)}`)
+  // It works right away (the work line), then asks for its role.
+  await page.locator('.working-row .working-caption').waitFor({ timeout: 5_000 })
+  if (await page.locator('.chat-empty .suggestions').count()) throw new Error('Des suggestions restent sous la ligne de travail du nouveau bot.')
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}new-bot-working.png` })
+  await page.locator('.message-assistant').getByText('Quel rôle veux-tu me confier ?', { exact: false }).waitFor({ timeout: 6_000 })
+  await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}new-bot-chat.png` })
+  if (await page.locator('.messages-column').getByText('New bot:', { exact: false }).count()) throw new Error('La phrase de lancement est dans le fil.')
+  if ((await leaRow.innerText()).includes('New bot:')) throw new Error('La phrase de lancement est en aperçu du roster.')
+  const kickoffs = newBotPrompts.filter((call) => call.session_id === 'chat-lea-martin')
+  if (kickoffs.length !== 1 || kickoffs[0].text !== KICKOFF || kickoffs[0].queued !== false || !kickoffs[0].api_text?.includes('Your name is "Léa Martin"') || !kickoffs[0].api_text.includes('in French') || kickoffs[0].api_text.includes('caveman')) throw new Error(`Premier tour : ${JSON.stringify(newBotPrompts)}`)
+  if (sessionCreateCalls.filter((call) => call.profile === 'lea-martin').length !== 1 || !sessionTitleCalls.some((call) => call.session_id === 'chat-lea-martin' && call.title === 'Bot Chat')) throw new Error(`Bot Chat du nouveau bot : ${JSON.stringify({ sessionCreateCalls, sessionTitleCalls })}`)
+  // The kickoff sentence lives in Activity.
+  const detailsWereOpen = await page.locator('.details-panel').isVisible()
+  if (!detailsWereOpen) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
+  await page.locator('.details-panel').getByRole('tab', { name: /Activité/ }).click()
+  await page.locator('.details-panel .activity-row').getByText(KICKOFF, { exact: true }).waitFor({ timeout: 3_000 })
+  await page.locator('.details-panel').getByRole('tab', { name: 'Routines' }).click()
+  if (!detailsWereOpen) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
+  // After a reload: the bot is still there, its question too, and it never introduced itself twice.
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await leaRow.waitFor({ timeout: 15_000 })
+  if ((await leaRow.innerText()).includes('New bot:')) throw new Error('La phrase de lancement est en aperçu après rechargement.')
+  await leaRow.click()
+  await page.locator('[data-bot="lea-martin"].is-selected').waitFor({ timeout: 3_000 })
+  await page.locator('.message-assistant').getByText('Quel rôle veux-tu me confier ?', { exact: false }).waitFor({ timeout: 5_000 })
+  await delay(1_000)
+  if (newBotPrompts.filter((call) => call.session_id === 'chat-lea-martin').length !== 1) throw new Error('Le nouveau bot s’est présenté une deuxième fois.')
+  if (await page.locator('.messages-column').getByText('New bot:', { exact: false }).count()) throw new Error('La phrase de lancement est dans le fil après rechargement.')
+  profiles.splice(profiles.findIndex((item) => item.name === 'lea-martin'), 1)
+  delete newBotHistory['chat-lea-martin']
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
+  profiles.splice(profiles.indexOf(atlasProfile), 1)
+  // The local chat is not a Hermes profile: no bot menu.
+  await page.locator(`[data-bot="local:ollama"]`).click({ button: 'right' })
+  await delay(200)
+  if (await page.locator('.bot-menu').count()) throw new Error('Le chat local a un menu de bot.')
+  await page.keyboard.press('Escape')
 
   // Standing by: no turn, but a subagent and background processes still running. Profile-wide first
   // (`subagent.roster`), then the open conversation's own reads (`process.list`, `subagent.list`) and events.
@@ -1937,6 +2479,11 @@ try {
   emptyRoster = true
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByText('Aucun bot à afficher.').waitFor({ timeout: 15_000 })
+  // A fresh Hermes: the first bot can be created from there.
+  await page.getByRole('button', { name: 'Nouveau bot', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Nouveau bot' }).waitFor({ timeout: 3_000 })
+  await page.keyboard.press('Escape')
+  await page.getByRole('dialog', { name: 'Nouveau bot' }).waitFor({ state: 'detached', timeout: 2_000 })
   emptyRoster = false
 
   // Launch with an expired Hermes session: no login screen.
@@ -1988,6 +2535,7 @@ try {
   // The demo data follows the language too: sections, previews, messages and routines.
   await english.locator('.section-heading', { hasText: 'Build' }).first().waitFor({ timeout: 3_000 })
   await english.getByText('Give me a quick update.').waitFor({ timeout: 3_000 })
+  await english.getByRole('button', { name: /details/i }).first().click()
   await english.getByText('Morning briefing').waitFor({ timeout: 3_000 })
   const frenchDemo = await english.locator('body').evaluate((body) => /Atelier|Maison|Lecture|Voyage|Point du matin|factures/.exec(body.innerText)?.[0] || '')
   if (frenchDemo) throw new Error(`Démo anglaise avec des données en français : ${frenchDemo}`)
@@ -1997,10 +2545,45 @@ try {
   await english.close()
   if (await page.locator('.sidebar-filter-row').evaluate((row) => row.scrollWidth > row.clientWidth)) throw new Error('La ligne de filtres déborde de la sidebar.')
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
-  await page.getByRole('button', { name: 'Passer au thème sombre' }).click()
+  await chooseThemeInSettings('Sombre')
   await delay(700)
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-dark.png` })
-  await page.getByRole('button', { name: 'Passer au thème clair' }).click()
+  await chooseThemeInSettings('Clair')
+  // Demo: the bot menu works without a gateway. Pin stays local, the other actions only change the roster on screen.
+  const configureBeforeDemo = configureCalls.length
+  const demoRow = page.locator('[data-bot=vega]')
+  const demoMenu = page.locator('.bot-menu:not(.is-sub)')
+  await demoRow.click({ button: 'right' })
+  await demoMenu.waitFor({ timeout: 3_000 })
+  if (await demoMenu.getByRole('menuitem', { name: 'Copier l’ID de conversation' }).getAttribute('aria-disabled') !== 'true') throw new Error('Démo : un ID de conversation à copier sans conversation.')
+  await demoMenu.getByRole('menuitem', { name: 'Épingler', exact: true }).click()
+  await page.locator('.bot-section.is-pinned [data-bot=vega]').waitFor({ timeout: 3_000 })
+  await demoRow.click({ button: 'right' })
+  await demoMenu.getByRole('menuitem', { name: 'Renommer le bot' }).click()
+  const demoRename = page.getByRole('dialog', { name: 'Renommer Vega' })
+  await demoRename.getByRole('textbox', { name: 'Nom affiché' }).fill('Vega Bis')
+  await demoRename.getByRole('button', { name: 'Renommer', exact: true }).click()
+  await demoRow.locator('.bot-row-name').getByText('Vega Bis', { exact: true }).waitFor({ timeout: 3_000 })
+  await demoRow.click({ button: 'right' })
+  await demoMenu.getByRole('menuitem', { name: 'Supprimer', exact: true }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Supprimer de HermesBot' }).click()
+  await demoRow.waitFor({ state: 'detached', timeout: 3_000 })
+  if (await page.locator('.bot-section.is-pinned').count()) throw new Error('Démo : le bot supprimé reste épinglé.')
+  if (configureCalls.length !== configureBeforeDemo) throw new Error('Démo : une action a écrit chez Hermes.')
+  // Demo: a new bot without a gateway. It joins the roster, works a moment, then asks for its role; nothing goes to Hermes.
+  const createsBeforeDemo = createCalls.length
+  const promptsBeforeDemo = promptCalls
+  await page.getByRole('button', { name: 'Nouveau bot', exact: true }).click()
+  const demoNewBot = page.getByRole('dialog', { name: 'Nouveau bot' })
+  await demoNewBot.getByRole('textbox', { name: 'Nom' }).fill('Pixel')
+  await demoNewBot.getByRole('button', { name: 'Suivant' }).click()
+  await demoNewBot.getByRole('button', { name: 'Créer' }).click()
+  await demoNewBot.waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('[data-bot=pixel].is-selected').waitFor({ timeout: 3_000 })
+  await page.locator('.working-row').waitFor({ timeout: 3_000 })
+  await page.locator('.message-assistant').getByText('Quel rôle veux-tu me confier ?', { exact: false }).waitFor({ timeout: 6_000 })
+  if (await page.locator('.message-assistant').count() !== 1) throw new Error('Démo : le nouveau bot montre une autre conversation.')
+  if (createCalls.length !== createsBeforeDemo || promptCalls !== promptsBeforeDemo || configureCalls.length !== configureBeforeDemo) throw new Error('Démo : la création a parlé à Hermes.')
 
   // A gateway without a password, Hermes' default setup on one machine: the server signs in by itself,
   // for whoever holds its local key and for nobody else.
@@ -2091,7 +2674,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

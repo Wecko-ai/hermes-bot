@@ -110,6 +110,25 @@
     "showUsageHint": "Below the composer",
     "caveman": "Caveman mode",
     "cavemanHint": "Bots answer you in few words, with the same facts. For the messages you send from here; what they write elsewhere stays normal.",
+    "guide": {
+      "title": "Chat guide",
+      "send": "Send the message",
+      "shift": "Shift",
+      "newline": "New line",
+      "mention": "Mention another bot in the message",
+      "model": "Change the model of this conversation",
+      "brain": "Think it through together, nothing runs",
+      "plan": "Build a plan before anything runs",
+      "exec": "Run the task",
+      "delivery": "While a bot works: keep a draft, queue it, or interrupt",
+      "files": "Add files: drag and drop, paste, or the + button",
+      "search": "Search in the conversation",
+      "quote": "Quote the selected text in the composer",
+      "palette": "Command palette",
+      "bots": "Previous / next bot",
+      "composer": "Focus the composer",
+      "settings": "Open settings"
+    },
     "sortBots": "Sort bots",
     "sortOptions": {
       "groups": "Groups",
@@ -137,6 +156,16 @@
     "sessionHint": "Forgets the credentials saved on this Mac",
     "logout": "Sign out",
     "version": "Version",
+    "notificationsTest": "Test notification",
+    "notificationsTestHint": "Sends one now, like a bot that is done",
+    "notificationsTestSend": "Send",
+    "notificationsTestBody": "Notifications work: this is how a bot tells you it is done.",
+    "notificationsTestResult": {
+      "shown": "Sent. Nothing on screen? Check System Settings > Notifications > HermesBot, and your Focus.",
+      "failed": "Refused: notifications are off for HermesBot in System Settings > Notifications.",
+      "silent": "No answer from macOS: this build of the app isn’t signed, so macOS drops its notifications.",
+      "unsupported": "This window can’t send notifications."
+    },
     "notifications": "Notifications",
     "notificationsHint": "When a bot is done or waits on your answer, unless its chat is in view"
   },

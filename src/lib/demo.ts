@@ -143,3 +143,10 @@ export function demoData(language: DemoLanguage): DemoData {
     usageDetails: usageDetails(texts.context),
   }
 }
+
+/** The first message of a bot created in the demo: it introduces itself and asks for its role. */
+export function demoIntroduction(name: string, language: DemoLanguage) {
+  return language === 'fr'
+    ? `Bonjour, je suis ${name}, ton nouveau bot. Je garde ma mémoire d’une conversation à l’autre et je peux travailler avec les autres bots.\n\nQuel rôle veux-tu me confier ? Dis-moi ce dont je dois m’occuper pour toi.`
+    : `Hi, I’m ${name}, your new bot. I keep my memory from one conversation to the next and can work with the other bots.\n\nWhat role would you like me to take? Tell me what I should take care of for you.`
+}

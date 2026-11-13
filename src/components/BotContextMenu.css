@@ -1,0 +1,68 @@
+/* Bot menu (right click in the sidebar): floating glass, the shape of a macOS menu. */
+.bot-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 228px;
+  max-width: min(300px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight), var(--glass-shadow), 0 0 0 .5px var(--glass-line);
+  color: var(--text);
+  visibility: hidden;
+  outline: 0;
+  /* The active row: the app's --selected is white in the light theme, invisible on white glass. */
+  --menu-active: rgb(20 38 43 / 8%);
+}
+:root[data-theme='dark'] .bot-menu { --menu-active: rgb(255 255 255 / 10%); }
+.bot-menu.is-placed { visibility: visible; animation: bot-menu-in 140ms var(--ease-out) both; }
+.bot-menu.is-sub { min-width: 210px; }
+
+.bot-menu-anchor { display: contents; }
+
+.bot-menu-item {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 9px;
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 18px;
+  font-weight: 450;
+  text-align: left;
+  outline: 0;
+}
+.bot-menu-item:focus, .bot-menu-item.is-open { background: var(--menu-active); }
+.bot-menu-item:focus-visible { outline: 0; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.bot-menu-item[aria-disabled='true'] { cursor: default; opacity: .38; }
+.bot-menu-item[aria-disabled='true']:focus { background: none; }
+.bot-menu-icon { width: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+.bot-menu-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-menu-chevron, .bot-menu-check { flex: none; color: var(--text-tertiary); }
+.bot-menu-check { color: var(--accent); }
+.bot-menu-item.is-danger, .bot-menu-item.is-danger .bot-menu-icon { color: var(--danger); }
+.bot-menu-item.is-danger:focus { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+.bot-menu-separator { height: 1px; flex: none; margin: 4px 10px; background: var(--glass-line); }
+:root[data-theme='dark'] .bot-menu-separator { background: rgb(255 255 255 / 10%); }
+
+/* New section: the item becomes a field, Enter files the bot there. */
+.bot-menu-new { min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; color: var(--text-secondary); }
+.bot-menu-new input { min-width: 0; flex: 1; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; outline: 0; background: var(--hover); color: var(--text); font-size: 13px; box-shadow: inset 0 0 0 .5px var(--border-strong); }
+.bot-menu-new input:focus { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent); }
+.bot-menu-new button { height: 26px; flex: none; padding: 0 10px; border-radius: 7px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 560; }
+
+@keyframes bot-menu-in {
+  from { opacity: 0; transform: scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bot-menu.is-placed { animation: none; }
+}

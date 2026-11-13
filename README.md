@@ -84,11 +84,12 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 
 ## What it does
 
-- **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K).
+- **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K). Right-click a bot to pin it, move it to a section, mark it as read, rename it, copy its conversation ID, hide it or delete it.
+- **New bot.** The "+" at the top of the roster creates a bot: a name, a colour and a shape. Its chat opens at once, and the bot introduces itself and asks what its role is.
 - **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". A bot with no turn but with subagents or background processes still running is marked "Standing by", with a calm ring and no animation; hovering it says how many are left. The status is right even for a bot woken by another bot.
 - **Subagents.** In the chat, a collapsible "Subagents" block lists the children the bot delegated in that conversation: goal, status, duration, last tool and final summary. Click one to read the end of its live transcript. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
-- **Chat.** One message per turn: while a bot works, a single line with its live avatar says what it is doing, and its reply arrives whole. The steps it writes before its tool calls go to the Activity tab. Markdown, tables and code. Stop the current turn. Search in the conversation. Drafts are kept per bot.
-- **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. An action that needs approval opens a dialog (once, for the session, always, deny).
+- **Chat.** One message per turn: while a bot works, a single line with its live avatar says what it is doing, and its reply arrives whole. The steps it writes before its tool calls go to the Activity tab. Markdown, tables and code. Stop the current turn. Search in the conversation (⌘F): matches are highlighted and Enter goes from one to the next. Links open in your default browser. Drafts are kept per bot.
+- **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. Questions it lists at the end of a reply become a small form: one field under each question, and all your answers go back in one message. An action that needs approval opens a dialog (once, for the session, always, deny).
 - **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).
 - **Files.** Drag and drop images, videos, PDFs and other files into the chat.
 - **Bot media.** Images, galleries, video and audio that a bot sends (`MEDIA:` lines) or cites by path show under its message, with a full-screen viewer. PDF, HTML and Markdown documents open in tabs next to the chat.
@@ -99,7 +100,8 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
 - **Routines.** The scheduled jobs of each bot, read-only.
 - **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
-- **Settings.** Theme, text size, language, send key, hidden bots, which models the picker offers. They stay on your Mac; nothing is written to Hermes profiles.
+- **Notifications.** A macOS notification when a bot finishes or asks you something, unless you are looking at its chat. macOS only delivers them from a signed build: see "Desktop app" below.
+- **Settings.** Theme, text size, language, send key, notifications, hidden bots, which models the picker offers, and a short guide to the chat. They stay on your Mac. Managing a bot (create, rename, move, hide, delete) is the exception: it writes the bot's card in its Hermes profile, as Hermes Desktop does, so every app that reads the card agrees.
 
 ## Connect it to Hermes
 
@@ -130,6 +132,8 @@ npm run pack       # build release/mac-arm64/HermesBot.app
 ```
 
 `npm run pack` makes an unsigned app for Apple silicon. An app you build yourself opens normally; one copied from another Mac is quarantined by macOS until you allow it. There is no prebuilt download and no automatic update.
+
+**Notifications need a signed build.** macOS drops the notifications of an app whose code signature does not carry its bundle identifier, and an unsigned package carries the runtime's. `HERMESBOT_MAC_SIGN=adhoc npm run pack` signs the app's executable ad hoc with its identifier ([scripts/mac-sign.cjs](scripts/mac-sign.cjs)); no certificate is needed. The first launch of a build signed this way asks once for the Keychain item that holds your session ("Always Allow"); later builds do not ask again while the Electron version stays the same. Settings > General has a "Test notification" button.
 
 The desktop app keeps your session between launches, encrypted with the macOS Keychain. With "Stay signed in on this Mac" ticked, it also keeps your password the same way, to sign in again when the Hermes session expires. Neither is ever sent back to the window.
 
@@ -194,7 +198,8 @@ npm run test:e2e   # end-to-end run, needs macOS and Google Chrome
 - The sign-in without a password only works for a Hermes on the same Mac and under the same account. It relies on the session token of Hermes' Webapp, which is not a documented interface for other apps: a Hermes update can break it.
 - Other Hermes sign-ins, such as OAuth, are not supported.
 - macOS only, and the packaged app is for Apple silicon. The server and the interface may run elsewhere with `npm run dev`, but this is not tested.
-- Bots, groups and routines cannot be created or edited from the app yet.
+- Groups and routines cannot be created or edited from the app yet. A bot can be created, renamed, moved, hidden and deleted; its instructions, skills and tools are still edited in Hermes.
+- Deleting a bot from the app takes it out of the roster and keeps its Hermes profile, files, history and scheduled jobs. `hermes profile delete <name>` erases it for good.
 - Most features are verified against the simulated gateway of the test suite and on the author's own setup, not on a wide range of Hermes versions. The gateway contract can change between Hermes releases.
 - The SSH tunnel is not restarted by itself when it drops. The reconnect button at the bottom of the roster tries to reopen it.
 

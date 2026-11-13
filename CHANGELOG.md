@@ -4,6 +4,14 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- New bot: the "+" at the top of the roster creates a bot (name, colour, shape). Its chat opens at once and the bot introduces itself and asks for its role.
+- Right-click menu on a bot: pin, move to a section, mark as read, rename, copy the conversation ID, hide, delete. Delete takes the bot out of the roster and keeps its Hermes profile.
+- Questions a bot lists at the end of its latest reply become a form even without an "Open questions" heading: one field per question, all answers sent in one turn.
+- Search in the conversation works like find-in-page: the whole thread stays in view, matches are highlighted, Enter and Shift+Enter move between them, the counter shows the position.
+- Links in a bot's message open in the default browser, `http://` and `mailto:` included; an address written without its scheme gets `https://`.
+- macOS notifications: optional ad hoc code signature of the package (`HERMESBOT_MAC_SIGN=adhoc`), without which macOS drops every notification; the end of a turn in the open chat is now notified when the window is in the background; statuses keep being read while the window is hidden and a bot works; "Test notification" button in Settings.
+- The jump-to-latest button is a round arrow that goes to the end of the conversation instantly.
+- A cleaner main view: no hint text under the composer (a chat guide in Settings > Chats replaces it), the details panel stays closed until asked, the theme switch lives in Settings only, and a working bot no longer has a spinning ring.
 - A notification for a finished turn shows only the bot's message under its name, without "Is done".
 - Choosing a bot gives the keyboard to its message field, even while its conversation loads: typing right away writes to it.
 - Larger, easier to read controls: the composer bar (modes, sending choice, context, model) and the details panel (tabs on one line, Activity entries as cards whose time never wraps, the bot's steps in plain text).

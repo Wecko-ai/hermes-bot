@@ -28,6 +28,9 @@ export function avatarColor(bot: Bot) {
   return colors[(seed >>> 4) % colors.length]
 }
 
+/** The shape the bot is drawn with: its card's, or one derived from its slug. */
+export const avatarShape = (bot: Bot) => bot.avatar?.shape || shapes[hash(bot.slug || bot.name) % shapes.length]
+
 function Shape({ shape }: { shape: string }) {
   switch (shape) {
     case 'squircle':
@@ -69,8 +72,7 @@ export function statusLabel(status: BotStatus) {
 
 export function BotAvatar({ bot, size = 36, showStatus = false }: { bot: Bot; size?: number; showStatus?: boolean }) {
   useTranslation() // re-render when the language changes: the label below comes from the global instance
-  const seed = hash(bot.slug || bot.name)
-  const shape = bot.avatar?.shape || shapes[seed % shapes.length]
+  const shape = avatarShape(bot)
   const color = avatarColor(bot)
   const eyeColor = color === '#000000' || color === 'var(--avatar-contrast)' ? 'var(--avatar-on-contrast)' : '#17181b'
   const status = effectiveStatus(bot)

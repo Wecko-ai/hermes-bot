@@ -110,6 +110,25 @@
     "showUsageHint": "Sous la zone de saisie",
     "caveman": "Mode caveman",
     "cavemanHint": "Les bots te répondent en peu de mots, avec les mêmes faits. Pour les messages envoyés d’ici ; ce qu’ils écrivent ailleurs reste normal.",
+    "guide": {
+      "title": "Mode d’emploi du chat",
+      "send": "Envoyer le message",
+      "shift": "Maj",
+      "newline": "Nouvelle ligne",
+      "mention": "Citer un autre bot dans le message",
+      "model": "Changer le modèle de cette conversation",
+      "brain": "Réfléchir ensemble, rien ne s’exécute",
+      "plan": "Construire un plan avant toute exécution",
+      "exec": "Exécuter la tâche",
+      "delivery": "Pendant que le bot travaille : brouillon, file ou interruption",
+      "files": "Ajouter des fichiers : glisser-déposer, coller, ou le bouton +",
+      "search": "Chercher dans la conversation",
+      "quote": "Citer le texte sélectionné dans le champ de saisie",
+      "palette": "Palette de commandes",
+      "bots": "Bot précédent / suivant",
+      "composer": "Aller au champ de saisie",
+      "settings": "Ouvrir les réglages"
+    },
     "sortBots": "Classer les bots",
     "sortOptions": {
       "groups": "Groupes",
@@ -137,6 +156,16 @@
     "sessionHint": "Oublie les identifiants enregistrés sur ce Mac",
     "logout": "Se déconnecter",
     "version": "Version",
+    "notificationsTest": "Notification de test",
+    "notificationsTestHint": "En envoie une tout de suite, comme un bot qui a fini",
+    "notificationsTestSend": "Envoyer",
+    "notificationsTestBody": "Les notifications marchent : c’est ainsi qu’un bot te dit qu’il a fini.",
+    "notificationsTestResult": {
+      "shown": "Envoyée. Rien à l’écran ? Regarde Réglages Système > Notifications > HermesBot, et ta concentration.",
+      "failed": "Refusée : les notifications de HermesBot sont coupées dans Réglages Système > Notifications.",
+      "silent": "Pas de réponse de macOS : cette version de l’app n’est pas signée, macOS ignore ses notifications.",
+      "unsupported": "Cette fenêtre ne peut pas envoyer de notifications."
+    },
     "notifications": "Notifications",
     "notificationsHint": "Quand un bot a fini ou attend ta réponse, sauf si son chat est sous tes yeux"
   },

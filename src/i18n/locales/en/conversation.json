@@ -17,9 +17,6 @@
     "hintWait": "Draft kept until the turn ends · Queue or Prio to send it now",
     "hintQueue": "Sends when {{name}} is done",
     "hintPriority": "{{name}} stops, reads, then resumes",
-    "hintEnter": "Enter to send · Shift + Enter for a new line",
-    "hintCmdEnter": "⌘ Enter to send · Enter for a new line",
-    "hintExtras": " · @ to mention a bot · /model",
     "usageToggle": "Show context and throughput",
     "chooseModel": "Choose the model"
   },
@@ -54,6 +51,7 @@
     "sendAnswer": "Send the answer"
   },
   "questions": {
+    "defaultHeading": "Your answers before I go on",
     "intro": "My answers to your questions:",
     "placeholder": "Your answer…",
     "progress": "{{filled}} of {{total}} answered",

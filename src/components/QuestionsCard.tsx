@@ -56,10 +56,11 @@ export function QuestionsCard({ id, block }: { id: string; block: OpenQuestions 
       </div>
     )
   }
+  const heading = block.heading || t('questions.defaultHeading')
   const filled = answers.filter((answer) => answer.trim()).length
   return (
-    <section className="questions-card" aria-label={block.heading}>
-      <header className="mail-card-title"><span className="mail-card-icon" aria-hidden="true"><MessageCircleQuestion size={15} /></span>{block.heading}</header>
+    <section className="questions-card" aria-label={heading}>
+      <header className="mail-card-title"><span className="mail-card-icon" aria-hidden="true"><MessageCircleQuestion size={15} /></span>{heading}</header>
       <ol className="questions-list">
         {block.questions.map((question, index) => (
           <li key={index}>

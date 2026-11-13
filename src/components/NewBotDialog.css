@@ -1,0 +1,63 @@
+/* New bot: the gateway request sheet (.request-sheet), on glass, in two steps. */
+.new-bot-scrim { z-index: 85; }
+.new-bot-sheet {
+  width: min(440px, 100%);
+  gap: 14px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+.new-bot-header { display: flex; flex-direction: column; gap: 4px; }
+.request-sheet p.new-bot-step { display: flex; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 12px; line-height: 16px; }
+.new-bot-dots { display: inline-flex; gap: 4px; }
+.new-bot-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--border-strong); transition: width 220ms var(--spring), background 220ms ease; }
+.new-bot-dots i.is-current { width: 16px; background: var(--accent); }
+.new-bot-dots i.is-done { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+.new-bot-pane { display: flex; flex-direction: column; gap: 12px; animation: new-bot-step-in 220ms var(--spring) both; }
+@keyframes new-bot-step-in { from { opacity: 0; transform: translateX(10px); } }
+
+.new-bot-sheet label { font-size: 12.5px; }
+.new-bot-sheet input[aria-invalid='true'] { border-color: var(--danger); }
+.new-bot-sheet input[aria-invalid='true']:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
+.request-sheet p.new-bot-hint { min-height: 18px; margin-top: -4px; color: var(--text-tertiary); font-size: 12px; line-height: 17px; }
+.request-sheet p.new-bot-hint.is-issue { color: var(--danger); }
+
+/* Live preview: the real avatar, with the name and the profile it will have. */
+.new-bot-preview { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--text) 4%, transparent); box-shadow: inset 0 0 0 .5px var(--border); }
+.new-bot-preview .bot-avatar svg path, .new-bot-preview .bot-avatar svg rect, .new-bot-preview .bot-avatar svg circle { transition: fill 200ms ease; }
+.new-bot-preview-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.new-bot-preview-copy strong { overflow: hidden; color: var(--text); font-size: 15px; line-height: 20px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.new-bot-preview-copy span { overflow: hidden; color: var(--text-tertiary); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+
+.new-bot-field { display: flex; flex-direction: column; gap: 7px; }
+.new-bot-label { color: var(--text-secondary); font-size: 12.5px; }
+
+.new-bot-colors { display: flex; flex-wrap: wrap; gap: 6px; }
+.new-bot-colors button { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 14px; outline-offset: 1px; }
+.new-bot-swatch { width: 22px; height: 22px; border-radius: 11px; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / 18%); transition: transform 180ms var(--spring); }
+.new-bot-colors button:hover .new-bot-swatch { transform: scale(1.08); }
+.new-bot-colors button[aria-checked='true'] { box-shadow: 0 0 0 2px var(--accent); }
+.new-bot-colors button[aria-checked='true'] .new-bot-swatch { transform: scale(.86); }
+
+.new-bot-shapes { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+.new-bot-shapes button { height: 38px; display: grid; place-items: center; border-radius: 10px; transition: background 140ms ease; }
+.new-bot-shapes button:hover { background: var(--hover); }
+.new-bot-shapes button[aria-checked='true'] { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+.new-bot-sheet .request-actions { margin-top: 2px; }
+.new-bot-sheet .request-actions button { min-height: 30px; }
+.request-sheet p.new-bot-kickoff { margin-top: -6px; color: var(--text-tertiary); font-size: 12px; line-height: 17px; text-align: right; }
+
+/* A bot whose chat Hermes cannot open yet: the reason and Try again, in the toast's place. */
+.toast.new-bot-retry { align-items: center; font-size: 12.5px; line-height: 17px; }
+.toast.new-bot-retry > span { flex: 1; }
+.toast.new-bot-retry > .new-bot-retry-action { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; margin-left: 4px; padding: 0 11px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 12.5px; font-weight: 560; }
+.toast.new-bot-retry > .new-bot-retry-close { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-left: 0; border-radius: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .new-bot-pane { animation: none; }
+  .new-bot-dots i, .new-bot-swatch, .new-bot-preview .bot-avatar svg path { transition: none; }
+}

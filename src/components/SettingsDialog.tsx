@@ -9,6 +9,7 @@ import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, localModelLabel, type LocalModels } from '../lib/local-chat'
+import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
@@ -84,7 +85,64 @@ function GeneralTab({ onChooseTheme }: Pick<SettingsDialogProps, 'onChooseTheme'
         updateSettings({ notifications })
         if (notifications && typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission()
       }} />
+      <NotificationTest />
     </>
+  )
+}
+
+function ChatGuide() {
+  const { t } = useTranslation()
+  const { sendKey } = useSettings()
+  const enter = t('settings.sendKeys.enter')
+  const items: Array<{ id: string; keys: string[]; text: string }> = [
+    { id: 'send', keys: sendKey === 'enter' ? [enter] : ['⌘', enter], text: t('settings.guide.send') },
+    { id: 'newline', keys: sendKey === 'enter' ? [t('settings.guide.shift'), enter] : [enter], text: t('settings.guide.newline') },
+    { id: 'mention', keys: ['@'], text: t('settings.guide.mention') },
+    { id: 'model', keys: ['/model'], text: t('settings.guide.model') },
+    { id: 'brain', keys: [t('modes.brain.label')], text: t('settings.guide.brain') },
+    { id: 'plan', keys: [t('modes.plan.label')], text: t('settings.guide.plan') },
+    { id: 'exec', keys: [t('modes.exec.label')], text: t('settings.guide.exec') },
+    { id: 'delivery', keys: [t('delivery.wait.label'), t('delivery.queue.label'), t('delivery.priority.label')], text: t('settings.guide.delivery') },
+    { id: 'files', keys: ['+'], text: t('settings.guide.files') },
+    { id: 'search', keys: ['⌘', 'F'], text: t('settings.guide.search') },
+    { id: 'quote', keys: ['⌘', 'L'], text: t('settings.guide.quote') },
+    { id: 'palette', keys: ['⌘', 'K'], text: t('settings.guide.palette') },
+    { id: 'bots', keys: ['⌥', '↑ / ↓'], text: t('settings.guide.bots') },
+    { id: 'composer', keys: ['⌘', 'I'], text: t('settings.guide.composer') },
+    { id: 'settings', keys: ['⌘', ','], text: t('settings.guide.settings') },
+  ]
+  return (
+    <section className="chat-guide" aria-labelledby="chat-guide-title">
+      <h4 id="chat-guide-title">{t('settings.guide.title')}</h4>
+      <dl>
+        {items.map((item) => (
+          <div key={item.id} className="chat-guide-item">
+            <dt>{item.keys.map((key) => <kbd key={key}>{key}</kbd>)}</dt>
+            <dd>{item.text}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+/** Sends a notification like the app's and says what macOS did with it. */
+function NotificationTest() {
+  const { t } = useTranslation()
+  const [result, setResult] = useState<TestNotificationResult | 'pending' | null>(null)
+  const send = () => {
+    setResult('pending')
+    void sendTestNotification({
+      title: 'HermesBot',
+      body: t('settings.notificationsTestBody'),
+      onClick: () => { void window.hermesBot?.focusWindow?.(); window.focus() },
+    }).then(setResult)
+  }
+  const hint = result && result !== 'pending' ? t(`settings.notificationsTestResult.${result}`) : t('settings.notificationsTestHint')
+  return (
+    <Row label={t('settings.notificationsTest')} hint={hint}>
+      <button type="button" className="settings-button" disabled={result === 'pending'} onClick={send}>{t('settings.notificationsTestSend')}</button>
+    </Row>
   )
 }
 
@@ -112,6 +170,7 @@ function ChatTab() {
           </select>
         </Row>
       )}
+      <ChatGuide />
     </>
   )
 }

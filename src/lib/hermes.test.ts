@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
+import { BOT_KICKOFF_TEXT } from './bot-kickoff'
 
 const chat: ActiveChat = {
   profile: 'orion',
@@ -25,6 +26,25 @@ describe('roster', () => {
     const { bots } = await loadRoster({ request } as unknown as HermesClient)
     expect(bots[0].lastActivity).toBe(3_000_000)
     expect(bots[0].timestamp).toBe(new Date(1_000_000).toISOString())
+  })
+
+  it('laisse dehors un bot supprimé ici, son profil restant chez Hermes', async () => {
+    const request = vi.fn().mockResolvedValue({ profiles: [
+      { name: 'orion', ui_meta: { 'hermes-bots': { title: 'Orion' } } },
+      { name: 'vega', ui_meta: { 'hermes-bots': { title: 'Vega', hidden: true }, 'hermesbot-removed': { removed_at: '2026-11-13T10:00:00.000Z', card: { title: 'Vega' } } } },
+    ] })
+    const { bots } = await loadRoster({ request } as unknown as HermesClient, async () => '')
+    expect(bots.map((bot) => bot.slug)).toEqual(['orion'])
+    expect(request.mock.calls.filter(([method]) => method === 'session.active_list').map(([, params]) => params.profile)).toEqual(['orion'])
+  })
+
+  it('classe sous Non classés un bot sans section ou au nom de section vide', async () => {
+    const request = vi.fn().mockResolvedValue({ profiles: [
+      { name: 'orion', ui_meta: { 'hermes-bots': { title: 'Orion', sectionId: null, sectionName: null } } },
+      { name: 'vega', ui_meta: { 'hermes-bots': { title: 'Vega', sectionId: 'sec-a', sectionName: '' } } },
+    ] })
+    const { bots } = await loadRoster({ request } as unknown as HermesClient, async () => '')
+    expect(bots.map((bot) => [bot.section, bot.sectionId])).toEqual([['Non classés', 'unassigned'], ['Non classés', 'sec-a']])
   })
 })
 
@@ -55,6 +75,24 @@ describe('messages de la gateway', () => {
     }] })
     const { bots } = await loadRoster({ request } as unknown as HermesClient)
     expect(bots[0].preview).toBe('')
+  })
+
+  it('ne met pas la phrase de lancement d’un bot créé ici en aperçu, entière ou coupée', async () => {
+    for (const preview of [BOT_KICKOFF_TEXT, `${BOT_KICKOFF_TEXT.slice(0, 40)}...`]) {
+      const request = vi.fn().mockResolvedValue({ profiles: [{ name: 'lyra', ui_meta: {}, canonical_session: { id: 'chat', last_active: 1_000, preview } }] })
+      const { bots } = await loadRoster({ request } as unknown as HermesClient, async () => '')
+      expect(bots[0].preview).toBe('')
+    }
+  })
+
+  it('range la phrase de lancement dans l’activité, jamais en bulle de l’utilisateur', async () => {
+    const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, messages: [
+      { row_id: 1, role: 'user', content: BOT_KICKOFF_TEXT, timestamp: 1_000 },
+      { row_id: 2, role: 'assistant', content: 'Bonjour, quel rôle veux-tu me confier ?', timestamp: 2_000 },
+      { row_id: 3, role: 'user', content: 'Tu suivras mes factures.', timestamp: 3_000 },
+    ] } : {})
+    const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'lyra', 'chat-lyra')
+    expect(messages.map((message) => [message.role, Boolean(message.technical)])).toEqual([['user', true], ['assistant', false], ['user', false]])
   })
 })
 

@@ -9,8 +9,10 @@ import { LiveAvatar } from './LiveAvatar'
 import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaEmbed'
 import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
-import { splitOpenQuestions } from '../lib/questions'
+import { findQuestions } from '../lib/questions'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
+import { normalizeHref } from '../lib/links'
+import { findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE } from '../lib/mail'
 import { stepIds } from '../lib/turns'
@@ -46,7 +48,7 @@ function MarkdownLink({ href, children, node: _node, ...props }: ComponentProps<
   if (context && media) return <MediaEmbed media={media} profile={context.profile} version={context.version} onOpenImage={context.openImage} onOpenDocument={context.openDocument} />
   const mentioned = mentionedSlug(href)
   if (mentioned) return <button type="button" className="mention-chip" onClick={() => mentions?.onOpenBot(mentioned)}>{children}</button>
-  return <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>
+  return <a {...props} href={normalizeHref(href)} target="_blank" rel="noreferrer noopener">{children}</a>
 }
 
 /**
@@ -188,6 +190,8 @@ interface MessageProps {
   profile: string
   onOpenImages: OpenImages
   onOpenDocument: (media: MediaRef) => void
+  /** The latest bot reply, nothing after it, no turn running: loose questions become a form. */
+  askable?: boolean
 }
 
 // A message the user just sent fades in; a loaded or cached thread shows as is.
@@ -241,7 +245,7 @@ function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessagePr
   )
 }
 
-const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument }: MessageProps) {
+const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, askable = false }: MessageProps) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const copy = async () => {
@@ -254,7 +258,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
     return <div className="system-message">{message.content}</div>
   }
   // "Questions ouvertes" at the end of a reply: answered from fields, not by retyping them.
-  const questions = message.role === 'assistant' && !message.streaming ? splitOpenQuestions(message.content) : null
+  const questions = message.role === 'assistant' && !message.streaming ? findQuestions(message.content, askable) : null
   return (
     <article className={`message message-${message.role} ${message.streaming ? 'is-streaming' : ''} ${message.failed ? 'is-failed' : ''} ${isEntering(message) ? 'is-entering' : ''}`}>
       <div className="message-content">
@@ -300,9 +304,16 @@ interface MessageListProps {
   onSuggestion: (text: string) => void
   onOpenDocument: (profile: string, media: MediaRef) => void
   onOpenBot: (slug: string) => void
+  /** Find in the conversation: matches are highlighted, `position` is the current one, `jump` changes on each Enter. */
+  search?: { query: string; position: number; jump: number }
+  onSearchCount?: (count: number) => void
 }
 
-export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onOpenBot }: MessageListProps) {
+// Only one list owns the page highlights at a time (the local chat keeps its own list mounted).
+let highlightOwner: object | null = null
+const supportsHighlights = () => typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined'
+
+export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onOpenBot, search, onSearchCount }: MessageListProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -359,6 +370,51 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     setViewer(null)
     scrollToBottom()
   }, [bot.slug])
+
+  // Find in the conversation: ranges are rebuilt when the text changes, but the view only moves on Enter.
+  const owner = useRef({}).current
+  const lastJumpRef = useRef(search?.jump ?? 0)
+  const flashRef = useRef<number | undefined>(undefined)
+  const query = search?.query ?? ''
+  const position = search?.position ?? -1
+  const jump = search?.jump ?? 0
+  useEffect(() => {
+    const root = scrollRef.current
+    const ranges = root && query.trim() ? findRanges(root, query) : []
+    onSearchCount?.(ranges.length)
+    const current = position >= 0 ? ranges[position] : undefined
+    if (supportsHighlights()) {
+      if (ranges.length) {
+        highlightOwner = owner
+        CSS.highlights.set('search-hit', new Highlight(...ranges.filter((range) => range !== current)))
+        if (current) CSS.highlights.set('search-current', new Highlight(current))
+        else CSS.highlights.delete('search-current')
+      } else if (highlightOwner === owner) {
+        CSS.highlights.delete('search-hit')
+        CSS.highlights.delete('search-current')
+      }
+    }
+    if (jump === lastJumpRef.current) return
+    lastJumpRef.current = jump
+    if (!root || !current) return
+    // Detach from the bottom first, or the thread would pull the view back; the scroll event re-attaches it if the match is at the end.
+    stickToBottomRef.current = false
+    setShowJump(true)
+    const box = current.getBoundingClientRect()
+    root.scrollTop += box.top - root.getBoundingClientRect().top - root.clientHeight / 2 + box.height / 2
+    if (!supportsHighlights()) {
+      const message = current.startContainer.parentElement?.closest('.message')
+      message?.classList.add('search-flash')
+      window.clearTimeout(flashRef.current)
+      flashRef.current = window.setTimeout(() => message?.classList.remove('search-flash'), 1400)
+    }
+  }, [query, position, jump, items, streaming, loading])
+  useEffect(() => () => {
+    if (highlightOwner === owner && supportsHighlights()) {
+      CSS.highlights.delete('search-hit')
+      CSS.highlights.delete('search-current')
+    }
+  }, [])
   useEffect(() => {
     if (stickToBottomRef.current) followBottom()
   }, [count, streaming, running, loading])
@@ -412,11 +468,12 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             <BotAvatar bot={bot} size={64} />
             <h2>{bot.name}</h2>
             <p>{bot.role}</p>
-            <div className="suggestions">
+            {/* A bot at work on an empty chat (a new bot introducing itself): no suggestions under its working line. */}
+            {!working && <div className="suggestions">
               {[t('messages.suggestionCapabilities'), t('messages.suggestionDay'), t('messages.suggestionRecent')].map((suggestion) => (
                 <button key={suggestion} onClick={() => onSuggestion(suggestion)}>{suggestion}</button>
               ))}
-            </div>
+            </div>}
           </div>
         )}
         {!loading && items.map((message, index) => {
@@ -425,7 +482,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           return (
             <div key={message.id}>
               {currentDay && currentDay !== previousDay && <div className="day-separator">{currentDay}</div>}
-              <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} />
+              <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} askable={index === items.length - 1 && !working && message.role === 'assistant'} />
             </div>
           )
         })}
@@ -441,7 +498,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
       </MentionContext.Provider>
       </MailContext.Provider>
       </div>
-      {showJump && <button className="jump-latest" onClick={() => scrollToBottom(true)}><ArrowDown size={14} />{t('messages.newMessages')}</button>}
+      {showJump && <button type="button" className="jump-latest" aria-label={t('messages.newMessages')} title={t('messages.newMessages')} onClick={() => scrollToBottom()}><ArrowDown size={20} strokeWidth={2.25} aria-hidden="true" /></button>}
       {viewer && <MediaViewer viewer={viewer} onClose={closeViewer} onMove={moveViewer} />}
     </div>
   )

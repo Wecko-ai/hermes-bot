@@ -17,9 +17,6 @@
     "hintWait": "Brouillon gardé jusqu’à la fin du tour · File ou Prio pour l’envoyer maintenant",
     "hintQueue": "Part quand {{name}} a fini",
     "hintPriority": "{{name}} s’interrompt, lit, puis reprend",
-    "hintEnter": "Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne",
-    "hintCmdEnter": "⌘ Entrée pour envoyer · Entrée pour une nouvelle ligne",
-    "hintExtras": " · @ pour citer un bot · /model",
     "usageToggle": "Afficher le contexte et le débit",
     "chooseModel": "Choisir le modèle"
   },
@@ -54,6 +51,7 @@
     "sendAnswer": "Envoyer la réponse"
   },
   "questions": {
+    "defaultHeading": "Tes réponses avant de continuer",
     "intro": "Mes réponses à tes questions :",
     "placeholder": "Ta réponse…",
     "progress": "{{filled}} sur {{total}} remplie(s)",

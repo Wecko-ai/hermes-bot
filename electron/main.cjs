@@ -8,6 +8,7 @@ const fs = require('node:fs')
 
 const { loadConfig } = require('../server/config.cjs')
 const { messages } = require('./messages.cjs')
+const { externalUrl } = require('./links.cjs')
 
 const ORIGIN = 'http://127.0.0.1:4330'
 // Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
@@ -207,14 +208,29 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   })
+  // Links go to the default browser or mail app, filtered by links.cjs (http, https and mailto only, never the
+  // app's own server). The window itself never opens another page.
+  const openOutside = (url) => {
+    const target = externalUrl(url, ORIGIN)
+    if (target) shell.openExternal(target).catch(() => { /* no app claims it: nothing to open */ })
+  }
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https:\/\//.test(url)) shell.openExternal(url)
+    openOutside(url)
     return { action: 'deny' }
   })
-  // A file dropped outside the drop zone, or a link from a bot's page, must never replace the app.
-  const leavesApp = (url) => /^(?:https?|file):/.test(url) && !url.startsWith(`${ORIGIN}/`)
-  mainWindow.webContents.on('will-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
-  mainWindow.webContents.on('will-frame-navigate', (event) => { if (leavesApp(event.url)) event.preventDefault() })
+  // Nothing replaces the app's page: a file dropped outside the drop zone stays put, and a link clicked in the
+  // app's own page without a target opens outside, like the chat's links.
+  const ownPage = (url) => url.startsWith(`${ORIGIN}/`)
+  mainWindow.webContents.on('will-navigate', (event) => {
+    if (ownPage(event.url)) return
+    event.preventDefault()
+    openOutside(event.url)
+  })
+  // Inside a document tab (a sandboxed iframe), a link never leaves the tab and never opens anything.
+  const leavesApp = (url) => /^(?:https?|file):/.test(url) && !ownPage(url)
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame && leavesApp(event.url)) event.preventDefault()
+  })
   // The key rides on one request only, from this window, and never reaches the page's own code.
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: [`${ORIGIN}/api/auth/local`] }, (details, callback) => {
     const headers = { ...details.requestHeaders }
