@@ -1328,7 +1328,9 @@ try {
   await orionBox.fill('Un message')
   for (const theme of ['light', 'dark']) {
     await page.evaluate((value) => { document.documentElement.dataset.theme = value }, theme)
-    await delay(250)
+    // Its colours move with a transition (theme, enabled): read them once it is over, even on a slow machine.
+    await sendButton().evaluate((button) => Promise.all(button.getAnimations().map((animation) => animation.finished.catch(() => {}))))
+    await delay(50)
     const look = await sendButton().evaluate((button) => {
       const style = getComputedStyle(button)
       return { background: style.backgroundColor, color: style.color, image: style.backgroundImage, shadow: style.boxShadow, text: getComputedStyle(document.querySelector('.composer textarea')).color, page: getComputedStyle(document.body).backgroundColor }
