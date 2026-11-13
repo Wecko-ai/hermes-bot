@@ -822,10 +822,16 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
   // Reduced motion: the logo stands still.
   const heartbeat = () => page.locator('.app-loading .loading-heart .logo-mark').evaluate((logo) => getComputedStyle(logo).animationName)
+  // The style follows the emulated preference a moment later on a slow machine: wait for it instead of reading once.
+  const heartbeatIs = (name) => page.waitForFunction((expected) => {
+    const logo = document.querySelector('.app-loading .loading-heart .logo-mark')
+    return Boolean(logo) && getComputedStyle(logo).animationName === expected
+  }, name, { timeout: 5_000 }).then(() => true, () => false)
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  if (await heartbeat() !== 'none') throw new Error('Le logo du chargement bat malgré « réduire les animations ».')
+  if (!await heartbeatIs('none')) throw new Error(`Le logo du chargement bat malgré « réduire les animations » (${await heartbeat()}).`)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  if (!await heartbeatIs('logo-heartbeat')) throw new Error(`Le logo du chargement ne bat plus (${await heartbeat()}).`)
   await page.emulateMedia({ reducedMotion: null })
-  if (await heartbeat() !== 'logo-heartbeat') throw new Error('Le logo du chargement ne bat plus.')
   releaseProfiles()
   await page.locator('.chat-skeleton span').first().waitFor({ timeout: 15_000 })
   await page.locator('.chat-loading').getByText('Ouverture de la conversation avec Nova…').waitFor({ timeout: 5_000 })
