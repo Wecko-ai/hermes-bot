@@ -87,7 +87,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K).
 - **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". A bot with no turn but with subagents or background processes still running is marked "Standing by", with a calm ring and no animation; hovering it says how many are left. The status is right even for a bot woken by another bot.
 - **Subagents.** In the chat, a collapsible "Subagents" block lists the children the bot delegated in that conversation: goal, status, duration, last tool and final summary. Click one to read the end of its live transcript. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
-- **Chat.** Streaming, Markdown, tables and code. Stop the current turn. Search in the conversation. Drafts are kept per bot.
+- **Chat.** One message per turn: while a bot works, a single line with its live avatar says what it is doing, and its reply arrives whole. The steps it writes before its tool calls go to the Activity tab. Markdown, tables and code. Stop the current turn. Search in the conversation. Drafts are kept per bot.
 - **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. An action that needs approval opens a dialog (once, for the session, always, deny).
 - **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).
 - **Files.** Drag and drop images, videos, PDFs and other files into the chat.
@@ -95,7 +95,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Bot-to-bot messages.** "Orion messaged Iris" lines in both chats, with the reply. `@bot` mentions tell a bot which other bot you mean.
 - **Modes.** BRAIN (think with me), PLAN (write a plan) and EXEC (do it), per bot. BRAIN and PLAN are an instruction for one turn, not a lock on tools.
 - **Caveman mode.** One switch in Settings > Conversations: every bot answers you in few words, with the same facts. It is a note read with each message you send, not a change to the bots' profiles. What a bot writes elsewhere (files, code, emails, posts, messages to other bots) keeps its normal style.
-- **Model picker.** Change the model for one conversation. The bot's profile is never rewritten.
+- **Model picker.** Change the model for one conversation. The bot's profile is never rewritten. Before switching, HermesBot asks Hermes whether that provider can serve the bot; a provider with no usable key is marked "No key".
 - **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
 - **Routines.** The scheduled jobs of each bot, read-only.
 - **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
