@@ -12,7 +12,7 @@ import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
-import { demoData, type DemoLanguage } from './lib/demo'
+import { demoChat, demoData, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { CommandPalette } from './components/CommandPalette'
@@ -63,7 +63,7 @@ const demoLanguage = (): DemoLanguage => (i18n.language === 'fr' ? 'fr' : 'en')
 if (DEMO) {
   const demo = demoData(resolveLanguage(getSettings().language))
   useRosterStore.setState({ bots: demo.bots, selected: 'nova', rosterLoaded: true, connected: true, workSummaries: demo.work })
-  useChatStore.setState({ messages: demo.messages, routines: demo.routines, chatLoading: false })
+  useChatStore.setState({ messages: demoChat(demo, 'nova'), routines: demo.routines, chatLoading: false })
 }
 
 // Store actions have a stable identity: we take them once, without subscribing.
@@ -143,7 +143,7 @@ export default function App() {
     if (!DEMO) return
     const demo = demoData(language === 'fr' ? 'fr' : 'en')
     useRosterStore.setState({ bots: demo.bots, workSummaries: demo.work })
-    useChatStore.setState({ messages: demo.messages, routines: demo.routines })
+    useChatStore.setState({ messages: demoChat(demo, useRosterStore.getState().selected), routines: demo.routines })
   }, [language])
   const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
@@ -169,7 +169,11 @@ export default function App() {
   // Mounted on first open, then kept: a reply keeps going while another bot is on screen.
   const [localStarted, setLocalStarted] = useState(false)
   const [localRunning, setLocalRunning] = useState(false)
-  const [localModels, setLocalModels] = useState<LocalModels | null>(null)
+  const [localModels, setLocalModels] = useState<LocalModels | null>(() => {
+    if (!DEMO) return null
+    const { model } = demoData(demoLanguage()).local
+    return { available: true, models: [model], defaultModel: model }
+  })
   const [newBotOpen, setNewBotOpen] = useState(false)
   const [newBotRetry, setNewBotRetry] = useState<{ slug: string; name: string } | null>(null)
   // Bots just created here whose chat has not opened yet, by slug.
@@ -859,10 +863,11 @@ export default function App() {
     updateBot(bot.slug, { unread: 0 })
     if (DEMO) {
       const demo = demoData(demoLanguage())
-      setMessages(demo.messages)
+      setMessages(demoChat(demo, bot.slug))
       setRoutines(demo.routines)
       setChatLoading(false)
-      setRunning(false)
+      // A bot marked at work shows its turn running: the working line, and the composer's Queue and Priority.
+      setRunning(bot.status === 'working')
       setStreaming('')
       setStreamKey('')
       setMobileOpen(false)
@@ -877,6 +882,12 @@ export default function App() {
     const caveman = sentMode !== undefined && getSettings().caveman
     const now = new Date().toISOString()
     if (DEMO) {
+      // During a turn, only a queued or priority message goes in: it waits in the thread, with its label.
+      if (running && delivery !== 'queue' && delivery !== 'priority') return false
+      if (running) {
+        setMessages((items) => [...items, { id: `demo-user-${Date.now()}`, role: 'user', content: text, createdAt: now, delivery: delivery as 'queue' | 'priority' }])
+        return true
+      }
       setMessages((items) => [...items,
         { id: `demo-user-${Date.now()}`, role: 'user', content: text, createdAt: now },
         { id: `demo-answer-${Date.now()}`, role: 'assistant', content: i18n.t('app.demoAnswer'), createdAt: new Date().toISOString() },
@@ -1028,6 +1039,7 @@ export default function App() {
     const chat = useChatStore.getState().activeChat
     if (!chat || DEMO) {
       setRunning(false)
+      if (DEMO) updateBot(useRosterStore.getState().selected, { status: 'idle' })
       return
     }
     try {
@@ -1208,7 +1220,7 @@ export default function App() {
   const localBot: Bot | null = localModel ? { ...localChatBot(localModel, appConfig.localChat.name), status: localRunning ? 'working' : 'idle' } : null
   localBotRef.current = localBot
   const shownBots = selectedBot && selectedBot !== rosterSelected ? bots.map((bot) => bot.slug === selectedBot.slug ? selectedBot : bot) : bots
-  const rosterBots = DEMO || !localBot ? shownBots : [...shownBots, localBot]
+  const rosterBots = !localBot ? shownBots : [...shownBots, localBot]
   const openRequest = serverRequests[0]
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
@@ -1289,7 +1301,7 @@ export default function App() {
           />
         ) : undefined}
       />
-      {localStarted && localBot && <LocalChatView bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} />}
+      {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
       {detailsOpen && !localOpen && (
         <DetailsPanel
           bot={selectedBot}
@@ -1318,6 +1330,7 @@ export default function App() {
           onSelectTab={setSettingsTab}
           onClose={() => setSettingsTab(null)}
           onChooseTheme={chooseTheme}
+          localModels={DEMO ? localModels : undefined}
           models={modelOptions}
           bots={bots}
           modelsLoading={modelsLoading}

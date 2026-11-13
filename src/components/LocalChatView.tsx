@@ -15,15 +15,17 @@ interface LocalChatViewProps {
   onOpenMobile: () => void
   onNotice: (text: string) => void
   onRunningChange: (running: boolean) => void
+  /** Visual demo: a fictional conversation, and a fixed reply instead of the model. Nothing is fetched. */
+  demo?: { messages: ChatMessage[]; answer: string }
 }
 
 const noop = () => undefined
 
 /** Direct conversation with the local model. Stays mounted while another bot is on screen. */
-export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice, onRunningChange }: LocalChatViewProps) {
+export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice, onRunningChange, demo }: LocalChatViewProps) {
   const { t } = useTranslation()
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const messagesRef = useRef<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(() => demo?.messages ?? [])
+  const messagesRef = useRef<ChatMessage[]>(demo?.messages ?? [])
   const [streaming, setStreaming] = useState('')
   const [streamKey, setStreamKey] = useState('')
   const [running, setRunningState] = useState(false)
@@ -44,6 +46,10 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
     if (running) return false
     const history = [...messagesRef.current, { id: `local-${Date.now()}`, role: 'user', content: text, createdAt: new Date().toISOString() } satisfies ChatMessage]
     commit(history)
+    if (demo) {
+      commit([...history, { id: `local-answer-${Date.now()}`, role: 'assistant', content: demo.answer, createdAt: new Date().toISOString() }])
+      return true
+    }
     const key = `local-answer-${Date.now()}`
     const controller = new AbortController()
     controllerRef.current = controller

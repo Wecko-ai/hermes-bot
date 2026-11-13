@@ -86,6 +86,38 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
       <br /><b>Light or dark, English or French.</b> Text size, animations and notifications in Settings.
     </td>
   </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-mail-dark.png" />
+        <img src="docs/readme/ui-mail-light.png" alt="A bot's email draft as a card: subject, recipients and body to edit, then Send or Dismiss" />
+      </picture>
+      <br /><b>Mail waits for you.</b> A bot's email draft shows as a card: edit it, then send it or dismiss it.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-questions-dark.png" />
+        <img src="docs/readme/ui-questions-light.png" alt="The open questions at the end of a reply, with one answer field under each question" />
+      </picture>
+      <br /><b>Questions wait for your answer.</b> The questions that end a reply become a form, and your answers go back in one message.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-queue-dark.png" />
+        <img src="docs/readme/ui-queue-light.png" alt="A bot at work, with a queued message and a priority message under its current task" />
+      </picture>
+      <br /><b>Queue a message, or make it priority.</b> Queue runs after the current turn; Priority interrupts it, then the bot resumes.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-local-dark.png" />
+        <img src="docs/readme/ui-local-light.png" alt="The local chat with a model installed in Ollama, listed under Local in the roster" />
+      </picture>
+      <br /><b>A local model.</b> Chat with a model installed in Ollama: no Hermes, no tools.
+    </td>
+  </tr>
 </table>
 
 <table>

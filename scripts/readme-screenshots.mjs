@@ -89,6 +89,10 @@ try {
     await page.screenshot({ path: file })
     written.push(file)
   }
+  const openBot = async (slug) => {
+    await page.locator(`[data-bot="${slug}"]`).click()
+    await page.locator(`[data-bot="${slug}"].is-selected`).waitFor({ timeout: 3_000 })
+  }
   const resetUi = async () => {
     for (let i = 0; i < 3; i += 1) await page.keyboard.press('Escape')
     await page.getByRole('button', { name: 'Groups', exact: true }).click()
@@ -126,6 +130,32 @@ try {
       const dialog = page.getByRole('dialog', { name: 'Settings' })
       await dialog.waitFor({ timeout: 3_000 })
       await dialog.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'General' }).click()
+      await settle()
+    }],
+    ['ui-mail', async () => {
+      await openBot('sage')
+      await page.locator('.mail-card').waitFor({ timeout: 3_000 })
+      await page.locator('.mail-card .mail-subject').waitFor({ timeout: 3_000 })
+      await settle()
+    }],
+    ['ui-questions', async () => {
+      await openBot('lyra')
+      await page.locator('.questions-card').waitFor({ timeout: 3_000 })
+      await page.locator('.questions-card .questions-answer').nth(1).waitFor({ timeout: 3_000 })
+      await settle()
+    }],
+    ['ui-queue', async () => {
+      await openBot('orion')
+      await page.locator('.message-delivery.is-queue').waitFor({ timeout: 3_000 })
+      await page.locator('.message-delivery.is-priority').waitFor({ timeout: 3_000 })
+      await page.locator('.working-row').waitFor({ timeout: 3_000 })
+      await settle(900)
+    }],
+    ['ui-local', async () => {
+      await openBot('local:ollama')
+      const chat = page.locator('main.local-chat:not([hidden])')
+      await chat.waitFor({ timeout: 3_000 })
+      await chat.locator('.message-assistant').nth(1).waitFor({ timeout: 3_000 })
       await settle()
     }],
   ]
@@ -167,4 +197,7 @@ for (const file of written) {
   const buf = readFileSync(file)
   console.log(`${path.relative(ROOT, file)}  ${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)}`)
 }
-if (skipped.length) console.log(`\nSkipped:\n${skipped.map((s) => `  ${s}`).join('\n')}`)
+if (skipped.length) {
+  console.log(`\nSkipped:\n${skipped.map((s) => `  ${s}`).join('\n')}`)
+  process.exitCode = 1
+}

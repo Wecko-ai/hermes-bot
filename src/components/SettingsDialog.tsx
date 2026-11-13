@@ -36,6 +36,8 @@ interface SettingsDialogProps {
   onLogout: () => void
   /** Bot names and the choice of bots allowed in the vault. */
   bots: Bot[]
+  /** Local models already known (the visual demo): the Conversations tab then reads no list. */
+  localModels?: LocalModels | null
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -147,11 +149,13 @@ function NotificationTest() {
   )
 }
 
-function ChatTab() {
+function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
   const { t } = useTranslation()
   const settings = useSettings()
-  const [local, setLocal] = useState<LocalModels | null>(null)
-  useEffect(() => { void loadLocalModels().then(setLocal) }, [])
+  const [loaded, setLoaded] = useState<LocalModels | null>(null)
+  // Models given by the app (the visual demo): Ollama is not asked.
+  useEffect(() => { if (localModels === undefined) void loadLocalModels().then(setLoaded) }, [localModels])
+  const local = localModels === undefined ? loaded : localModels
   const localModel = chooseLocalModel(local, settings.localModel)
   return (
     <>
@@ -308,7 +312,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
           </header>
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
-            {tab === 'chat' && <ChatTab />}
+            {tab === 'chat' && <ChatTab localModels={props.localModels} />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} />}
             {tab === 'vault' && <VaultTab bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}
