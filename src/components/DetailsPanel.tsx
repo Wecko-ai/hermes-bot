@@ -11,7 +11,9 @@ import { dateTime, relativeTime, shortTime } from '../lib/time'
 import { conversationMedia, type MediaRef } from '../lib/media'
 import { workLine, type WorkSummary } from '../lib/work-summary'
 import { stepIds } from '../lib/turns'
-import { backgroundSummary, effectiveStatus } from '../lib/background'
+import { backgroundSummary, effectiveStatus, type SubagentTail } from '../lib/background'
+import { isEntryActive, type SubagentEntry } from '../lib/subagent-history'
+import { SubagentHistory } from './SubagentHistory'
 
 function cleanRoutineName(name: string, bot: Bot) {
   const strip = (value: string, prefix: string) =>
@@ -19,7 +21,13 @@ function cleanRoutineName(name: string, bot: Bot) {
   return strip(strip(name, `[bot:${bot.slug}]`), `${bot.name}:`)
 }
 
-type Tab = 'routines' | 'activity' | 'media' | 'usage' | 'about'
+type Tab = 'routines' | 'activity' | 'subagents' | 'media' | 'usage' | 'about'
+
+/** A tab asked for from outside (the Subagents block's History); `at` makes each request new. */
+export interface DetailsTabRequest {
+  tab: Tab
+  at: number
+}
 
 export const BOT_RAIL_TAB = 'bot'
 
@@ -28,6 +36,10 @@ interface DetailsPanelProps {
   work?: WorkSummary
   routines: Routine[]
   messages: ChatMessage[]
+  /** Children delegated in this conversation, most recent first. */
+  subagents: SubagentEntry[]
+  onLoadSubagentTail: (subagentId: string) => Promise<SubagentTail>
+  tabRequest: DetailsTabRequest | null
   loading: boolean
   running: boolean
   usage: SessionUsage | null
@@ -41,12 +53,14 @@ interface DetailsPanelProps {
   onClose: () => void
 }
 
-export function DetailsPanel({ bot, work, routines, messages, loading, running, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose }: DetailsPanelProps) {
+export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose }: DetailsPanelProps) {
   const { t } = useTranslation()
   const workText = avatarPhase(bot) === 'working' ? workLine(work, bot.workTitle) : ''
-  const [tab, setTab] = useState<Tab>('routines')
+  const [tab, setTab] = useState<Tab>(() => tabRequest?.tab ?? 'routines')
   // The Usage tab stays open from one bot to the next: that is where they get compared.
   useEffect(() => setTab((current) => current === 'usage' ? 'usage' : 'routines'), [bot.slug])
+  useEffect(() => { if (tabRequest) setTab(tabRequest.tab) }, [tabRequest])
+  const runningSubagents = subagents.filter(isEntryActive).length
   const active = routines.filter((routine) => routine.enabled).length
   // Messages between bots live in the thread (“Orion messaged Iris”), no longer in Activity. The bot's
   // steps, folded out of the thread, are kept here.
@@ -95,6 +109,7 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
         <div className="details-tabs" role="tablist" aria-label={t('details.infoTabs')}>
           <button role="tab" aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={(event) => { setTab('routines'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.routines')}</button>
           <button role="tab" aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={(event) => { setTab('activity'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
+          <button role="tab" aria-selected={tab === 'subagents'} className={tab === 'subagents' ? 'is-active' : ''} onClick={(event) => { setTab('subagents'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.subagents')}{subagents.length > 0 && <span className={runningSubagents > 0 ? 'is-running' : ''}>{runningSubagents || subagents.length}</span>}</button>
           <button role="tab" aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={(event) => { setTab('media'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.media')}</button>
           <button role="tab" aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={(event) => { setTab('usage'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.usage')}</button>
           <button role="tab" aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={(event) => { setTab('about'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.about')}</button>
@@ -128,6 +143,8 @@ export function DetailsPanel({ bot, work, routines, messages, loading, running, 
             </article>
           ))}
         </section>}
+
+        {tab === 'subagents' && <SubagentHistory entries={subagents} profile={bot.slug} onLoadTail={onLoadSubagentTail} onOpenImages={(images, index, version) => setViewer({ images, index, profile: bot.slug, version })} onOpenDocument={(item) => onOpenDocument(bot.slug, item)} />}
 
         {tab === 'media' && <section className="details-section media-section">
           <div className="details-section-heading"><span>{t('details.mediaHeading')}</span><span className="details-count"><Images size={13} /> {media.length}</span></div>

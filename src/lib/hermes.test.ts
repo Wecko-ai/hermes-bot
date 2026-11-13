@@ -94,6 +94,19 @@ describe('messages de la gateway', () => {
     const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'lyra', 'chat-lyra')
     expect(messages.map((message) => [message.role, Boolean(message.technical)])).toEqual([['user', true], ['assistant', false], ['user', false]])
   })
+
+  it('garde le prompt de chaque sous-agent d’un appel delegate_task, en activité seulement', async () => {
+    const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, display_messages: [
+      { row_id: 1, role: 'user', text: 'Lance deux sous-agents.', timestamp: 1_000 },
+      { role: 'tool', name: 'delegate_task', tool_call_id: 'call-1', timestamp: 1_001, context: 'Implement…', args: { tasks: [{ goal: 'Implement the backend.', context: 'Repo: site' }, { goal: 'Implement the frontend.' }] } },
+      { role: 'tool', name: 'delegate_task', tool_call_id: 'call-2', timestamp: 1_002, args: { action: 'list' } },
+      { role: 'tool', name: 'terminal', tool_call_id: 'call-3', timestamp: 1_003, args: { command: 'ls' } },
+    ] } : {})
+    const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'lyra', 'chat-lyra')
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({ role: 'tool', technical: true, delegation: [{ goal: 'Implement the backend.', context: 'Repo: site' }, { goal: 'Implement the frontend.' }] })
+    expect(messages[1].content).toContain('Implement the backend.')
+  })
 })
 
 describe('statut réel du roster', () => {

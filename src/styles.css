@@ -771,31 +771,53 @@ body::before {
 /* Subagents of the conversation, read only, above the input field. */
 .subagents-dock { width: min(100%, 880px); flex: none; margin: 0 auto; padding: 0 16px 8px; }
 .subagents-panel { border-radius: 14px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border), 0 8px 22px -18px color-mix(in srgb, var(--standby) 80%, transparent); overflow: hidden; }
-.subagents-head { width: 100%; min-height: 36px; display: flex; align-items: center; gap: 7px; padding: 7px 12px; color: var(--text); font-size: 12.5px; text-align: left; }
-.subagents-head:hover { background: var(--hover); }
+.subagents-head { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
+.subagents-toggle { min-width: 0; flex: 1; min-height: 38px; display: flex; align-items: center; gap: 7px; padding: 7px 12px; color: var(--text); font-size: 13px; text-align: left; }
+.subagents-toggle:hover { background: var(--hover); }
 .subagents-icon { width: 20px; height: 20px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 6px; background: color-mix(in srgb, var(--standby) 16%, transparent); color: var(--standby); }
-.subagents-head strong { font-weight: 600; }
+.subagents-toggle strong { font-weight: 600; }
 .subagents-counts { min-width: 0; display: inline-flex; gap: 8px; overflow: hidden; color: var(--text-tertiary); white-space: nowrap; }
 .subagents-counts .is-running { color: var(--standby); font-weight: 560; }
-.subagents-readonly { margin-left: auto; flex: none; color: var(--text-tertiary); font-size: 11px; }
-.subagents-list { max-height: 34vh; margin: 0; padding: 0 6px 6px; overflow: auto; list-style: none; }
+.subagents-history { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 560; }
+.subagents-history:hover { background: var(--hover); color: var(--text); }
+.subagents-list { max-height: 38vh; margin: 0; padding: 0 6px 6px; overflow: auto; list-style: none; }
 .subagent-row { margin-left: calc(var(--depth, 0) * 14px); padding: 2px 0; border-top: .5px solid var(--border); }
-.subagent-main { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 1px; align-items: baseline; padding: 6px 8px; border-radius: 9px; text-align: left; }
-.subagent-main:hover { background: var(--hover); }
-.subagent-state { display: inline-flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.subagent-state .status-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; }
+.subagent-main, .subagent-card-head { width: 100%; display: flex; flex-direction: column; gap: 3px; padding: 8px 9px; border-radius: 10px; text-align: left; }
+.subagent-main:hover, .subagent-card-head:hover { background: var(--hover); }
+.subagent-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.subagent-state { display: inline-flex; flex: none; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.subagent-state .status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: currentColor; }
 .subagent-state.is-running, .subagent-state.is-queued { color: var(--standby); }
+.subagent-state.is-running .status-dot { animation: subagent-pulse 1.6s ease-in-out infinite; }
 .subagent-state.is-completed { color: var(--success); }
 .subagent-state.is-failed, .subagent-state.is-error, .subagent-state.is-timeout { color: var(--danger); }
 .subagent-state.is-interrupted { color: var(--warning); }
-.subagent-goal { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-meta { grid-column: 2; color: var(--text-tertiary); font-size: 11.5px; line-height: 16px; }
-.subagent-summary { margin: 0 8px 6px; padding: 6px 9px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.subagent-tail { margin: 0 8px 6px; }
-.subagent-tail pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.subagent-tail-note { margin: 0 8px 6px; color: var(--text-tertiary); font-size: 11.5px; }
+@keyframes subagent-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .subagent-state.is-running .status-dot { animation: none; } }
+:root[data-motion="reduce"] .subagent-state.is-running .status-dot { animation: none; }
+.subagent-meta { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 12px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-goal { min-width: 0; color: var(--text); font-size: 13.5px; font-weight: 600; line-height: 19px; overflow-wrap: anywhere; }
+.subagent-prompt-preview, .subagent-result-preview { display: -webkit-box; overflow: hidden; color: var(--text-secondary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.subagent-result-preview { padding-left: 9px; border-left: 2px solid color-mix(in srgb, var(--success) 45%, transparent); }
+.subagent-row.is-failed .subagent-result-preview, .subagent-row.is-error .subagent-result-preview, .subagent-card.is-failed .subagent-result-preview, .subagent-card.is-error .subagent-result-preview { border-left-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.subagent-now { color: var(--standby); font-size: 12px; line-height: 17px; }
+.subagent-details { display: flex; flex-direction: column; gap: 10px; margin: 2px 9px 8px; }
+.subagent-details h4 { margin: 0 0 4px; color: var(--text-tertiary); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+.subagent-prompt p, .subagent-error { max-height: 260px; margin: 0 0 8px; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-prompt p:last-child { margin-bottom: 0; }
+.subagent-error { color: var(--danger); }
+.subagent-result-body { max-height: 420px; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); font-size: 13px; }
+.subagent-tail pre { max-height: 240px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-tail-note { margin: 0; color: var(--text-tertiary); font-size: 12px; }
 .subagent-tail .subagent-tail-note { margin: 0 0 4px; }
-@media (max-width: 640px) { .subagents-dock { padding: 0 10px 6px; } .subagents-readonly { display: none; } }
+.subagent-tail-button { align-self: flex-start; padding: 5px 10px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; font-weight: 560; }
+.subagent-tail-button:hover { background: var(--hover); color: var(--text); }
+.subagent-history { display: flex; flex-direction: column; gap: 8px; }
+.subagent-card { border-radius: 12px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border); }
+.subagent-card.is-running, .subagent-card.is-queued { box-shadow: inset 0 0 0 .5px var(--border), inset 3px 0 0 color-mix(in srgb, var(--standby) 70%, transparent); }
+.subagent-card .subagent-goal { font-size: 13px; }
+.details-tabs button span.is-running { background: color-mix(in srgb, var(--standby) 20%, transparent); color: var(--standby); }
+@media (max-width: 640px) { .subagents-dock { padding: 0 10px 6px; } .subagents-history span { display: none; } }
 /* Summary of the work in progress, in the bot's panel. */
 .work-card { margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, var(--glass-strong)); box-shadow: var(--glass-highlight); }
 .work-card h3 { margin: 0 0 4px; color: var(--accent); font-size: 11px; font-weight: 600; }

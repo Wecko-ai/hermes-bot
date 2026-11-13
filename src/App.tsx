@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
@@ -6,7 +6,8 @@ import type { Bot, ChatMessage, ModelOption } from './types'
 import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
-import { chatBackground, isSubagentActive } from './lib/subagents'
+import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
+import { subagentHistory } from './lib/subagent-history'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
@@ -16,7 +17,7 @@ import { demoChat, demoData, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { CommandPalette } from './components/CommandPalette'
-import { BOT_RAIL_TAB, DetailsPanel } from './components/DetailsPanel'
+import { BOT_RAIL_TAB, DetailsPanel, type DetailsTabRequest } from './components/DetailsPanel'
 import type { OpenDocument } from './components/DocumentView'
 import type { UsageDetails } from './components/UsageTab'
 import { Login } from './components/Login'
@@ -45,6 +46,7 @@ import { notificationExcerpt, notificationForRequest, notificationForStatus, sho
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
+const NO_SUBAGENTS: SubagentRow[] = []
 /** Reads the turns of every bot. Hermes Desktop re-reads its roster every 5 s. */
 const LIVE_STATUS_MS = 6_000
 /** Subagents and background processes, every profile. They outlast a turn by minutes: no need to read them as often. */
@@ -133,6 +135,8 @@ export default function App() {
   const subagentRows = useSubagentsStore((state) => state.rows)
   const chatProcesses = useSubagentsStore((state) => state.processes)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // A tab the details panel must show when it opens or is already open (the Subagents history).
+  const [detailsTabRequest, setDetailsTabRequest] = useState<DetailsTabRequest | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const settings = useSettings()
   const appConfig = useAppConfig()
@@ -1004,6 +1008,13 @@ export default function App() {
     setDetailsOpen(true)
   }, [])
 
+  /** “History” of the Subagents block: the details panel on its Subagents tab, never opened otherwise. */
+  const openSubagentHistory = () => {
+    setRailTab(BOT_RAIL_TAB)
+    setDetailsTabRequest({ tab: 'subagents', at: Date.now() })
+    setDetailsOpen(true)
+  }
+
   const closeDocument = (id: string) => {
     const remaining = documents.filter((item) => item.id !== id)
     setDocuments(remaining)
@@ -1211,7 +1222,9 @@ export default function App() {
 
   const rosterSelected = bots.find((bot) => bot.slug === selected) || bots[0]
   const openChatSession = activeChat && activeChat.profile === rosterSelected?.slug ? activeChat.sessionId : undefined
-  const openSubagents = openChatSession ? subagentRows[openChatSession] ?? [] : []
+  const openSubagents = (openChatSession && subagentRows[openChatSession]) || NO_SUBAGENTS
+  // Every child of the open conversation: the history's calls and results, joined with this window's live rows.
+  const subagentEntries = useMemo(() => subagentHistory(messages, openSubagents), [messages, openSubagents])
   const openProcesses = openChatSession ? chatProcesses[openChatSession] ?? 0 : 0
   // The open conversation’s reads and events are fresher than the roster’s for this bot.
   const openWork = chatBackground(openSubagents, openProcesses)
@@ -1283,9 +1296,10 @@ export default function App() {
         onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
         prompts={shownPrompts}
         onAnswerPrompt={answerPendingPrompt}
-        subagents={openSubagents}
+        subagents={subagentEntries}
         processes={openProcesses}
         onLoadSubagentTail={loadOpenSubagentTail}
+        onOpenSubagentHistory={openSubagentHistory}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
             options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model])}
@@ -1308,6 +1322,9 @@ export default function App() {
           work={workSummaries[selectedBot.slug]}
           routines={routines}
           messages={messages}
+          subagents={subagentEntries}
+          onLoadSubagentTail={loadOpenSubagentTail}
+          tabRequest={detailsTabRequest}
           loading={routinesLoading}
           running={running}
           usage={usage}

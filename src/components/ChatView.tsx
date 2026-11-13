@@ -12,7 +12,7 @@ import { Composer, type ComposerHandle } from './Composer'
 import { PromptCard } from './PromptCard'
 import type { PendingPrompt } from '../lib/hermes'
 import { SubagentsPanel } from './SubagentsPanel'
-import type { SubagentRow } from '../lib/subagents'
+import type { SubagentEntry } from '../lib/subagent-history'
 import { backgroundSummary, type SubagentTail } from '../lib/background'
 
 interface ChatViewProps {
@@ -46,9 +46,11 @@ interface ChatViewProps {
   prompts: PendingPrompt[]
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
   /** Children delegated in this conversation, and its background processes still running. */
-  subagents: SubagentRow[]
+  subagents: SubagentEntry[]
   processes: number
   onLoadSubagentTail: (subagentId: string) => Promise<SubagentTail>
+  /** Opens the Subagents tab of the details panel. */
+  onOpenSubagentHistory: () => void
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
@@ -180,7 +182,7 @@ export function ChatView(props: ChatViewProps) {
         onOpenBot={props.onOpenBot}
       />
       {props.modelPicker}
-      {!props.hidden && <SubagentsPanel key={bot.slug} rows={props.subagents} processes={props.processes} onLoadTail={props.onLoadSubagentTail} />}
+      {!props.hidden && <SubagentsPanel key={bot.slug} entries={props.subagents} processes={props.processes} onLoadTail={props.onLoadSubagentTail} onOpenHistory={props.onOpenSubagentHistory} />}
       {props.prompts[0] && !props.hidden && (
         <div className="prompt-dock">
           <PromptCard key={props.prompts[0].promptId} prompt={props.prompts[0]} botName={bot.name} onAnswer={props.onAnswerPrompt} />

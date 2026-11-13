@@ -10,6 +10,7 @@
     "tabs": {
       "routines": "Routines",
       "activity": "Activity",
+      "subagents": "Subagents",
       "media": "Media",
       "usage": "Usage",
       "about": "About"

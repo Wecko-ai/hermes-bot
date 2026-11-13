@@ -2,6 +2,7 @@ import type { Bot, BotStatus, ChatMessage, ContextBreakdown, ModelOption, ModelO
 import { splitUserImages, withoutFileRefs } from './attachments'
 import { withoutMentionNote } from './mentions'
 import { agentChatMessages, agentMessagesFromRow } from './inter-agent'
+import { delegationTasks, subagentTitle } from './subagent-history'
 import { getAppConfig } from './app-config'
 import { isRemovedProfile } from './bot-manage'
 import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
@@ -105,6 +106,13 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   const rawRole = asString(message.role, 'system')
   // Message received or reply sent back: the “Orion messaged Iris” line replaces the gateway’s text.
   if (agents.length && (rawRole === 'user' || rawRole === 'tool')) return agents
+  // `delegate_task` call: its row has no text, but its arguments hold each child's prompt.
+  if (rawRole === 'tool' && (asString(message.name) || asString(message.tool_name)) === 'delegate_task') {
+    const tasks = delegationTasks(message.args)
+    if (!tasks.length) return agents
+    const goals = tasks.map((task) => subagentTitle(task.goal, 70)).join(' · ')
+    return [{ id, role: 'tool', content: i18n.t('subagents.dispatched', { count: tasks.length, goals }), createdAt, technical: true, delegation: tasks }, ...agents]
+  }
   const text = textContent(message).trim()
   if (!text) return agents
   const role = ['user', 'assistant', 'system', 'tool'].includes(rawRole) ? rawRole as ChatMessage['role'] : 'system'

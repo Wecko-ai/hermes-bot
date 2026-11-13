@@ -15,6 +15,10 @@ const PORT = 4362
 const VAULT_PORT = 4363
 const UNUSED_PORT = 4364 // nothing listens here: Hermes and Ollama stay unreachable on purpose
 const BASE = `http://127.0.0.1:${PORT}`
+const VIEWPORT = { width: 1280, height: 800 }
+// Detail views are cropped around the element(s) they show, so they read at 1:1 in the README
+// instead of a full window squeezed into a column.
+const PAD = 24
 
 if (!existsSync(path.join(ROOT, 'dist', 'index.html'))) {
   console.error('dist/ is missing. Run `npm run build` first.')
@@ -61,7 +65,7 @@ try {
   if (!ready) throw new Error(`Server did not start:\n${serverLog.slice(-600)}`)
 
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'en-US', deviceScaleFactor: 2 })
+  const page = await browser.newPage({ viewport: VIEWPORT, locale: 'en-US', deviceScaleFactor: 2 })
   // No animation pack, as on a fresh install.
   await page.route('**/api/app-config', async (route) => {
     const response = await route.fetch()
@@ -84,10 +88,55 @@ try {
     await page.waitForFunction((t) => document.documentElement.dataset.theme === t, name.toLowerCase())
   }
   const settle = (ms = 700) => delay(ms)
-  const save = async (name, theme) => {
+  // A view returns nothing for a full-window capture, or a crop: the locators to show (each may
+  // match several elements), with an optional padding (a number, or { x, y }) and an optional
+  // maximum size. The clip is the union of their boxes plus the padding, kept inside the viewport.
+  const clipFor = async ({ targets, pad = PAD, maxWidth, maxHeight }) => {
+    const padX = typeof pad === 'number' ? pad : pad.x
+    const padY = typeof pad === 'number' ? pad : pad.y
+    const viewport = page.viewportSize()
+    const boxes = []
+    for (const target of targets) {
+      for (const element of await target.all()) {
+        const box = await element.boundingBox()
+        if (box && box.width > 0 && box.height > 0) boxes.push(box)
+      }
+    }
+    if (!boxes.length) throw new Error('nothing visible to crop')
+    let left = Math.min(...boxes.map((b) => b.x)) - padX
+    let top = Math.min(...boxes.map((b) => b.y)) - padY
+    let right = Math.max(...boxes.map((b) => b.x + b.width)) + padX
+    let bottom = Math.max(...boxes.map((b) => b.y + b.height)) + padY
+    if (maxWidth && right - left > maxWidth) {
+      left = (left + right - maxWidth) / 2
+      right = left + maxWidth
+    }
+    if (maxHeight && bottom - top > maxHeight) bottom = top + maxHeight
+    left = Math.max(0, Math.floor(left))
+    top = Math.max(0, Math.floor(top))
+    right = Math.min(viewport.width, Math.ceil(right))
+    bottom = Math.min(viewport.height, Math.ceil(bottom))
+    return { x: left, y: top, width: right - left, height: bottom - top }
+  }
+  const save = async (name, theme, crop) => {
     const file = path.join(OUT, `${name}-${theme}.png`)
-    await page.screenshot({ path: file })
+    const clip = crop ? await clipFor(crop) : undefined
+    await page.screenshot({ path: file, clip })
     written.push(file)
+  }
+  // The reply that holds an element, when the whole reply is in view; the element alone otherwise.
+  const withMessage = async (element) => {
+    const message = page.locator('article.message', { has: element }).first()
+    const box = await message.boundingBox()
+    const { height } = page.viewportSize()
+    return box && box.y - PAD >= 0 && box.y + box.height + PAD <= height ? message : element
+  }
+  // The local chat has no details panel, so its column is 880 px wide: it is taken in a narrower
+  // window, where the column is about 760 px, so the crop keeps whole bubbles and the composer.
+  // (Below 1100 px the details panel of the other chats becomes an overlay: keep them at 1280.)
+  const narrowChat = async (height) => {
+    await page.setViewportSize({ width: 1064, height })
+    await settle(400)
   }
   const openBot = async (slug) => {
     await page.locator(`[data-bot="${slug}"]`).click()
@@ -112,6 +161,8 @@ try {
       await page.getByRole('button', { name: 'Activity', exact: true }).click()
       await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
       await settle()
+      // The roster column, top part only.
+      return { targets: [page.locator('aside.sidebar')], pad: 8, maxHeight: 520 }
     }],
     ['ui-palette', async () => {
       await page.keyboard.press('Meta+k')
@@ -119,11 +170,13 @@ try {
       await box.waitFor({ timeout: 3_000 })
       await page.locator('.palette-results').getByText('Nova', { exact: true }).waitFor({ timeout: 3_000 })
       await settle()
+      return { targets: [page.locator('.palette')] }
     }],
     ['ui-bot-menu', async () => {
       await page.locator('[data-bot=orion]').click({ button: 'right' })
       await page.locator('.bot-menu:not(.is-sub)').waitFor({ timeout: 3_000 })
       await settle()
+      return { targets: [page.locator('.bot-menu:not(.is-sub)'), page.locator('[data-bot=orion]')] }
     }],
     ['ui-settings', async () => {
       await page.getByRole('button', { name: 'Settings', exact: true }).click()
@@ -131,18 +184,21 @@ try {
       await dialog.waitFor({ timeout: 3_000 })
       await dialog.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'General' }).click()
       await settle()
+      return { targets: [dialog] }
     }],
     ['ui-mail', async () => {
       await openBot('sage')
       await page.locator('.mail-card').waitFor({ timeout: 3_000 })
       await page.locator('.mail-card .mail-subject').waitFor({ timeout: 3_000 })
       await settle()
+      return { targets: [await withMessage(page.locator('.mail-card').first())] }
     }],
     ['ui-questions', async () => {
       await openBot('lyra')
       await page.locator('.questions-card').waitFor({ timeout: 3_000 })
       await page.locator('.questions-card .questions-answer').nth(1).waitFor({ timeout: 3_000 })
       await settle()
+      return { targets: [await withMessage(page.locator('.questions-card').first())] }
     }],
     ['ui-queue', async () => {
       await openBot('orion')
@@ -150,13 +206,26 @@ try {
       await page.locator('.message-delivery.is-priority').waitFor({ timeout: 3_000 })
       await page.locator('.working-row').waitFor({ timeout: 3_000 })
       await settle(900)
+      // The request the bot works on, the queued and priority messages under it, the working
+      // line and the composer with its Wait, Queue and Prio choice. The details panel is open, so
+      // the chat column is narrow enough to keep whole.
+      const chat = page.locator('main.chat-panel:not([hidden])')
+      const sent = chat.locator('article.message-user')
+      const task = sent.nth(Math.max(0, (await sent.count()) - 3))
+      return {
+        targets: [task, chat.locator('article.message', { has: page.locator('.message-delivery') }), chat.locator('.working-row'), chat.locator('.composer-wrap')],
+        pad: { x: 0, y: PAD },
+      }
     }],
     ['ui-local', async () => {
+      await narrowChat(660)
       await openBot('local:ollama')
       const chat = page.locator('main.local-chat:not([hidden])')
       await chat.waitFor({ timeout: 3_000 })
       await chat.locator('.message-assistant').nth(1).waitFor({ timeout: 3_000 })
       await settle()
+      // The whole local chat panel: its header names the model, then the messages and the composer.
+      return { targets: [chat], pad: 0, maxWidth: 760 }
     }],
   ]
 
@@ -166,12 +235,13 @@ try {
     for (const [name, prepare] of views) {
       try {
         await resetUi()
-        await prepare()
-        await save(name, theme)
+        await save(name, theme, await prepare())
       } catch (error) {
         const reason = String(error.message || error).split('\n')[0]
         if (!skipped.some((s) => s.startsWith(`${name}:`))) skipped.push(`${name}: ${reason}`)
         console.error(`skipped ${name} (${theme}): ${reason}`)
+      } finally {
+        await page.setViewportSize(VIEWPORT)
       }
     }
   }

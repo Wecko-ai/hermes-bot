@@ -117,6 +117,14 @@ export interface ChatMessage {
   delivery?: 'queue' | 'priority'
   /** Images the user sent with the message: paths on the gateway's machine. */
   images?: string[]
+  /** `delegate_task` call: the prompt of each child the bot started (Subagents tab). */
+  delegation?: DelegationTask[]
+}
+
+/** One child asked for by `delegate_task`: its goal and the background the bot gave it. */
+export interface DelegationTask {
+  goal: string
+  context?: string
 }
 
 export interface AgentMessage {

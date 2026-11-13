@@ -53,72 +53,61 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
   <img src="docs/readme/ui-overview-light.png" alt="HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot" />
 </picture>
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-palette-dark.png" />
-        <img src="docs/readme/ui-palette-light.png" alt="The command palette: go to any bot by typing its name" />
-      </picture>
-      <br /><b>Go anywhere.</b> ⌘K opens any bot by its name.
-    </td>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-activity-dark.png" />
-        <img src="docs/readme/ui-activity-light.png" alt="The roster sorted by activity, with what each bot last did" />
-      </picture>
-      <br /><b>Sort by activity.</b> The bots that just moved come first, with one line on what they did.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-bot-menu-dark.png" />
-        <img src="docs/readme/ui-bot-menu-light.png" alt="The menu of a bot: pin, move to a group, mark as read, rename, hide" />
-      </picture>
-      <br /><b>Arrange your team.</b> Pin a bot, move it to a group, rename it or hide it.
-    </td>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-settings-dark.png" />
-        <img src="docs/readme/ui-settings-light.png" alt="Settings, General tab: language, theme, text size, notifications" />
-      </picture>
-      <br /><b>Light or dark, English or French.</b> Text size, animations and notifications in Settings.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-mail-dark.png" />
-        <img src="docs/readme/ui-mail-light.png" alt="A bot's email draft as a card: subject, recipients and body to edit, then Send or Dismiss" />
-      </picture>
-      <br /><b>Mail waits for you.</b> A bot's email draft shows as a card: edit it, then send it or dismiss it.
-    </td>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-questions-dark.png" />
-        <img src="docs/readme/ui-questions-light.png" alt="The open questions at the end of a reply, with one answer field under each question" />
-      </picture>
-      <br /><b>Questions wait for your answer.</b> The questions that end a reply become a form, and your answers go back in one message.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-queue-dark.png" />
-        <img src="docs/readme/ui-queue-light.png" alt="A bot at work, with a queued message and a priority message under its current task" />
-      </picture>
-      <br /><b>Queue a message, or make it priority.</b> Queue runs after the current turn; Priority interrupts it, then the bot resumes.
-    </td>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-local-dark.png" />
-        <img src="docs/readme/ui-local-light.png" alt="The local chat with a model installed in Ollama, listed under Local in the roster" />
-      </picture>
-      <br /><b>A local model.</b> Chat with a model installed in Ollama: no Hermes, no tools.
-    </td>
-  </tr>
-</table>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-palette-dark.png" />
+  <img src="docs/readme/ui-palette-light.png" width="568" alt="The command palette: go to any bot by typing its name" />
+</picture>
+
+<b>Go anywhere.</b> ⌘K opens any bot by its name.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-activity-dark.png" />
+  <img src="docs/readme/ui-activity-light.png" width="312" alt="The roster sorted by activity, with what each bot last did" />
+</picture>
+
+<b>Sort by activity.</b> The bots that just moved come first, with one line on what they did.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-bot-menu-dark.png" />
+  <img src="docs/readme/ui-bot-menu-light.png" width="408" alt="The menu of a bot: pin, move to a group, mark as read, rename, hide" />
+</picture>
+
+<b>Arrange your team.</b> Pin a bot, move it to a group, rename it or hide it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-settings-dark.png" />
+  <img src="docs/readme/ui-settings-light.png" width="808" alt="Settings, General tab: language, theme, text size, notifications" />
+</picture>
+
+<b>Light or dark, English or French.</b> Text size, animations and notifications in Settings.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-mail-dark.png" />
+  <img src="docs/readme/ui-mail-light.png" width="552" alt="A bot's email draft as a card: subject, recipients and body to edit, then Send or Dismiss" />
+</picture>
+
+<b>Mail waits for you.</b> A bot's email draft shows as a card: edit it, then send it or dismiss it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-questions-dark.png" />
+  <img src="docs/readme/ui-questions-light.png" width="552" alt="The open questions at the end of a reply, with one answer field under each question" />
+</picture>
+
+<b>Questions wait for your answer.</b> The questions that end a reply become a form, and your answers go back in one message.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-queue-dark.png" />
+  <img src="docs/readme/ui-queue-light.png" width="632" alt="A bot at work, with a queued message and a priority message under its current task" />
+</picture>
+
+<b>Queue a message, or make it priority.</b> Queue runs after the current turn; Priority interrupts it, then the bot resumes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-local-dark.png" />
+  <img src="docs/readme/ui-local-light.png" width="760" alt="The local chat with a model installed in Ollama" />
+</picture>
+
+<b>A local model.</b> Chat with a model installed in Ollama: no Hermes, no tools.
 
 <table>
   <tr>
@@ -136,7 +125,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K). Right-click a bot to pin it, move it to a section, mark it as read, rename it, copy its conversation ID, hide it or delete it.
 - **New bot.** The "+" at the top of the roster creates a bot: a name, a colour and a shape. Its chat opens at once, and the bot introduces itself and asks what its role is.
 - **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". A bot with no turn but with subagents or background processes still running is marked "Standing by", with a calm ring and no animation; hovering it says how many are left. The status is right even for a bot woken by another bot.
-- **Subagents.** In the chat, a collapsible "Subagents" block lists the children the bot delegated in that conversation: goal, status, duration, last tool and final summary. Click one to read the end of its live transcript. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
+- **Subagents.** In the chat, a "Subagents" block shows the children the bot is running: a short title, the prompt it gave them, the time spent and the tool in use. A child leaves the block a few seconds after it ends (unless you opened it). Click one for its whole prompt and the end of its live transcript. The Subagents tab of the details panel ("History" in the block) keeps every child of the conversation, most recent first, with its prompt, the background the bot gave it and its whole result, read from the conversation's history. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
 - **Chat.** One message per turn: while a bot works, a single line with its live avatar says what it is doing, and its reply arrives whole. The steps it writes before its tool calls go to the Activity tab. Markdown, tables and code. Stop the current turn. Search in the conversation (⌘F): matches are highlighted and Enter goes from one to the next. Links open in your default browser. Drafts are kept per bot.
 - **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. Questions it lists at the end of a reply become a small form: one field under each question, and all your answers go back in one message. An action that needs approval opens a dialog (once, for the session, always, deny).
 - **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).
