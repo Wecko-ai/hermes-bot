@@ -758,6 +758,10 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   // French interface: the texts searched below come from the French catalog.
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'fr-FR' })
+  // E2E_CPU_SLOWDOWN=4 runs the page on a CPU four times slower: a local way to find the checks that only
+  // hold on a fast machine, before a slower CI runner finds them.
+  const slowdown = Number(process.env.E2E_CPU_SLOWDOWN)
+  if (slowdown > 1) await (await page.context().newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: slowdown })
   // macOS notifications: recorded instead of shown, permission already granted.
   await page.addInitScript(() => {
     window.__notifications = []
@@ -1201,7 +1205,9 @@ try {
   await pill.waitFor({ state: 'detached', timeout: 3_000 })
   if ((await dictationCalls('stop')).length !== 1) throw new Error('Stop doit arrêter la dictée une seule fois.')
   if (await orionBox.inputValue() !== 'Test mode dictée en cours terminée') throw new Error(`Le texte dicté doit rester : ${await orionBox.inputValue()}`)
-  if (await orionBox.evaluate((field) => field.readOnly || document.activeElement !== field || field.selectionStart !== field.value.length)) throw new Error('Après Stop : champ modifiable, focus et curseur à la fin.')
+  // The field gets its focus and caret back in an effect, a moment after the pill leaves: wait for it.
+  const editable = await page.waitForFunction((field) => !field.readOnly && document.activeElement === field && field.selectionStart === field.value.length, await orionBox.elementHandle(), { timeout: 3_000 }).then(() => true, () => false)
+  if (!editable) throw new Error(`Après Stop : champ modifiable, focus et curseur à la fin (${JSON.stringify(await orionBox.evaluate((field) => ({ readOnly: field.readOnly, focused: document.activeElement === field, caret: field.selectionStart, length: field.value.length })))}).`)
   await page.keyboard.type(' !')
   if (await orionBox.inputValue() !== 'Test mode dictée en cours terminée !') throw new Error('Le texte doit pouvoir être retouché après la dictée.')
   // Send while dictating: the dictation stops, the field goes out once, with the final words.
