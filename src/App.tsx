@@ -1216,11 +1216,11 @@ export default function App() {
   const newBotDialog = newBotOpen && <NewBotDialog bots={bots} connected={DEMO || connected} loadKnown={DEMO ? null : loadKnownProfiles} onCreate={createNewBot} onClose={() => setNewBotOpen(false)} />
 
   if (auth === 'checking') {
-    return <LoadingScreen label={t('loading.opening')} />
+    return <LoadingScreen />
   }
   if (auth === 'login') return <Login onLogin={login} onLocalSignIn={retryLocalSignIn} error={authError || notice} />
   if (!selectedBot) {
-    if (!rosterLoaded) return <LoadingScreen label={t('loading.bots')} />
+    if (!rosterLoaded) return <LoadingScreen />
     // No bot yet (a fresh Hermes): the first one can be created from here.
     return <div className="app-loading"><p>{t('loading.none')}</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? t('loading.reconnecting') : t('loading.reconnect')}</button>{connected && <button className="connection-retry" onClick={() => setNewBotOpen(true)}>{t('sidebar.newBot')}</button>}{newBotDialog}</div>
   }

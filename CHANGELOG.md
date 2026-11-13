@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Loading screen: the logo beats like a heart with "Loading…" under it, instead of a progress bar; the logo no longer shows a light rim.
 - New bot: the "+" at the top of the roster creates a bot (name, colour, shape). Its chat opens at once and the bot introduces itself and asks for its role.
 - Right-click menu on a bot: pin, move to a section, mark as read, rename, copy the conversation ID, hide, delete. Delete takes the bot out of the roster and keeps its Hermes profile.
 - Questions a bot lists at the end of its latest reply become a form even without an "Open questions" heading: one field per question, all answers sent in one turn.

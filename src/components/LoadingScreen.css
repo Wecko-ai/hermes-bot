@@ -1,0 +1,49 @@
+/*
+ * Loading: the logo beats like a heart (a strong beat, a softer one, a rest) and a ring leaves its square on the
+ * strong beat. Drawn at its largest size and scaled down at rest, so the logo stays sharp at the top of the beat.
+ * index.html uses the same markup while the code loads.
+ */
+.loading-heart { position: relative; width: 64px; height: 64px; display: grid; place-items: center; }
+.loading-heart .logo-mark {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  transform: scale(.84);
+  transform-origin: 52.5% 55%;
+  animation: logo-heartbeat 1.4s infinite;
+  animation-delay: inherit;
+}
+/* The ring: the logo's square (its wing sticks out at the top left), leaving on the strong beat. */
+.loading-heart::before {
+  content: '';
+  position: absolute;
+  inset: 13% 5% 2.5% 10%;
+  border-radius: 24%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+  opacity: 0;
+  transform: scale(.84);
+  transform-origin: 50% 50%;
+  animation: logo-ripple 1.4s infinite;
+  animation-delay: inherit;
+}
+.app-loading .loading-heart + p { color: var(--text-secondary); font-size: 13px; font-weight: 500; letter-spacing: .01em; }
+
+@keyframes logo-heartbeat {
+  0% { transform: scale(.84); animation-timing-function: cubic-bezier(.3, 0, .2, 1); }
+  13% { transform: scale(1); animation-timing-function: cubic-bezier(.4, 0, .6, 1); }
+  24% { transform: scale(.88); animation-timing-function: cubic-bezier(.3, 0, .2, 1); }
+  35% { transform: scale(.96); animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
+  56%, 100% { transform: scale(.84); }
+}
+@keyframes logo-ripple {
+  0%, 8% { opacity: 0; transform: scale(.9); animation-timing-function: cubic-bezier(.2, .7, .3, 1); }
+  13% { opacity: .9; transform: scale(.98); animation-timing-function: cubic-bezier(.2, .7, .3, 1); }
+  70%, 100% { opacity: 0; transform: scale(1.42); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-heart .logo-mark { animation: none; transform: scale(.9); }
+  .loading-heart::before { animation: none; }
+}
+:root[data-motion='reduce'] .loading-heart .logo-mark { animation: none; transform: scale(.9); }
+:root[data-motion='reduce'] .loading-heart::before { animation: none; }

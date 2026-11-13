@@ -33,8 +33,7 @@
     "localRefused": "HermesBot n’a pas pu ouvrir la session. Dans un navigateur, utilise le lien de connexion affiché par son serveur."
   },
   "loading": {
-    "opening": "Ouverture de HermesBot…",
-    "bots": "Chargement de tes bots…",
+    "label": "Chargement…",
     "none": "Aucun bot à afficher.",
     "reconnecting": "Reconnexion…",
     "reconnect": "Reconnecter Hermes"

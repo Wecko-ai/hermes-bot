@@ -943,11 +943,6 @@ button.agent-note-name:hover { background: var(--hover); }
 
 /* Loading of the app and of a conversation. */
 .app-loading p { margin: 0; }
-.app-loading .login-mark { animation: loading-float 1.8s ease-in-out infinite; }
-.loading-bar { width: 132px; height: 3px; overflow: hidden; border-radius: 3px; background: color-mix(in srgb, var(--text) 9%, transparent); }
-.loading-bar i { display: block; width: 40%; height: 100%; border-radius: 3px; background: var(--accent); animation: loading-slide 1.25s ease-in-out infinite; }
-@keyframes loading-float { 50% { transform: rotate(-3deg) translateY(-4px); } }
-@keyframes loading-slide { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
 .chat-loading { width: 100%; margin: auto 0 0; align-items: stretch; gap: 18px; }
 /* An idle bot stays still: only the message area shows the loading. */
 .chat-loading .bot-avatar svg { animation: none; }
@@ -963,8 +958,7 @@ button.agent-note-name:hover { background: var(--hover); }
 .chat-skeleton .is-short { width: min(22%, 170px); }
 .chat-loading-label { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
-  .app-loading .login-mark, .loading-bar i, .chat-skeleton span { animation: none; }
-  .loading-bar i { width: 100%; opacity: .5; }
+  .chat-skeleton span { animation: none; }
 }
 .details-tabs { gap: 1px; }
 .details-tabs button { padding: 5px 5px; font-size: 10.5px; }
