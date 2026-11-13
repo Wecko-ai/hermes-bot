@@ -104,6 +104,7 @@ function ChatGuide() {
     { id: 'exec', keys: [t('modes.exec.label')], text: t('settings.guide.exec') },
     { id: 'delivery', keys: [t('delivery.wait.label'), t('delivery.queue.label'), t('delivery.priority.label')], text: t('settings.guide.delivery') },
     { id: 'files', keys: ['+'], text: t('settings.guide.files') },
+    { id: 'mic', keys: [t('composer.dictate')], text: t('settings.guide.mic') },
     { id: 'search', keys: ['⌘', 'F'], text: t('settings.guide.search') },
     { id: 'quote', keys: ['⌘', 'L'], text: t('settings.guide.quote') },
     { id: 'palette', keys: ['⌘', 'K'], text: t('settings.guide.palette') },

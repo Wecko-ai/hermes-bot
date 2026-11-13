@@ -7,6 +7,11 @@ const MESSAGES = {
     tunnelFailed: (host, reason) => `SSH tunnel ${host}: ${reason}`,
     tunnelSilent: (host) => `Hermes is missing. The SSH tunnel ${host} does not answer.`,
     forbiddenOrigin: () => 'Origin refused.',
+    dictationConsent: () => ({
+      message: 'Use the microphone for dictation in this window?',
+      detail: 'This window shows HermesBot as served by another copy of HermesBot on this Mac, under another user account. Allow it to turn on the microphone when you click the dictation button? You will not be asked again.',
+      buttons: ['Allow', 'Don’t Allow'],
+    }),
   },
   fr: {
     portTaken: (port) => `Le port ${port} est déjà pris. Quitte l’autre copie de HermesBot, puis relance.`,
@@ -14,6 +19,11 @@ const MESSAGES = {
     tunnelFailed: (host, reason) => `Tunnel SSH ${host} : ${reason}`,
     tunnelSilent: (host) => `Hermes est absent. Le tunnel SSH ${host} ne répond pas.`,
     forbiddenOrigin: () => 'Origine refusée.',
+    dictationConsent: () => ({
+      message: 'Utiliser le micro pour la dictée dans cette fenêtre ?',
+      detail: 'Cette fenêtre affiche HermesBot servi par une autre copie de HermesBot sur ce Mac, sous un autre compte. L’autoriser à allumer le micro quand tu cliques sur le bouton de dictée ? La question ne sera plus posée.',
+      buttons: ['Autoriser', 'Ne pas autoriser'],
+    }),
   },
 }
 

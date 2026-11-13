@@ -28,6 +28,10 @@ const appId = typeof privateConfig.appId === 'string' && privateConfig.appId ? p
 // The environment variable comes first, so a build can try a mode, or switch it off, without the private file.
 const macSign = signModeFrom(process.env.HERMESBOT_MAC_SIGN ?? privateConfig.macSign)
 
+// The dictation helper, built by scripts/build-dictation.cjs (run by `npm run pack`). Absent (no Swift toolchain):
+// the app is packaged without it and the page uses its own fallback.
+const dictationHelper = path.join(__dirname, 'native', 'dictation', '.build', 'hermesbot-dictation')
+
 module.exports = {
   appId,
   productName: 'HermesBot',
@@ -52,6 +56,13 @@ module.exports = {
     target: [{ target: 'dir', arch: ['arm64'] }],
     identity: null,
     hardenedRuntime: false,
+    // A process outside the asar: the helper runs as a child of the app, which macOS names in its prompts.
+    extraResources: fs.existsSync(dictationHelper) ? [{ from: dictationHelper, to: 'hermesbot-dictation' }] : [],
+    // What macOS shows when it asks for the microphone and for speech recognition (dictation).
+    extendInfo: {
+      NSMicrophoneUsageDescription: 'HermesBot listens to the microphone only while you dictate a message.',
+      NSSpeechRecognitionUsageDescription: 'HermesBot turns what you dictate into text with the speech recognition of macOS.',
+    },
   },
   npmRebuild: false,
   // electron-builder's own signing stays off (identity null): it would seal the whole bundle, with a code hash

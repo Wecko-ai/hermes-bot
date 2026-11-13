@@ -9,6 +9,8 @@ const fs = require('node:fs')
 const { loadConfig } = require('../server/config.cjs')
 const { messages } = require('./messages.cjs')
 const { externalUrl } = require('./links.cjs')
+const { createDictation, UNAVAILABLE } = require('./dictation.cjs')
+const { createDictationGate } = require('./dictation-gate.cjs')
 
 const ORIGIN = 'http://127.0.0.1:4330'
 // Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
@@ -21,6 +23,10 @@ let hermesTunnelProcess
 let vaultTunnelProcess
 let hermesTunnelRestart
 let mainWindow
+// The page comes from a server this process did not start (another copy of the app holds the port).
+let clientMode = false
+// Who may turn the microphone on (dictation-gate.cjs). Created once the mode is known.
+let dictationGate
 // Proof, for this app's own server, that a sign-in without a password comes from this app's window.
 // Only set when this process runs the server: a window on another account's server has no key to give.
 let localKey = ''
@@ -189,6 +195,20 @@ function restartHermesTunnel() {
   return hermesTunnelRestart
 }
 
+// Dictation: the system's speech recognizer in a helper process (dictation.cjs). The helper ships next to the
+// app's resources; in development it is the one scripts/build-dictation.cjs builds. Elsewhere than macOS, none.
+const DICTATION_HELPER = process.platform !== 'darwin'
+  ? null
+  : app.isPackaged
+    ? path.join(process.resourcesPath, 'hermesbot-dictation')
+    : path.join(__dirname, '..', 'native', 'dictation', '.build', 'hermesbot-dictation')
+const dictation = createDictation({
+  helperPath: DICTATION_HELPER,
+  send: (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hermes-bot:dictation-event', event)
+  },
+})
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -237,8 +257,27 @@ async function createWindow() {
     if (localKey && mainWindow && details.webContentsId === mainWindow.webContents.id) headers['X-HermesBot-Local-Key'] = localKey
     callback({ requestHeaders: headers })
   })
+  // Dictation: real presses of the user in this window, seen here, are what may open a session; a page cannot
+  // fake them. The microphone closes as soon as the window is no longer in front (the page does too, but the
+  // main process does not count on it): `stop` turns it off at once and lets the words already said through.
+  mainWindow.webContents.on('before-input-event', (_event, input) => { if (input.type === 'keyDown') dictationGate?.noteGesture() })
+  mainWindow.webContents.on('before-mouse-event', (_event, mouse) => { if (mouse.type === 'mouseDown') dictationGate?.noteGesture() })
+  for (const name of ['blur', 'hide', 'minimize']) {
+    mainWindow.on(name, () => {
+      dictationGate?.disarm()
+      dictation.stop()
+    })
+  }
+  // A dictation never outlives the page that asked for it: reload, navigation, crash, closed window.
+  mainWindow.webContents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) dictation.cancel()
+  })
+  mainWindow.webContents.on('render-process-gone', () => dictation.cancel())
   await mainWindow.loadURL(ORIGIN)
-  mainWindow.on('closed', () => { mainWindow = null })
+  mainWindow.on('closed', () => {
+    dictation.cancel()
+    mainWindow = null
+  })
 }
 
 ipcMain.handle('hermes-bot:restart-tunnel', (event) => {
@@ -255,13 +294,68 @@ ipcMain.handle('hermes-bot:focus-window', (event) => {
   mainWindow.focus()
 })
 
+// Dictation requests: only from this window's own top frame, on the app's origin.
+const fromWindow = (event) => Boolean(mainWindow)
+  && event.sender === mainWindow.webContents
+  && Boolean(event.senderFrame) && !event.senderFrame.parent
+  && event.senderFrame.url.startsWith(`${ORIGIN}/`)
+
+// In client mode, the user's agreement to the microphone, kept in this process's own data folder.
+const consentFile = () => path.join(app.getPath('userData'), 'dictation-consent.json')
+function readConsent() {
+  try {
+    return JSON.parse(fs.readFileSync(consentFile(), 'utf8')).allowed === true ? 'granted' : undefined
+  } catch {
+    return undefined
+  }
+}
+let consentAsked = null
+async function askConsent() {
+  const copy = text().dictationConsent()
+  const options = { type: 'question', message: copy.message, detail: copy.detail, buttons: copy.buttons, defaultId: 1, cancelId: 1 }
+  const { response } = await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  const allowed = response === 0
+  if (allowed) {
+    fs.mkdirSync(path.dirname(consentFile()), { recursive: true })
+    fs.writeFileSync(consentFile(), JSON.stringify({ allowed: true }), { mode: 0o600 })
+  }
+  return allowed
+}
+
+ipcMain.handle('hermes-bot:dictation-prepare', async (event, localeId) => {
+  const gate = dictationGate
+  if (!fromWindow(event) || !gate || !gate.mayPrepare()) return { ...UNAVAILABLE }
+  gate.disarm()
+  if (gate.refused()) return { ...UNAVAILABLE }
+  if (gate.needsConsent()) {
+    // One dialog at a time, whatever the page asks meanwhile.
+    consentAsked ??= askConsent().finally(() => { consentAsked = null })
+    gate.setConsent((await consentAsked) ? 'granted' : 'denied')
+    if (gate.refused()) return { ...UNAVAILABLE }
+  }
+  const state = await dictation.prepare(localeId)
+  if (state.access === 'granted') gate.armStart()
+  return state
+})
+ipcMain.handle('hermes-bot:dictation-start', (event, options) => {
+  if (!fromWindow(event) || !dictationGate) return false
+  const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
+  if (!dictationGate.takeStart({ focused: mainWindow.isFocused(), visible })) return false
+  return dictation.start(options)
+})
+// Stopping is always safe: it only turns the microphone off.
+ipcMain.handle('hermes-bot:dictation-stop', (event) => { if (fromWindow(event)) dictation.stop() })
+ipcMain.handle('hermes-bot:dictation-cancel', (event) => { if (fromWindow(event)) dictation.cancel() })
+
 app.whenReady().then(async () => {
   if (await hermesBotAlreadyServing()) {
+    clientMode = true
     console.log(`HermesBot : mode client sur ${ORIGIN}`)
   } else {
     await ensureHermes()
     await startServer()
   }
+  dictationGate = createDictationGate({ clientMode, consent: clientMode ? readConsent() : undefined })
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -274,6 +368,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => app.quit())
 app.on('before-quit', () => {
+  dictation.cancel()
   if (hermesTunnelProcess && !hermesTunnelProcess.killed) hermesTunnelProcess.kill('SIGTERM')
   if (vaultTunnelProcess && !vaultTunnelProcess.killed) vaultTunnelProcess.kill('SIGTERM')
 })

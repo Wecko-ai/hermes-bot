@@ -91,6 +91,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Chat.** One message per turn: while a bot works, a single line with its live avatar says what it is doing, and its reply arrives whole. The steps it writes before its tool calls go to the Activity tab. Markdown, tables and code. Stop the current turn. Search in the conversation (⌘F): matches are highlighted and Enter goes from one to the next. Links open in your default browser. Drafts are kept per bot.
 - **Questions and approvals.** A question a bot asks in the middle of a turn shows as a card above the input. Questions it lists at the end of a reply become a small form: one field under each question, and all your answers go back in one message. An action that needs approval opens a dialog (once, for the session, always, deny).
 - **Sending while a bot works.** Wait (keeps your draft), Queue (runs after the current turn) or Priority (interrupts, then resumes).
+- **Dictation.** The microphone button writes what you say into the message field, with the speech recognition of macOS: on the device when your language has a local model, through the system's own service otherwise. No audio goes through HermesBot or its server. A timer and a level wave show it is listening; Stop keeps the text for you to edit, Send sends it at once. The interface language (English or French) is the language it listens for.
 - **Files.** Drag and drop images, videos, PDFs and other files into the chat.
 - **Bot media.** Images, galleries, video and audio that a bot sends (`MEDIA:` lines) or cites by path show under its message, with a full-screen viewer. PDF, HTML and Markdown documents open in tabs next to the chat.
 - **Bot-to-bot messages.** "Orion messaged Iris" lines in both chats, with the reply. `@bot` mentions tell a bot which other bot you mean.
@@ -132,6 +133,8 @@ npm run pack       # build release/mac-arm64/HermesBot.app
 ```
 
 `npm run pack` makes an unsigned app for Apple silicon. An app you build yourself opens normally; one copied from another Mac is quarantined by macOS until you allow it. There is no prebuilt download and no automatic update.
+
+**Dictation needs the Swift toolchain at build time.** `npm run pack` compiles a small helper ([native/dictation/](native/dictation/)) with `xcrun swiftc`; without Xcode or its command line tools the app is packaged without dictation and the microphone button says it is unavailable. The first use asks for the Microphone and for Speech Recognition; both can be changed in System Settings > Privacy & Security.
 
 **Notifications need a signed build.** macOS drops the notifications of an app whose code signature does not carry its bundle identifier, and an unsigned package carries the runtime's. `HERMESBOT_MAC_SIGN=adhoc npm run pack` signs the app's executable ad hoc with its identifier ([scripts/mac-sign.cjs](scripts/mac-sign.cjs)); no certificate is needed. The first launch of a build signed this way asks once for the Keychain item that holds your session ("Always Allow"); later builds do not ask again while the Electron version stays the same. Settings > General has a "Test notification" button.
 
@@ -181,6 +184,7 @@ window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4
 - Without a password, the server reads Hermes' session token from the Hermes home at each use. It never stores it and never sends it to the window. For every request that carries the token, it opens the connection to `127.0.0.1` first, then checks that the process at the other end of that connection is the gateway of that home (the gateway names itself on its private control socket). A process of another account, an SSH tunnel, or whoever takes the port between two requests never gets the token.
 - That sign-in opens for the desktop app's own window, or for whoever has the link the server printed, and for nobody else: any process on the Mac can reach the server's port.
 - The shared-Chrome vault keeps asking for a username and password session before any change. A bot can read the Hermes token of its own account, so that token proves nothing there.
+- The microphone only opens after a real click or key press in the window, seen by the main process, while the window is in front, for two minutes at most. When the window shows a page served by another copy of the app (a second macOS account on the same Mac), the app asks you once before that page may use dictation.
 - HermesBot does not sandbox your bots. They run with the rights of the Hermes gateway's user; use Hermes' own approvals and terminal backends for that.
 - The shared-Chrome vault protects against mistakes, not against a hostile bot. Its bots run under the same macOS account as the keychain, so a bot with a terminal could read a saved password or a filled page.
 

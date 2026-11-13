@@ -122,6 +122,7 @@
       "exec": "Run the task",
       "delivery": "While a bot works: keep a draft, queue it, or interrupt",
       "files": "Add files: drag and drop, paste, or the + button",
+      "mic": "Dictate with the Mac’s speech recognition: Stop to edit the text, Send to send it at once",
       "search": "Search in the conversation",
       "quote": "Quote the selected text in the composer",
       "palette": "Command palette",

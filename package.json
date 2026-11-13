@@ -15,7 +15,7 @@
     "build": "tsc -b --noEmit && vite build",
     "start": "NODE_ENV=production node server/index.mjs",
     "desktop": "npm run build && node node_modules/electron/install.js && NODE_ENV=production electron .",
-    "pack": "npm run build && node node_modules/electron/install.js && electron-builder --dir --publish never --config electron-builder.config.cjs",
+    "pack": "npm run build && node node_modules/electron/install.js && node scripts/build-dictation.cjs && electron-builder --dir --publish never --config electron-builder.config.cjs",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:e2e": "node tests/e2e.mjs",

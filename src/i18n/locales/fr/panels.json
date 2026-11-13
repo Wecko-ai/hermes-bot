@@ -122,6 +122,7 @@
       "exec": "Exécuter la tâche",
       "delivery": "Pendant que le bot travaille : brouillon, file ou interruption",
       "files": "Ajouter des fichiers : glisser-déposer, coller, ou le bouton +",
+      "mic": "Dicter avec la reconnaissance vocale du Mac : Stop pour retoucher le texte, Envoyer pour l’envoyer tout de suite",
       "search": "Chercher dans la conversation",
       "quote": "Citer le texte sélectionné dans le champ de saisie",
       "palette": "Palette de commandes",

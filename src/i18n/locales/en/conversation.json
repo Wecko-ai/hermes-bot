@@ -7,6 +7,7 @@
     "messageTo": "Message to {{name}}",
     "stopDictation": "Stop dictation",
     "dictate": "Dictate",
+    "dictateBlocked": "Dictation unavailable",
     "stopBot": "Stop the bot",
     "sendPriority": "Send as priority",
     "sendQueue": "Add to queue",
@@ -19,6 +20,18 @@
     "hintPriority": "{{name}} stops, reads, then resumes",
     "usageToggle": "Show context and throughput",
     "chooseModel": "Choose the model"
+  },
+  "dictation": {
+    "group": "Dictation",
+    "placeholder": "Listening…",
+    "notice": {
+      "permission": "Dictation needs the microphone and Speech Recognition. Allow HermesBot in System Settings > Privacy & Security > Microphone, then in Speech Recognition, and try again.",
+      "unavailable": "Speech recognition is not available on this Mac. Check that it is enabled in System Settings > Privacy & Security > Speech Recognition.",
+      "noMicrophone": "No microphone found. Plug one in or choose an input in System Settings > Sound, then try again.",
+      "language": "This Mac cannot recognize the interface language yet. Add it in System Settings > Keyboard > Dictation.",
+      "offline": "No connection: dictation in this language needs the network. Try again when you are back online.",
+      "failed": "Dictation could not start. Try again."
+    }
   },
   "messages": {
     "working": "{{name}} is working…",

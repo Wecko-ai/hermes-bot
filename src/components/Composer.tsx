@@ -1,6 +1,6 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from 'react'
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, ChevronDown, FileText, Film, Gauge, Mic, Music, Plus, Square, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, FileText, Film, Gauge, Mic, MicOff, Music, Pause, Plus, X } from 'lucide-react'
 import type { Bot, SessionUsage } from '../types'
 import { formatUsage } from '../lib/model'
 import { defaultPrompt, filterAttachments, formatBytes, toAttachment, type PendingAttachment } from '../lib/attachments'
@@ -8,8 +8,11 @@ import { mentionOptions, mentionTokenAt, type MentionOption, type MentionToken }
 import { CHAT_MODES, loadModes, modePlaceholder, saveModes, type ChatMode } from '../lib/modes'
 import { DELIVERY_MODES, deliveryPlaceholder, loadDraft, saveDraft, type DeliveryMode } from '../lib/delivery'
 import { useSettings } from '../lib/settings'
-import { locale } from '../i18n'
+import { i18n } from '../i18n'
+import { DictationController, type DictationSnapshot } from '../lib/dictation'
+import { createDictationEngine } from '../lib/dictation-engines'
 import { BotAvatar } from './BotAvatar'
+import { DictationPill } from './DictationPill'
 
 export interface ComposerHandle {
   addFiles: (files: File[]) => void
@@ -49,6 +52,12 @@ function FileIcon({ name }: { name: string }) {
   return <FileText size={15} />
 }
 
+const IDLE_DICTATION: DictationSnapshot = { phase: 'idle', blocked: null, listeningSince: null }
+const noSubscription = () => () => {}
+const getIdleDictation = () => IDLE_DICTATION
+// The visual demo (`?demo=1`) dictates a scripted sentence: no microphone.
+const DEMO = new URLSearchParams(location.search).get('demo') === '1'
+
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
 export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage }: ComposerProps) {
@@ -58,8 +67,6 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const recognitionRef = useRef<any>(null)
-  const [listening, setListening] = useState(false)
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modes, setModes] = useState(loadModes)
@@ -79,6 +86,29 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const botRef = useRef(bot.slug)
   const attachmentCountRef = useRef(0)
   attachmentCountRef.current = attachments.length
+  // The field as it is now: the dictation reads it when it starts and writes the transcript into it.
+  const textRef = useRef(text)
+  textRef.current = text
+  const noticeRef = useRef(onNotice)
+  noticeRef.current = onNotice
+  const sendingDictatedRef = useRef(false)
+  // One controller for the composer's life; `null`: nothing can dictate here, so no mic button.
+  const dictationRef = useRef<DictationController | null | undefined>(undefined)
+  if (dictationRef.current === undefined) {
+    const engine = createDictationEngine({ demo: DEMO, language: i18n.language === 'fr' ? 'fr' : 'en', languageCode: () => (i18n.language === 'fr' ? 'fr' : 'en') })
+    dictationRef.current = engine && new DictationController({
+      engine,
+      languageCode: () => (i18n.language === 'fr' ? 'fr' : 'en'),
+      getText: () => textRef.current,
+      setText: (next) => { textRef.current = next; setText(next) },
+      isOffline: () => !navigator.onLine,
+      onNotice: (notice) => noticeRef.current(i18n.t(`dictation.notice.${notice}`)),
+    })
+  }
+  const dictation = dictationRef.current
+  const dictationState = useSyncExternalStore(dictation?.subscribe ?? noSubscription, dictation?.getSnapshot ?? getIdleDictation)
+  const dictating = dictationState.phase !== 'idle'
+  const dictationBlocked = dictationState.blocked !== null
 
   const options = mention ? mentionOptions(mention.query, bots, bot.slug) : []
   const menuOpen = options.length > 0
@@ -102,11 +132,44 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`
   }, [text])
 
-  useEffect(() => () => recognitionRef.current?.stop?.(), [])
+  // The microphone is given back when the composer goes away.
+  useEffect(() => () => dictation?.cancel(), [dictation])
+
+  // The caret follows the transcript: at the end, in view, ready to edit once the dictation stops.
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!dictating || !textarea) return
+    textarea.setSelectionRange(text.length, text.length)
+    textarea.scrollTop = textarea.scrollHeight
+  }, [text, dictating])
+
+  // The window leaves the screen: the microphone stops, the text stays. Back in front: a refusal may have been
+  // lifted in System Settings, the next click tries again.
+  useEffect(() => {
+    if (!dictation) return
+    const onVisibility = () => {
+      if (document.hidden) void dictation.stop()
+      else dictation.recheckAccess()
+    }
+    const onFocus = () => dictation.recheckAccess()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [dictation])
+
+  // A turn of this bot starts another way (queued message, another window): the dictation ends, the text stays.
+  useEffect(() => {
+    if (running) void dictation?.stop()
+  }, [running, dictation])
 
   // Before paint: the field never shows, even for an instant, the previous bot’s draft.
   useLayoutEffect(() => {
     if (botRef.current === bot.slug) return
+    // A dictation never survives in another bot's field: what is written goes to the draft below.
+    dictation?.cancel()
     if (text || attachments.length) draftsRef.current.set(botRef.current, { text, attachments })
     const draft = draftsRef.current.get(bot.slug)
     draftsRef.current.delete(bot.slug)
@@ -146,7 +209,37 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     setAttachments((current) => current.filter((item) => item.id !== attachment.id))
   }
 
+  /** Stop (button or Escape): the text stays in the field, the caret at its end, ready to edit. */
+  const stopDictation = () => {
+    if (!dictation) return
+    void dictation.stop().then(() => requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea || dictation.active) return
+      textarea.focus()
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    }))
+  }
+  useEffect(() => {
+    if (!dictating) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      stopDictation()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   const submit = async () => {
+    // Send while dictating: stop, wait briefly for the final words, then send the field once.
+    if (dictation?.active) {
+      if (sendingDictatedRef.current) return
+      sendingDictatedRef.current = true
+      const target = bot.slug
+      try { await dictation.finish() } finally { sendingDictatedRef.current = false }
+      if (botRef.current !== target) return
+    }
+    const text = textRef.current
     const command = text.trim().match(/^\/model(?:\s+(.*))?$/i)
     if (command) {
       setText('')
@@ -200,31 +293,6 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     })
   }
 
-  const dictate = () => {
-    if (listening) {
-      recognitionRef.current?.stop()
-      return
-    }
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return
-    const recognition = new SpeechRecognition()
-    recognition.lang = locale()
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.onresult = (event: any) => {
-      let transcript = ''
-      for (let index = event.resultIndex; index < event.results.length; index += 1) transcript += event.results[index][0].transcript
-      if (transcript) setText((current) => `${current}${current && !current.endsWith(' ') ? ' ' : ''}${transcript}`)
-    }
-    recognition.onend = () => setListening(false)
-    recognition.onerror = () => setListening(false)
-    recognitionRef.current = recognition
-    recognition.start()
-    setListening(true)
-  }
-
-  const speechAvailable = Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
-
   return (
     <div className="composer-wrap">
       {menuOpen && (
@@ -264,7 +332,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           ))}
         </div>
       )}
-      <div className={`composer ${listening ? 'is-listening' : ''}`}>
+      <div className={`composer ${dictating ? 'is-dictating' : ''}`}>
         {!minimal && <input ref={fileRef} className="visually-hidden" type="file" multiple aria-label={t('composer.chooseFiles')} onChange={(event) => { addFiles(Array.from(event.target.files || [])); event.target.value = '' }} />}
         {!minimal && <button type="button" className="composer-plus" aria-label={t('composer.addFiles')} disabled={disabled} onClick={() => fileRef.current?.click()}><Plus size={19} /></button>}
         <textarea
@@ -272,7 +340,8 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           rows={1}
           value={text}
           disabled={disabled}
-          placeholder={busy ? deliveryPlaceholder(delivery, bot.name) : running ? t('modes.placeholder.exec', { name: bot.name }) : modePlaceholder(mode, bot.name)}
+          readOnly={dictating}
+          placeholder={dictating ? t('dictation.placeholder') : busy ? deliveryPlaceholder(delivery, bot.name) : running ? t('modes.placeholder.exec', { name: bot.name }) : modePlaceholder(mode, bot.name)}
           aria-label={t('composer.messageTo', { name: bot.name })}
           aria-expanded={menuOpen}
           aria-controls={menuOpen ? 'mention-menu' : undefined}
@@ -312,9 +381,14 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             }
           }}
         />
-        {speechAvailable && !running && <button type="button" className={`composer-mic ${listening ? 'is-active' : ''}`} aria-label={listening ? t('composer.stopDictation') : t('composer.dictate')} onClick={dictate}><Mic size={17} /></button>}
-        {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Square size={13} fill="currentColor" /></button>}
-        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
+        {dictation && !running && !dictating && (
+          <button type="button" className={`composer-mic ${dictationBlocked ? 'is-blocked' : ''}`} aria-label={dictationBlocked ? t('composer.dictateBlocked') : t('composer.dictate')} aria-disabled={dictationBlocked || undefined} disabled={disabled} onClick={() => void dictation.start()}>
+            {dictationBlocked ? <MicOff size={17} /> : <Mic size={17} />}
+          </button>
+        )}
+        {dictation && dictating && <DictationPill controller={dictation} onStop={stopDictation} />}
+        {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Pause size={14} fill="currentColor" /></button>}
+        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-hint">
         {!minimal && (

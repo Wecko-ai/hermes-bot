@@ -1,0 +1,12 @@
+/*
+ * The dictation pill: a stop square, the timer and the wave, on a soft glass capsule in the composer's bottom row.
+ * Everything is 12px or more, targets are 28px.
+ */
+.dictation-pill { height: 30px; flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 3px; border-radius: 15px; background: color-mix(in srgb, var(--text) 9%, transparent); box-shadow: inset 0 0 0 .5px color-mix(in srgb, var(--text) 10%, transparent), var(--glass-highlight); color: var(--text); }
+.dictation-stop { width: 28px; height: 28px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--text); transition: transform 160ms var(--spring), background 160ms; }
+.dictation-stop:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.dictation-stop:active { transform: scale(.9); }
+.dictation-stop-square { width: 12px; height: 12px; border-radius: 3px; background: currentColor; }
+.dictation-timer { min-width: 30px; color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 500; line-height: 1; }
+.dictation-wave { width: 72px; height: 20px; flex: none; display: block; color: var(--text-tertiary); }
+.dictation-pill.is-finishing { opacity: .7; }

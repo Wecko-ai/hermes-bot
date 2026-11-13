@@ -768,6 +768,33 @@ try {
       close() {}
     }
   })
+  // Dictation: a fake native bridge, scripted by the test (the real one needs a microphone and the Swift helper).
+  await page.addInitScript(() => {
+    const listeners = new Set()
+    const calls = []
+    const state = { access: 'granted', microphone: true, exists: true, onDevice: true, available: true, startResult: true, finalText: '' }
+    const emit = (event) => listeners.forEach((listener) => listener(event))
+    window.__dictation = { calls, state, emit }
+    window.hermesBot = {
+      platform: 'electron',
+      restartTunnel: async () => {},
+      focusWindow: async () => {},
+      dictation: {
+        prepare: async (localeId) => { calls.push({ method: 'prepare', localeId }); const { access, microphone, exists, onDevice, available } = state; return { access, microphone, exists, onDevice, available } },
+        start: async (options) => { calls.push({ method: 'start', ...options }); return state.startResult },
+        stop: async () => {
+          calls.push({ method: 'stop' })
+          setTimeout(() => {
+            if (state.finalText) emit({ type: 'words', text: state.finalText, final: true })
+            emit({ type: 'audioEnd' })
+            emit({ type: 'done' })
+          }, 80)
+        },
+        cancel: async () => { calls.push({ method: 'cancel' }) },
+        onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener) },
+      },
+    }
+  })
   const notificationsSent = () => page.evaluate(() => window.__notifications.map(({ title, body, tag }) => ({ title, body, tag })))
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -1095,6 +1122,211 @@ try {
   await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
   await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ state: 'detached', timeout: 3_000 })
 
+  // Dictation (fake desktop bridge): the mic starts it, the pill shows stop + timer + wave, the words land in the field.
+  const dictationCalls = (method) => page.evaluate((name) => window.__dictation.calls.filter((call) => call.method === name), method)
+  const dictationState = (patch) => page.evaluate((next) => Object.assign(window.__dictation.state, next), patch)
+  const dictationEmit = (event) => page.evaluate((payload) => window.__dictation.emit(payload), event)
+  const pill = page.getByRole('group', { name: 'Dictée' })
+  const sendButton = () => page.locator('.composer-send:not(.is-stop)')
+  await dictationState({ finalText: '' })
+  await orionBox.fill('Test mode')
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  const prepared = await dictationCalls('prepare')
+  const started = await dictationCalls('start')
+  if (prepared.length !== 1 || prepared[0].localeId !== 'fr-FR') throw new Error(`Dictée : prepare ${JSON.stringify(prepared)}`)
+  if (started.length !== 1 || started[0].localeId !== 'fr-FR' || started[0].onDevice !== true || started[0].listenForMs !== 60_000 || started[0].pauseForMs !== 4_500) throw new Error(`Dictée : start ${JSON.stringify(started)}`)
+  if (await page.getByRole('button', { name: 'Dicter', exact: true }).count()) throw new Error('Le micro doit laisser la place à la pastille.')
+  await pill.getByRole('button', { name: 'Arrêter la dictée' }).waitFor({ timeout: 1_000 })
+  if (await pill.locator('canvas').getAttribute('aria-hidden') !== 'true') throw new Error('L’onde doit être cachée aux lecteurs d’écran.')
+  if (!(await orionBox.evaluate((field) => field.readOnly))) throw new Error('Le champ doit être en lecture seule pendant la dictée.')
+  const timer = pill.getByRole('timer')
+  if (await timer.textContent() !== '0:00') throw new Error('Le minuteur doit partir de 0:00.')
+  await page.waitForFunction(() => /^0:0[1-9]$/.test(document.querySelector('.dictation-timer')?.textContent || ''), null, { timeout: 4_000 })
+  await dictationEmit({ type: 'words', text: 'dictée', final: false })
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Test mode dictée', null, { timeout: 2_000 })
+  await dictationEmit({ type: 'words', text: 'dictée en cours', final: false })
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Test mode dictée en cours', null, { timeout: 2_000 })
+  if (await orionBox.evaluate((field) => field.selectionStart !== field.value.length)) throw new Error('Le curseur doit suivre la transcription.')
+  // The wave: tall bars while the level is high, dots at silence.
+  const waveHeight = () => page.locator('.dictation-wave').evaluate((canvas) => {
+    const { width, height } = canvas
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data
+    let tallest = 0
+    for (let x = 0; x < width; x += 1) {
+      let count = 0
+      for (let y = 0; y < height; y += 1) if (data[(y * width + x) * 4 + 3] > 40) count += 1
+      tallest = Math.max(tallest, count)
+    }
+    return tallest / (height / 20)
+  })
+  await page.evaluate(() => { window.__dictationLevels = setInterval(() => window.__dictation.emit({ type: 'level', value: 1 }), 30) })
+  await page.waitForFunction(() => document.querySelector('.dictation-wave')?.getContext('2d').getImageData(0, 0, 200, 40).data.some((value, index) => index % 4 === 3 && value > 40), null, { timeout: 2_000 })
+  await delay(500)
+  const loud = await waveHeight()
+  if (loud < 14) throw new Error(`L’onde doit monter avec le niveau : ${loud}`)
+  await page.evaluate(() => { clearInterval(window.__dictationLevels); window.__dictation.emit({ type: 'level', value: 0.55 }); window.__dictationLevels = setInterval(() => window.__dictation.emit({ type: 'level', value: 0.3 + Math.random() * 0.6 }), 70) })
+  await delay(900)
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await delay(150)
+  await page.locator('.composer-wrap').screenshot({ path: `${SCREENSHOTS}composer-dictation.png` })
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await delay(150)
+  await page.locator('.composer-wrap').screenshot({ path: `${SCREENSHOTS}composer-dictation-light.png` })
+  await page.evaluate(() => { clearInterval(window.__dictationLevels); window.__dictationLevels = setInterval(() => window.__dictation.emit({ type: 'level', value: 0 }), 30) })
+  await delay(1_200)
+  const quiet = await waveHeight()
+  if (quiet > 4.5) throw new Error(`L’onde doit retomber en points au silence : ${quiet}`)
+  await page.evaluate(() => clearInterval(window.__dictationLevels))
+  // Reduced motion (system or the app's own setting): the wave keeps a fixed shape, its height follows the level in steps.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.evaluate(() => window.__dictation.emit({ type: 'level', value: 1 }))
+  await delay(300)
+  const stillFull = await waveHeight()
+  await page.evaluate(() => window.__dictation.emit({ type: 'level', value: 0 }))
+  await delay(300)
+  const stillQuiet = await waveHeight()
+  await page.emulateMedia({ reducedMotion: null })
+  if (stillFull < 14 || stillQuiet > 4.5) throw new Error(`Animations réduites : onde ${stillFull} puis ${stillQuiet}`)
+  // Stop: the final words land, the pill goes, the text stays and can be edited.
+  await dictationState({ finalText: 'dictée en cours terminée' })
+  await pill.getByRole('button', { name: 'Arrêter la dictée' }).click()
+  await pill.waitFor({ state: 'detached', timeout: 3_000 })
+  if ((await dictationCalls('stop')).length !== 1) throw new Error('Stop doit arrêter la dictée une seule fois.')
+  if (await orionBox.inputValue() !== 'Test mode dictée en cours terminée') throw new Error(`Le texte dicté doit rester : ${await orionBox.inputValue()}`)
+  if (await orionBox.evaluate((field) => field.readOnly || document.activeElement !== field || field.selectionStart !== field.value.length)) throw new Error('Après Stop : champ modifiable, focus et curseur à la fin.')
+  await page.keyboard.type(' !')
+  if (await orionBox.inputValue() !== 'Test mode dictée en cours terminée !') throw new Error('Le texte doit pouvoir être retouché après la dictée.')
+  // Send while dictating: the dictation stops, the field goes out once, with the final words.
+  const promptsBeforeDictation = promptCalls
+  await orionBox.fill('Test mode')
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  await dictationEmit({ type: 'words', text: 'envoyée', final: false })
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Test mode envoyée', null, { timeout: 2_000 })
+  await dictationState({ finalText: 'envoyée tout de suite' })
+  await sendButton().click()
+  for (let attempt = 0; attempt < 60 && promptCalls === promptsBeforeDictation; attempt += 1) await delay(25)
+  await delay(700)
+  if (promptCalls !== promptsBeforeDictation + 1) throw new Error(`Envoyer pendant la dictée : ${promptCalls - promptsBeforeDictation} message(s).`)
+  if (lastPromptText !== 'Test mode envoyée tout de suite') throw new Error(`Envoyer pendant la dictée : ${lastPromptText}`)
+  if ((await dictationCalls('stop')).length !== 2) throw new Error('Envoyer doit arrêter la dictée.')
+  if (await pill.count() || await orionBox.inputValue()) throw new Error('Après l’envoi, plus de pastille et un champ vide.')
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ state: 'detached', timeout: 4_000 })
+  // The send key does the same.
+  await orionBox.fill('Test mode')
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  await dictationEmit({ type: 'words', text: 'au clavier', final: false })
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Test mode au clavier', null, { timeout: 2_000 })
+  await dictationState({ finalText: 'au clavier aussi' })
+  await orionBox.press('Enter')
+  for (let attempt = 0; attempt < 60 && promptCalls === promptsBeforeDictation + 1; attempt += 1) await delay(25)
+  await delay(700)
+  if (promptCalls !== promptsBeforeDictation + 2 || lastPromptText !== 'Test mode au clavier aussi') throw new Error(`Entrée pendant la dictée : ${promptCalls - promptsBeforeDictation} message(s), « ${lastPromptText} ».`)
+  await page.getByRole('button', { name: 'Arrêter le bot' }).waitFor({ state: 'detached', timeout: 4_000 })
+  // Escape stops it, the text stays.
+  await dictationState({ finalText: '' })
+  await orionBox.fill('Brouillon')
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  await dictationEmit({ type: 'words', text: 'et la suite', final: false })
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Brouillon et la suite', null, { timeout: 2_000 })
+  const stopsBeforeEscape = (await dictationCalls('stop')).length
+  await page.keyboard.press('Escape')
+  await pill.waitFor({ state: 'detached', timeout: 3_000 })
+  if ((await dictationCalls('stop')).length !== stopsBeforeEscape + 1 || await orionBox.inputValue() !== 'Brouillon et la suite') throw new Error('Échap doit arrêter la dictée en gardant le texte.')
+  // Another bot: the dictation ends there, nothing it hears reaches the other field.
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  const cancelsBeforeSwitch = (await dictationCalls('cancel')).length
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=nova].is-selected').waitFor()
+  await pill.waitFor({ state: 'detached', timeout: 3_000 })
+  await dictationEmit({ type: 'words', text: 'fantôme', final: false })
+  await delay(300)
+  if ((await dictationCalls('cancel')).length !== cancelsBeforeSwitch + 1) throw new Error('Changer de bot doit rendre le micro.')
+  if (await page.getByRole('textbox', { name: 'Message à Nova' }).inputValue()) throw new Error('La dictée a écrit dans le champ d’un autre bot.')
+  await page.locator('[data-bot=orion]').click()
+  await page.locator('[data-bot=orion].is-selected').waitFor()
+  if (await orionBox.inputValue() !== 'Brouillon et la suite') throw new Error(`Le brouillon d’Orion doit rester : ${await orionBox.inputValue()}`)
+  await orionBox.fill('')
+  // Refused access: a notice that says where to allow it, a mic that looks disabled and repeats the reason.
+  await dictationState({ access: 'denied' })
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  const toast = page.locator('.toast')
+  await toast.getByText('Réglages Système', { exact: false }).waitFor({ timeout: 3_000 })
+  if (!(await toast.textContent()).includes('Microphone') || !(await toast.textContent()).includes('Reconnaissance vocale')) throw new Error('Le message doit dire où autoriser le micro et la reconnaissance vocale.')
+  const blockedMic = page.getByRole('button', { name: 'Dictée indisponible' })
+  await blockedMic.waitFor({ timeout: 2_000 })
+  if (await blockedMic.getAttribute('aria-disabled') !== 'true' || !(await blockedMic.getAttribute('class')).includes('is-blocked')) throw new Error('Le micro bloqué doit avoir l’air désactivé.')
+  await toast.getByRole('button', { name: 'Fermer' }).click()
+  await toast.waitFor({ state: 'detached', timeout: 2_000 })
+  const preparedBefore = (await dictationCalls('prepare')).length
+  // aria-disabled only: Playwright treats it as disabled, a real click still goes through.
+  await blockedMic.click({ force: true })
+  await toast.getByText('Réglages Système', { exact: false }).waitFor({ timeout: 2_000 })
+  if ((await dictationCalls('prepare')).length !== preparedBefore) throw new Error('Un micro bloqué ne doit pas redemander l’accès au système.')
+  // Back in the window after allowing it in System Settings: the next click tries again.
+  await dictationState({ access: 'granted' })
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.getByRole('button', { name: 'Dicter', exact: true }).waitFor({ timeout: 2_000 })
+  await toast.getByRole('button', { name: 'Fermer' }).click()
+  // No microphone, language missing, offline: each has its own notice.
+  const cases = [
+    [{ microphone: true, exists: true, onDevice: false, available: false }, 'Pas de connexion'],
+    [{ microphone: false, exists: true, onDevice: true, available: true }, 'Aucun micro'],
+    [{ microphone: true, exists: false, onDevice: true, available: true }, 'ne sait pas encore reconnaître'],
+  ]
+  for (const [patch, text] of cases) {
+    await dictationState(patch)
+    await page.getByRole('button', { name: /^Dict/ }).click({ force: true })
+    await toast.getByText(text, { exact: false }).waitFor({ timeout: 3_000 })
+    await toast.getByRole('button', { name: 'Fermer' }).click()
+    await toast.waitFor({ state: 'detached', timeout: 2_000 })
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  }
+  // The language stays blocked until the next launch (it does not come back by itself): the mic says so.
+  await page.getByRole('button', { name: 'Dictée indisponible' }).waitFor({ timeout: 2_000 })
+
+  // Send button: black and white, flat, in both themes (the disc has the text colour, the arrow the background colour).
+  await orionBox.fill('Un message')
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value }, theme)
+    await delay(250)
+    const look = await sendButton().evaluate((button) => {
+      const style = getComputedStyle(button)
+      return { background: style.backgroundColor, color: style.color, image: style.backgroundImage, shadow: style.boxShadow, text: getComputedStyle(document.querySelector('.composer textarea')).color, page: getComputedStyle(document.body).backgroundColor }
+    })
+    if (look.background !== look.text || look.image !== 'none' || look.shadow !== 'none') throw new Error(`Bouton Envoyer (${theme}) : ${JSON.stringify(look)}`)
+    await page.locator('.composer-wrap').screenshot({ path: `${SCREENSHOTS}composer-send${theme === 'dark' ? '-dark' : ''}.png` })
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await orionBox.fill('')
+  const disabledSend = await sendButton().evaluate((button) => ({ disabled: button.disabled, background: getComputedStyle(button).backgroundColor, text: getComputedStyle(document.querySelector('.composer textarea')).color }))
+  if (!disabledSend.disabled || disabledSend.background === disabledSend.text) throw new Error(`Envoyer vide doit avoir l’air désactivé : ${JSON.stringify(disabledSend)}`)
+  // Stop the turn: the pause of a music player (two bars, filled), same disc, and it still stops the turn.
+  const interruptsBeforeStop = interruptCalls.length
+  const assistantRepliesBeforeStop = await page.locator('.message-assistant').count()
+  await orionBox.fill('Test pilotage')
+  await orionBox.press('Enter')
+  const stopTurn = page.getByRole('button', { name: 'Arrêter le bot' })
+  await stopTurn.waitFor({ timeout: 3_000 })
+  const pauseLook = await stopTurn.evaluate((button) => {
+    const style = getComputedStyle(button)
+    const icon = button.querySelector('svg')
+    return { bars: icon?.querySelectorAll('rect').length, pause: icon?.classList.contains('lucide-pause'), fill: icon ? getComputedStyle(icon.querySelector('rect')).fill : null, background: style.backgroundColor, text: getComputedStyle(document.querySelector('.composer textarea')).color, image: style.backgroundImage }
+  })
+  if (pauseLook.bars !== 2 || !pauseLook.pause || pauseLook.background !== pauseLook.text || pauseLook.image !== 'none' || pauseLook.fill === 'none') throw new Error(`Bouton pause : ${JSON.stringify(pauseLook)}`)
+  await page.locator('.composer-wrap').screenshot({ path: `${SCREENSHOTS}composer-pause.png` })
+  await stopTurn.click()
+  for (let attempt = 0; attempt < 40 && interruptCalls.length === interruptsBeforeStop; attempt += 1) await delay(25)
+  if (interruptCalls.length !== interruptsBeforeStop + 1) throw new Error('Le bouton pause doit toujours arrêter le tour.')
+  // The simulated gateway then runs the queued turn of the earlier step: wait for its reply, not just for the pause to go.
+  await page.waitForFunction((before) => document.querySelectorAll('.message-assistant').length > before && !document.querySelector('.composer-send.is-stop'), assistantRepliesBeforeStop, { timeout: 5_000 })
+  await delay(300)
+  await stopTurn.waitFor({ state: 'detached', timeout: 3_000 })
+
   // Bot question mid-turn (clarify tool): card above the field, "Attend ta réponse" everywhere.
   liveStatusByProfile.orion = 'waiting'
   await orionBox.fill('Test question')
@@ -1143,7 +1375,7 @@ try {
   await page.locator('.palette').waitFor({ state: 'detached', timeout: 2_000 })
   await page.keyboard.press('Alt+ArrowDown')
   await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
-  await page.locator('.message-assistant').getByText('Pilotage terminé.').evaluate((node) => { const range = document.createRange(); range.selectNodeContents(node); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range) })
+  await page.locator('.message-assistant').getByText('Pilotage terminé.').last().evaluate((node) => { const range = document.createRange(); range.selectNodeContents(node); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range) })
   await page.keyboard.press('Meta+l')
   if (await orionBox.inputValue() !== '> Pilotage terminé.\n\n') throw new Error(`Citation ⌘L : ${await orionBox.inputValue()}`)
   await orionBox.fill('')
