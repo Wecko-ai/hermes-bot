@@ -1,7 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { notificationExcerpt, notificationForRequest, notificationForStatus, sendTestNotification, shouldNotify, turnReply, watchWhileHidden } from './notifications'
+import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificationForStatus, resetTurns, sendTestNotification, shouldNotify, turnForUser, turnReply, watchWhileHidden } from './notifications'
 
 describe('notifications', () => {
+  it('ne notifie pas un tour entre bots ni un tour fini en silence', () => {
+    resetTurns()
+    expect(turnForUser('orion')).toBe(true)
+    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Message from 🤖 Nova (@nova): relis le plan' } })
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Plan relu, OK.' } })
+    expect(turnForUser('orion')).toBe(false)
+    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Fais-moi le point.' } })
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Voici le point.' } })
+    expect(turnForUser('orion')).toBe(true)
+    noteTurnEvent('orion', { type: 'message.start', payload: { text: '[IMPORTANT: Background process proc_1 completed normally (exit code 0).' } })
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: '[SILENT]' } })
+    expect(turnForUser('orion')).toBe(false)
+    // A reply missing from the frame is unknown, not silent.
+    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Et maintenant ?' } })
+    noteTurnEvent('orion', { type: 'message.complete', payload: {} })
+    expect(turnForUser('orion')).toBe(true)
+  })
+
   it('notifie la fin d’un tour et une question, pas le reste', () => {
     expect(notificationForStatus('working', 'done')).toBe('done')
     expect(notificationForStatus('thinking', 'done')).toBe('done')

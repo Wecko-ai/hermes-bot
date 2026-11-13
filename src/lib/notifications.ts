@@ -1,4 +1,6 @@
 import type { BotStatus, ChatMessage } from '../types'
+import { isSilentMessage } from './hermes'
+import { parseIncomingAgentMessage } from './inter-agent'
 
 export type NotificationKind = 'done' | 'question' | 'approval'
 
@@ -19,6 +21,34 @@ export function notificationForRequest(method: string): NotificationKind | null 
   if (APPROVAL_METHODS.has(method)) return 'approval'
   if (method.startsWith('vault.')) return 'question'
   return null
+}
+
+/** How the latest turn of each bot began and ended. Memory only. */
+const turns = new Map<string, { fromBot: boolean; silent: boolean }>()
+
+/**
+ * Follows a bot's turns from its events (`message.start` carries the text that started the turn,
+ * `message.complete` the reply). Bots talking to each other are not talking to the user.
+ */
+export function noteTurnEvent(slug: string, event: { type?: string; payload?: Record<string, unknown> }) {
+  const text = typeof event.payload?.text === 'string' ? event.payload.text : undefined
+  if (event.type === 'message.start') turns.set(slug, { fromBot: text !== undefined && parseIncomingAgentMessage(text, slug) !== null, silent: false })
+  // No text in the frame: the reply is unknown, never taken for silence.
+  else if (event.type === 'message.complete') turns.set(slug, { fromBot: turns.get(slug)?.fromBot ?? false, silent: text !== undefined && (!text.trim() || isSilentMessage(text)) })
+}
+
+/**
+ * Whether the bot's finished turn was for the user: not started by another bot's message, and not ended in
+ * silence. A turn whose start was not seen counts as the user's, as before.
+ */
+export function turnForUser(slug: string) {
+  const turn = turns.get(slug)
+  return !turn || (!turn.fromBot && !turn.silent)
+}
+
+/** Full reset (tests). */
+export function resetTurns() {
+  turns.clear()
 }
 
 /** The bot's own chat open in a focused window: everything is already in view. */

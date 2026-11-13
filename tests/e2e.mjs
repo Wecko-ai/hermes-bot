@@ -1454,6 +1454,17 @@ try {
   // A bot whose chat is not open: one macOS notification, its name as title.
   const novaDone = (await notificationsSent()).slice(notificationsBefore)
   if (novaDone.length !== 1 || novaDone[0].tag !== 'hermesbot-nova' || novaDone[0].body !== 'Travail de fond terminé.') throw new Error(`Notification de fin de tour : seulement le message du bot, ${JSON.stringify(novaDone)}`)
+  // A turn started by another bot's message is between bots: done, but no notification. Same for a silent turn.
+  for (const [turn, start, reply] of [['turn-entre-bots', 'Message from 🤖 Orion (@orion): relis le plan', 'Plan relu, OK.'], ['turn-silence', 'Fais le point.', '[SILENT]']]) {
+    const sentBefore = (await notificationsSent()).length
+    for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: turn, text: start }))
+    await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 3_000 })
+    for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: turn, text: reply, status: 'complete' }))
+    await page.locator('[data-bot=nova] .bot-row-status.is-done, [data-bot=nova] .bot-row-status.is-idle').first().waitFor({ timeout: 3_000 })
+    await delay(300)
+    const sent = (await notificationsSent()).slice(sentBefore)
+    if (sent.length) throw new Error(`Pas de notification pour ${turn} : ${JSON.stringify(sent)}`)
+  }
 
   // Work summary: visible on the row of a background bot, with no unread before the turn ends.
   const novaBadge = page.locator('[data-bot=nova] .unread-badge')

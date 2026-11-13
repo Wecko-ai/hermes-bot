@@ -42,7 +42,7 @@ import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
@@ -251,7 +251,10 @@ export default function App() {
         clearSessionPrompts(event.session_id)
       }
       const workOwner = isCurrent && current ? current.profile : event.session_id ? useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)?.slug : undefined
-      if (workOwner) applyWork(workOwner, event)
+      if (workOwner) {
+        applyWork(workOwner, event)
+        noteTurnEvent(workOwner, event)
+      }
       // “Orion messaged Iris”: a live `message_agent` call, or a turn started by another bot’s message.
       const agentNotes = workOwner ? agentChatMessages(
         agentMessagesFromEvent(event.type, payload, workOwner),
@@ -419,6 +422,8 @@ export default function App() {
       if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
       const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
       if (!bot || bot.hidden) return
+      // A turn between bots, or one that ends in silence, is not for the user. Questions and approvals still are.
+      if (kind === 'done' && !turnForUser(slug)) return
       const last = kind === 'done' ? turnReply(getCached(slug)?.messages || []) : undefined
       const excerpt = notificationExcerpt(last)
       // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
@@ -627,7 +632,10 @@ export default function App() {
         if (getCached(bot.slug)?.chat.socketGeneration === client.generation) continue
         loadSessionEvents(client, bot.slug, bot.sessionId, getWorkSeq(bot.slug)).then(({ events, latestSeq }) => {
           setWorkSeq(bot.slug, latestSeq)
-          events.forEach((event) => applyWork(bot.slug, event))
+          events.forEach((event) => {
+            applyWork(bot.slug, event)
+            noteTurnEvent(bot.slug, event)
+          })
         }).catch(() => { /* session outside this process: the row stays “Working” */ })
       }
     }, 20_000)

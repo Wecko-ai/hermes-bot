@@ -139,7 +139,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
 - **Routines.** The scheduled jobs of each bot, read-only.
 - **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
-- **Notifications.** A macOS notification when a bot finishes or asks you something, unless you are looking at its chat. macOS only delivers them from a signed build: see "Desktop app" below.
+- **Notifications.** A macOS notification when a bot finishes or asks you something, unless you are looking at its chat. A turn between bots (started by another bot's message) or one that ends in silence does not notify. macOS only delivers them from a signed build: see "Desktop app" below.
 - **Settings.** Theme, text size, language, send key, notifications, hidden bots, which models the picker offers, and a short guide to the chat. They stay on your Mac. Managing a bot (create, rename, move, hide, delete) is the exception: it writes the bot's card in its Hermes profile, as Hermes Desktop does, so every app that reads the card agrees.
 
 ## Connect it to Hermes
