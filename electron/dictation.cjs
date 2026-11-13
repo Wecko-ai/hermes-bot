@@ -21,6 +21,8 @@ const AUTHORIZE_TIMEOUT_MS = 3 * 60_000
 const PROBE_TIMEOUT_MS = 10_000
 /** After a cancel, the helper gets this long to leave on its own before it is killed. */
 const CANCEL_GRACE_MS = 500
+/** After a stop, the helper gets this long to say its microphone is closed before it is killed. */
+const STOP_GRACE_MS = 3_000
 // The helper needs nothing from the app's environment, and gets none of it.
 const HELPER_ENV = { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' }
 
@@ -118,19 +120,25 @@ function lineReader(onLine) {
  * The dictation engine of the main process.
  * - helperPath: the helper binary; absent → every `prepare` answers "unavailable".
  * - send(event): delivers an event to the page.
- * - onMicrophone(open): called when the microphone opens and when it closes, whatever the way (a sign the page
- *   cannot hide: main.cjs puts a mark on the Dock icon).
+ * - onMicrophone(open): called when the helper says its microphone is open, and when it says it is closed, exits or
+ *   is killed (a sign the page cannot hide: main.cjs puts a mark on the Dock icon). Requests never move it.
  */
 function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl = spawn, exists = (file) => fs.existsSync(file) }) {
   let session = null
   let preparing = null
   let sessionCount = 0
-  let microphone = false
-  const setMicrophone = (open) => {
-    if (open === microphone) return
-    microphone = open
+  // Sessions whose helper said the microphone is open and has not said it closed (nor exited, nor was killed).
+  // The sign follows the helper, never a request: a stop asked is not a microphone closed.
+  const openMicrophones = new Set()
+  let signShown = false
+  const updateSign = () => {
+    const open = openMicrophones.size > 0
+    if (open === signShown) return
+    signShown = open
     onMicrophone(open)
   }
+  const microphoneOpened = (current) => { openMicrophones.add(current); updateSign() }
+  const microphoneClosed = (current) => { openMicrophones.delete(current); updateSign() }
 
   const available = () => Boolean(helperPath) && exists(helperPath)
 
@@ -169,12 +177,16 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
   }
 
   function end(current) {
-    if (session === current) {
-      session = null
-      setMicrophone(false)
-    }
+    if (session === current) session = null
     clearTimeout(current.startTimer)
     clearTimeout(current.limitTimer)
+    clearTimeout(current.stopTimer)
+  }
+
+  /** Kills the helper at once; its microphone, if open, is closed with it. */
+  function kill(current) {
+    current.child.kill('SIGKILL')
+    microphoneClosed(current)
   }
 
   /** Starts a session. Resolves true once the microphone runs, false otherwise (an error event says why). */
@@ -191,9 +203,9 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
         resolve(false)
         return
       }
-      const current = { id: ++sessionCount, child, cancelled: false, finished: false, started: false }
+      const current = { id: ++sessionCount, child, cancelled: false, stopRequested: false, finished: false, started: false }
       session = current
-      const settle = (value) => {
+      current.settle = (value) => {
         if (current.settled) return
         current.settled = true
         resolve(value)
@@ -203,51 +215,81 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
         if (event.type === 'listening') {
           current.started = true
           clearTimeout(current.startTimer)
-          if (session === current && !current.stopRequested) setMicrophone(true)
-          settle(true)
+          current.settle(true)
           return
         }
-        if (event.type === 'audioEnd' && session === current) setMicrophone(false)
         if (event.type === 'done' || event.type === 'error') {
           current.finished = true
           end(current)
-          settle(false)
+          current.settle(false)
         }
         send(event)
+      }
+      // What the helper says about its microphone, whether or not the page still wants the session.
+      const track = (event) => {
+        if (event.type === 'listening') {
+          // Opened after a stop or a cancel was asked: this session must not record. Gone at once.
+          if (current.cancelled || current.stopRequested) {
+            kill(current)
+            return false
+          }
+          microphoneOpened(current)
+        } else if (event.type === 'audioEnd' || event.type === 'done' || event.type === 'error') {
+          microphoneClosed(current)
+        }
+        return true
       }
       current.startTimer = setTimeout(() => {
         if (current.started) return
         // No microphone after 3 s: this session did not start, and nothing more comes from it.
         current.cancelled = true
         end(current)
-        settle(false)
-        child.kill('SIGKILL')
+        current.settle(false)
+        kill(current)
       }, START_TIMEOUT_MS)
       current.limitTimer = setTimeout(() => {
         deliver({ type: 'error', code: 'error_speech_timeout' })
-        child.kill('SIGKILL')
+        kill(current)
       }, listenFor + SESSION_MARGIN_MS)
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', lineReader((line) => {
         const event = parseEvent(line)
-        if (event) deliver(event)
+        if (event && track(event)) deliver(event)
       }))
       // A closed pipe after the helper left is not an error of the session.
       child.stdin.on('error', () => {})
-      child.on('error', () => deliver({ type: 'error', code: 'error_listen_failed' }))
-      // Gone without a last word (crash, killed from outside): the page must not wait for one.
-      child.on('close', () => deliver({ type: 'error', code: 'error_listen_failed' }))
+      child.on('error', () => {
+        microphoneClosed(current)
+        deliver({ type: 'error', code: 'error_listen_failed' })
+      })
+      // Gone without a last word (crash, killed): its microphone is closed, and the page must not wait.
+      child.on('close', () => {
+        microphoneClosed(current)
+        deliver({ type: 'error', code: 'error_listen_failed' })
+      })
     })
   }
 
-  /** Closes the microphone; the final result follows as events. */
+  /**
+   * Closes the microphone; the final result follows as events. Before the microphone runs, there is nothing to
+   * close: the session is abandoned instead, so that it never opens it later.
+   */
   function stop() {
     const current = session
     if (!current || current.cancelled) return
-    // The helper closes the microphone on this line; the sign goes off with the request.
     current.stopRequested = true
-    setMicrophone(false)
+    if (!current.started) {
+      current.cancelled = true
+      end(current)
+      current.settle(false)
+      kill(current)
+      return
+    }
     if (current.child.stdin.writable) current.child.stdin.write('stop\n')
+    // A helper that does not confirm the end of audio soon is not trusted with the microphone.
+    current.stopTimer = setTimeout(() => {
+      if (openMicrophones.has(current)) kill(current)
+    }, STOP_GRACE_MS)
   }
 
   /** Abandons the session: nothing more reaches the page, and the helper is gone shortly after. */
@@ -256,9 +298,10 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
     if (!current) return
     current.cancelled = true
     end(current)
+    current.settle(false)
     if (current.child.stdin.writable) current.child.stdin.write('cancel\n')
-    const kill = setTimeout(() => current.child.kill('SIGKILL'), CANCEL_GRACE_MS)
-    current.child.once('close', () => clearTimeout(kill))
+    const timer = setTimeout(() => kill(current), CANCEL_GRACE_MS)
+    current.child.once('close', () => clearTimeout(timer))
   }
 
   return { prepare, start, stop, cancel, dispose: cancel, get active() { return Boolean(session) } }

@@ -230,7 +230,7 @@ describe('dictation engine', () => {
     children[1].say({ type: 'words', text: 'new', final: false })
     expect(events).toEqual([{ type: 'words', text: 'new', final: false }])
   })
-  it('the microphone sign: on while listening, off at the end of audio, at done, error, stop, cancel and exit', async () => {
+  it('the microphone sign follows the helper: on at listening, off at its end of audio, done, error or exit', async () => {
     const run = async (end) => {
       const setup = engine()
       const started = setup.dictation.start({ localeId: 'fr-FR' })
@@ -243,18 +243,76 @@ describe('dictation engine', () => {
     expect(await run(({ children }) => children[0].say({ type: 'audioEnd' }))).toEqual([true, false])
     expect(await run(({ children }) => children[0].say({ type: 'error', code: 'error_network' }))).toEqual([true, false])
     expect(await run(({ children }) => { children[0].say({ type: 'words', text: 'a', final: true }); children[0].say({ type: 'done' }) })).toEqual([true, false])
-    expect(await run(({ dictation }) => dictation.stop())).toEqual([true, false])
-    expect(await run(({ dictation }) => dictation.cancel())).toEqual([true, false])
     expect(await run(({ children }) => children[0].exit(9))).toEqual([true, false])
   })
 
-  it('a stop asked before the microphone runs never shows the sign', async () => {
+  it('a stop request does not turn the sign off: the helper\'s end of audio does', async () => {
     const { dictation, children, microphone } = engine()
     const started = dictation.start({ localeId: 'fr-FR' })
-    dictation.stop()
     children[0].say({ type: 'listening' })
     await started
+    dictation.stop()
+    expect(children[0].stdin.written).toEqual(['stop\n'])
+    expect(microphone).toEqual([true])
+    children[0].say({ type: 'audioEnd' })
+    expect(microphone).toEqual([true, false])
+  })
+
+  it('a helper that never confirms the stop is killed, and the sign goes off with it', async () => {
+    const { dictation, children, microphone } = engine()
+    const started = dictation.start({ localeId: 'fr-FR' })
+    children[0].say({ type: 'listening' })
+    await started
+    dictation.stop()
+    await vi.advanceTimersByTimeAsync(2_999)
+    expect(children[0].killed).toEqual([])
+    expect(microphone).toEqual([true])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(children[0].killed).toEqual(['SIGKILL'])
+    expect(microphone).toEqual([true, false])
+  })
+
+  it('a cancel turns the sign off when the helper ends or is killed, not before', async () => {
+    const { dictation, children, microphone } = engine()
+    const started = dictation.start({ localeId: 'fr-FR' })
+    const child = children[0]
+    child.say({ type: 'listening' })
+    await started
+    child.kill = (signal) => { child.killed.push(signal) }
+    dictation.cancel()
+    expect(microphone).toEqual([true])
+    await vi.advanceTimersByTimeAsync(500)
+    expect(child.killed).toEqual(['SIGKILL'])
+    expect(microphone).toEqual([true, false])
+  })
+
+  it('stop before the microphone runs: the helper is killed, start resolves false, no sign ever', async () => {
+    const { dictation, children, microphone, events } = engine()
+    const started = dictation.start({ localeId: 'fr-FR' })
+    const child = children[0]
+    child.kill = (signal) => { child.killed.push(signal) }
+    dictation.stop()
+    expect(child.killed).toEqual(['SIGKILL'])
+    expect(await started).toBe(false)
+    expect(dictation.active).toBe(false)
+    // A late "listening" (the line was already on its way): killed again, still no sign, nothing to the page.
+    child.say({ type: 'listening' })
+    expect(child.killed).toEqual(['SIGKILL', 'SIGKILL'])
     expect(microphone).toEqual([])
+    expect(events).toEqual([])
+  })
+
+  it('cancel before the microphone runs: a late "listening" kills the helper at once', async () => {
+    const { dictation, children, microphone, events } = engine()
+    const started = dictation.start({ localeId: 'fr-FR' })
+    const child = children[0]
+    child.kill = (signal) => { child.killed.push(signal) }
+    dictation.cancel()
+    expect(await started).toBe(false)
+    child.say({ type: 'listening' })
+    expect(child.killed).toEqual(['SIGKILL'])
+    expect(microphone).toEqual([])
+    expect(events).toEqual([])
   })
 
   it('caps the session at what the caller allows', async () => {

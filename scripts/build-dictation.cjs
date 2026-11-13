@@ -11,6 +11,7 @@ const DIRECTORY = path.join(__dirname, '..', 'native', 'dictation')
 const SOURCES = [
   path.join(DIRECTORY, 'Sources', 'hermesbot-dictation', 'main.swift'),
   path.join(DIRECTORY, 'Sources', 'DictationCore', 'TranscriptMerger.swift'),
+  path.join(DIRECTORY, 'Sources', 'DictationCore', 'SessionGate.swift'),
 ]
 const INFO_PLIST = path.join(DIRECTORY, 'Info.plist')
 const OUTPUT = path.join(DIRECTORY, '.build', 'hermesbot-dictation')

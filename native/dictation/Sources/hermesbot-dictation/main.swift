@@ -166,7 +166,8 @@ final class Session {
     var lastChangeAt = Date()
     var lastLevelAt = Date.distantPast
     var audioEndedAt: Date?
-    var finished = false
+    /// Opens the microphone once at most, never after a stop or a cancel came first.
+    var gate = SessionGate()
     var timer: DispatchSourceTimer?
 
     /// After the microphone closes, how long the final result may take before the last partial stands for it.
@@ -178,6 +179,8 @@ final class Session {
     }
 
     func start() {
+        // A stop or a cancel read before this ran has already ended the session: the microphone stays closed.
+        guard gate.open() else { return }
         if let path = options.file {
             startFile(URL(fileURLWithPath: path))
         } else {
@@ -237,7 +240,7 @@ final class Session {
     }
 
     func report(level value: Double) {
-        guard !finished, audioEndedAt == nil else { return }
+        guard gate.phase == .listening else { return }
         let now = Date()
         // About 15 per second: enough for a wave, little for the pipe.
         guard now.timeIntervalSince(lastLevelAt) >= 0.066 else { return }
@@ -246,7 +249,7 @@ final class Session {
     }
 
     func handle(result: SFSpeechRecognitionResult?, error: Error?) {
-        guard !finished else { return }
+        guard !gate.isOver else { return }
         if let result {
             let now = Date()
             let raw = result.bestTranscription.formattedString
@@ -276,20 +279,28 @@ final class Session {
         }
     }
 
-    /// Closes the microphone (stop asked, silence, time limit). The final result follows.
+    /// Closes the microphone (stop asked, silence, time limit). The final result follows. Before the start,
+    /// ends the session without ever opening the microphone: nothing was heard.
     func endAudio() {
-        guard !finished, audioEndedAt == nil else { return }
-        audioEndedAt = Date()
-        if options.file == nil {
-            engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
-            (request as? SFSpeechAudioBufferRecognitionRequest)?.endAudio()
+        switch gate.stop() {
+        case .nothing:
+            return
+        case .endBeforeStart:
+            emit(["type": "error", "code": "error_no_match"])
+            exit(1)
+        case .closeMicrophone:
+            audioEndedAt = Date()
+            if options.file == nil {
+                engine.stop()
+                engine.inputNode.removeTap(onBus: 0)
+                (request as? SFSpeechAudioBufferRecognitionRequest)?.endAudio()
+            }
+            emit(["type": "audioEnd"])
         }
-        emit(["type": "audioEnd"])
     }
 
     func tick() {
-        guard !finished else { return }
+        guard !gate.isOver else { return }
         let now = Date()
         if let ended = audioEndedAt {
             // The final result is late: the last partial stands for it.
@@ -306,18 +317,17 @@ final class Session {
     }
 
     func finish() {
-        guard !finished else { return }
+        guard !gate.isOver else { return }
         if audioEndedAt == nil { endAudio() }
         if transcript.isEmpty { return fail("error_no_match") }
-        finished = true
+        guard gate.end() else { return }
         emit(["type": "words", "text": transcript, "final": true])
         emit(["type": "done"])
         exit(0)
     }
 
     func fail(_ code: String) {
-        guard !finished else { return }
-        finished = true
+        guard gate.end() else { return }
         task?.cancel()
         if engine.isRunning {
             engine.stop()
@@ -329,8 +339,7 @@ final class Session {
 
     /// Abandon: no final result. Still a last line, so the reader knows the session is over.
     func cancel() {
-        guard !finished else { return }
-        finished = true
+        guard gate.end() else { return }
         task?.cancel()
         if engine.isRunning {
             engine.stop()
