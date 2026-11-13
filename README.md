@@ -48,7 +48,45 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 
 ## One window
 
-![HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot](docs/screenshot.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-overview-dark.png" />
+  <img src="docs/readme/ui-overview-light.png" alt="HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot" />
+</picture>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-palette-dark.png" />
+        <img src="docs/readme/ui-palette-light.png" alt="The command palette: go to any bot by typing its name" />
+      </picture>
+      <br /><b>Go anywhere.</b> ⌘K opens any bot by its name.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-activity-dark.png" />
+        <img src="docs/readme/ui-activity-light.png" alt="The roster sorted by activity, with what each bot last did" />
+      </picture>
+      <br /><b>Sort by activity.</b> The bots that just moved come first, with one line on what they did.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-bot-menu-dark.png" />
+        <img src="docs/readme/ui-bot-menu-light.png" alt="The menu of a bot: pin, move to a group, mark as read, rename, hide" />
+      </picture>
+      <br /><b>Arrange your team.</b> Pin a bot, move it to a group, rename it or hide it.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-settings-dark.png" />
+        <img src="docs/readme/ui-settings-light.png" alt="Settings, General tab: language, theme, text size, notifications" />
+      </picture>
+      <br /><b>Light or dark, English or French.</b> Text size, animations and notifications in Settings.
+    </td>
+  </tr>
+</table>
 
 <table>
   <tr>
