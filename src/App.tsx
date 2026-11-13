@@ -401,7 +401,8 @@ export default function App() {
       if (!bot || bot.hidden) return
       const last = kind === 'done' ? [...(getCached(slug)?.messages || [])].reverse().find((message) => message.role === 'assistant' && !message.technical)?.content : undefined
       const excerpt = notificationExcerpt(last)
-      const body = excerpt ? `${i18n.t(`notifications.${kind}`)} · ${excerpt}` : i18n.t(`notifications.${kind}`)
+      // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
+      const body = excerpt || i18n.t(`notifications.${kind}`)
       const notification = new Notification(bot.name, { body, tag: `hermesbot-${slug}` })
       notification.onclick = () => {
         void window.hermesBot?.focusWindow?.()

@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- A notification for a finished turn shows only the bot's message under its name, without "Is done".
 - Choosing a bot gives the keyboard to its message field, even while its conversation loads: typing right away writes to it.
 - Larger, easier to read controls: the composer bar (modes, sending choice, context, model) and the details panel (tabs on one line, Activity entries as cards whose time never wraps, the bot's steps in plain text).
 - One message per turn: while a bot works, the thread shows a single line, its live avatar and a caption swept by a sheen (its current step, tool or task), instead of a bubble for every step. The steps a bot writes before its tool calls fold out of the thread into the Activity tab; a step that carries a file or a mail card stays. The reply appears whole when the turn ends. The local chat still streams its replies.

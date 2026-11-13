@@ -1049,7 +1049,7 @@ try {
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   // A bot whose chat is not open: one macOS notification, its name as title.
   const novaDone = (await notificationsSent()).slice(notificationsBefore)
-  if (novaDone.length !== 1 || novaDone[0].tag !== 'hermesbot-nova' || !novaDone[0].body.startsWith('A terminé')) throw new Error(`Notification de fin de tour : ${JSON.stringify(novaDone)}`)
+  if (novaDone.length !== 1 || novaDone[0].tag !== 'hermesbot-nova' || novaDone[0].body !== 'Travail de fond terminé.') throw new Error(`Notification de fin de tour : seulement le message du bot, ${JSON.stringify(novaDone)}`)
 
   // Work summary: visible on the row of a background bot, with no unread before the turn ends.
   const novaBadge = page.locator('[data-bot=nova] .unread-badge')
