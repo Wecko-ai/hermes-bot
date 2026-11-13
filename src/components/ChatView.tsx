@@ -182,7 +182,7 @@ export function ChatView(props: ChatViewProps) {
         onOpenBot={props.onOpenBot}
       />
       {props.modelPicker}
-      {!props.hidden && <SubagentsPanel key={bot.slug} entries={props.subagents} processes={props.processes} onLoadTail={props.onLoadSubagentTail} onOpenHistory={props.onOpenSubagentHistory} />}
+      {!props.hidden && <SubagentsPanel key={bot.slug} entries={props.subagents} processes={props.processes} onLoadTail={props.onLoadSubagentTail} onOpenHistory={props.onOpenSubagentHistory} onOpenDocument={(media) => props.onOpenDocument(bot.slug, media)} />}
       {props.prompts[0] && !props.hidden && (
         <div className="prompt-dock">
           <PromptCard key={props.prompts[0].promptId} prompt={props.prompts[0]} botName={bot.name} onAnswer={props.onAnswerPrompt} />

@@ -199,6 +199,12 @@
     "showOutputTail": "Voir les derniers résultats d’outils",
     "dispatched_one": "Délègue à un sous-agent : {{goals}}",
     "dispatched_other": "Délègue à {{count}} sous-agents : {{goals}}",
+    "launched": "Lance {{tool}} : {{what}}",
+    "exitCode": "code de sortie {{code}}",
+    "openPrompt": "Ouvrir le prompt",
+    "openLog": "Ouvrir le journal",
+    "output": "Sortie",
+    "promptUnknown": "Prompt non lisible dans la commande.",
     "status": {
       "queued": "En attente",
       "running": "En cours",

@@ -1,3 +1,5 @@
+import type { AgentRun } from './lib/agent-process'
+
 export interface ModelOverride {
   model: string
   provider: string
@@ -119,6 +121,8 @@ export interface ChatMessage {
   images?: string[]
   /** `delegate_task` call: the prompt of each child the bot started (Subagents tab). */
   delegation?: DelegationTask[]
+  /** Terminal call that started a coding agent headless (`claude -p`…), never the command itself. */
+  agentRun?: AgentRun & { background: boolean }
 }
 
 /** One child asked for by `delegate_task`: its goal and the background the bot gave it. */

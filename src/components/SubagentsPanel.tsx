@@ -1,10 +1,12 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, History, Network } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, History, Network, ScrollText } from 'lucide-react'
 import type { SubagentTail } from '../lib/background'
 import { formatDuration, subagentDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, subagentTitle, type SubagentEntry } from '../lib/subagent-history'
 import { toolLabel } from '../lib/work-summary'
+import { runLabel } from '../lib/agent-process'
+import { openableDocument, type MediaRef } from '../lib/media'
 
 /** What is kept of a transcript on screen: its end, where the child is now. */
 const TAIL_CHARS = 4000
@@ -18,18 +20,40 @@ interface SubagentsPanelProps {
   onLoadTail: (subagentId: string) => Promise<SubagentTail>
   /** Opens the Subagents tab of the details panel. */
   onOpenHistory?: () => void
+  /** Opens a file in a tab beside the chat (a coding agent's prompt or log). */
+  onOpenDocument?: (media: MediaRef) => void
 }
 
 export type TailState = { state: 'loading' } | { state: 'failed' } | ({ state: 'ready' } & SubagentTail)
 
 /** Running, just finished, or opened by the user: a child being read never leaves under the pointer. */
 const visibleInChat = (entry: SubagentEntry, now: number, opened: ReadonlySet<string>) =>
-  isEntryActive(entry) || opened.has(entry.id) || (entry.live !== undefined && entry.finishedAt !== undefined && now - entry.finishedAt < FINISHED_LINGER_MS)
+  isEntryActive(entry) || opened.has(entry.id) || ((entry.live !== undefined || entry.process !== undefined) && entry.finishedAt !== undefined && now - entry.finishedAt < FINISHED_LINGER_MS)
+
+const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
+const lastLine = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
+
+/** A child's title: the first sentence of its prompt; for a coding agent without one, its tool and prompt file. */
+export function entryTitle(t: (key: string) => string, entry: SubagentEntry) {
+  if (entry.goal) return subagentTitle(entry.goal)
+  return entry.run ? runLabel(entry.run) : t('subagents.noGoal')
+}
+
+/** Tool and folder of a coding agent, its exit code when it failed. */
+export function runMeta(t: (key: string, options?: Record<string, unknown>) => string, entry: SubagentEntry) {
+  if (!entry.run) return []
+  return [
+    entry.goal ? entry.run.tool : '',
+    entry.run.cwd ? basename(entry.run.cwd) : '',
+    entry.exitCode !== undefined && entry.exitCode !== 0 ? t('subagents.exitCode', { code: entry.exitCode }) : '',
+  ].filter(Boolean)
+}
 
 /** Elapsed time of a running child, or the duration of a finished one. */
 export function entryDuration(entry: SubagentEntry, now: number) {
   if (entry.durationSeconds !== undefined) return entry.durationSeconds
   if (entry.live) return subagentDuration(entry.live, now)
+  if (entry.process && isEntryActive(entry) && entry.startedAt !== undefined) return Math.max(0, (now - entry.startedAt) / 1000)
   return undefined
 }
 
@@ -38,7 +62,7 @@ export function entryDuration(entry: SubagentEntry, now: number) {
  * A child leaves the chat a few seconds after it ends; the Subagents tab keeps them all. Read only: nothing
  * here steers or stops a child.
  */
-export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory }: SubagentsPanelProps) {
+export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory, onOpenDocument }: SubagentsPanelProps) {
   const { t } = useTranslation()
   const [now, setNow] = useState(() => Date.now())
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
@@ -92,7 +116,7 @@ export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory }
         </div>
         {!collapsed && (
           <ul className="subagents-list">
-            {shown.map((entry) => <SubagentItem key={entry.id} entry={entry} now={now} open={opened.has(entry.id)} onOpen={(open) => setOpen(entry.id, open)} onLoadTail={onLoadTail} />)}
+            {shown.map((entry) => <SubagentItem key={entry.id} entry={entry} now={now} open={opened.has(entry.id)} onOpen={(open) => setOpen(entry.id, open)} onLoadTail={onLoadTail} onOpenDocument={onOpenDocument} />)}
           </ul>
         )}
       </section>
@@ -100,7 +124,7 @@ export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory }
   )
 }
 
-function SubagentItem({ entry, now, open, onOpen, onLoadTail }: { entry: SubagentEntry; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail'] }) {
+function SubagentItem({ entry, now, open, onOpen, onLoadTail, onOpenDocument }: { entry: SubagentEntry; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail']; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   const [tail, setTail] = useState<TailState | null>(null)
   const duration = entryDuration(entry, now)
@@ -108,6 +132,7 @@ function SubagentItem({ entry, now, open, onOpen, onLoadTail }: { entry: Subagen
   const active = isEntryActive(entry)
   const meta = [
     duration !== undefined ? formatDuration(duration) : '',
+    ...runMeta(t, entry),
     live?.toolCount ? t('subagents.tools', { count: live.toolCount }) : '',
     entry.taskCount > 1 ? t('subagents.task', { index: entry.taskIndex + 1, count: entry.taskCount }) : '',
   ].filter(Boolean)
@@ -125,14 +150,16 @@ function SubagentItem({ entry, now, open, onOpen, onLoadTail }: { entry: Subagen
           <span className={`subagent-state is-${entry.status}`}><span className="status-dot" aria-hidden="true" />{statusText(t, entry)}</span>
           {meta.length > 0 && <span className="subagent-meta">{meta.join(' · ')}</span>}
         </span>
-        <span className="subagent-goal">{entry.goal ? subagentTitle(entry.goal) : t('subagents.noGoal')}</span>
+        <span className="subagent-goal">{entryTitle(t, entry)}</span>
         {!open && promptPreview(entry.goal) && <span className="subagent-prompt-preview">{promptPreview(entry.goal)}</span>}
         {active && live?.lastTool && <span className="subagent-now">{t('subagents.lastTool', { tool: toolLabel(live.lastTool) })}</span>}
+        {active && entry.process?.outputTail && <span className="subagent-now">{lastLine(entry.process.outputTail)}</span>}
         {!active && entry.result && <span className="subagent-result-preview">{plainPreview(entry.result, 180)}</span>}
       </button>
       {open && (
         <div className="subagent-details">
-          <PromptView entry={entry} />
+          <PromptView entry={entry} onOpenDocument={onOpenDocument} />
+          <ProcessOutput entry={entry} onOpenDocument={onOpenDocument} />
           {tail && <SubagentTailView tail={tail} entry={entry} />}
         </div>
       )}
@@ -144,14 +171,43 @@ export function statusText(t: (key: string) => string, entry: SubagentEntry) {
   return entry.truncated && entry.status === 'completed' ? t('subagents.incomplete') : t(`subagents.status.${entry.status}`)
 }
 
+/** A file of a coding agent, opened in a tab beside the chat when the app can show it. */
+function FileButton({ path, label, icon, onOpenDocument }: { path: string; label: string; icon: 'prompt' | 'log'; onOpenDocument?: (media: MediaRef) => void }) {
+  const name = basename(path)
+  if (!onOpenDocument || !openableDocument(path)) return <p className="subagent-file" title={path}>{label} : <code>{name}</code></p>
+  return (
+    <button className="subagent-file-button" title={path} onClick={() => onOpenDocument({ path, name, kind: 'document' })}>
+      {icon === 'prompt' ? <FileText size={13} /> : <ScrollText size={13} />}<span>{label}</span><code>{name}</code>
+    </button>
+  )
+}
+
 /** The whole prompt: the goal, then the background the bot gave (known once the history has the call). */
-export function PromptView({ entry }: { entry: SubagentEntry }) {
+export function PromptView({ entry, onOpenDocument }: { entry: SubagentEntry; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
+  const promptFile = entry.run?.promptFile
   return (
     <div className="subagent-prompt">
       <h4>{t('subagents.prompt')}</h4>
-      <p>{entry.goal || t('subagents.noGoal')}</p>
+      {entry.goal && <p>{entry.goal}</p>}
+      {promptFile && <FileButton path={promptFile} label={t('subagents.openPrompt')} icon="prompt" onOpenDocument={onOpenDocument} />}
+      {!entry.goal && !promptFile && <p>{t(entry.run ? 'subagents.promptUnknown' : 'subagents.noGoal')}</p>}
       {entry.context && <><h4>{t('subagents.context')}</h4><p>{entry.context}</p></>}
+    </div>
+  )
+}
+
+/** A coding agent's output: the end of what it prints, live, and the file it writes to. */
+export function ProcessOutput({ entry, onOpenDocument }: { entry: SubagentEntry; onOpenDocument?: (media: MediaRef) => void }) {
+  const { t } = useTranslation()
+  if (!entry.run) return null
+  const tail = isEntryActive(entry) ? entry.process?.outputTail : undefined
+  if (!tail && !entry.run.logFile) return null
+  return (
+    <div className="subagent-tail">
+      <h4>{t('subagents.output')}</h4>
+      {tail && <pre>{tail.slice(-TAIL_CHARS)}</pre>}
+      {entry.run.logFile && <FileButton path={entry.run.logFile} label={t('subagents.openLog')} icon="log" onOpenDocument={onOpenDocument} />}
     </div>
   )
 }

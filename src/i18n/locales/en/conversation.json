@@ -199,6 +199,12 @@
     "showOutputTail": "Show the last tool results",
     "dispatched_one": "Delegates to a subagent: {{goals}}",
     "dispatched_other": "Delegates to {{count}} subagents: {{goals}}",
+    "launched": "Starts {{tool}}: {{what}}",
+    "exitCode": "exit code {{code}}",
+    "openPrompt": "Open the prompt",
+    "openLog": "Open the log",
+    "output": "Output",
+    "promptUnknown": "The command does not show the prompt.",
     "status": {
       "queued": "Queued",
       "running": "Running",

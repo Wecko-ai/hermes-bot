@@ -421,10 +421,12 @@ function mediaRequest(url) {
 }
 
 // Documents opened in a tab next to the chat. Must stay identical to the formats in `src/lib/media.ts`.
+// Plain text (`txt`, `log`): a coding agent's prompt or log, opened from the Subagents panel, shown as text.
 const DOCUMENT_TYPES = {
   pdf: 'application/pdf',
   html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
   md: 'text/markdown; charset=utf-8', markdown: 'text/markdown; charset=utf-8',
+  txt: 'text/plain; charset=utf-8', log: 'text/plain; charset=utf-8',
 }
 const DOCUMENT_TEXT_MAX_BYTES = 16 * 1024 * 1024
 // A page written by a bot may come from hostile content: opaque origin, local scripts only,
@@ -433,6 +435,7 @@ const DOCUMENT_POLICIES = {
   pdf: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; frame-ancestors 'self'",
   html: "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
   markdown: "default-src 'none'; sandbox; frame-ancestors 'none'",
+  text: "default-src 'none'; sandbox; frame-ancestors 'none'",
 }
 
 function documentRequest(url) {
@@ -440,7 +443,7 @@ function documentRequest(url) {
   if (target.error) return target
   const contentType = DOCUMENT_TYPES[target.extension]
   if (!contentType) return { status: 415, error: 'unsupported_media' }
-  const format = target.extension === 'pdf' ? 'pdf' : contentType.startsWith('text/html') ? 'html' : 'markdown'
+  const format = target.extension === 'pdf' ? 'pdf' : contentType.startsWith('text/html') ? 'html' : contentType.startsWith('text/plain') ? 'text' : 'markdown'
   return { profile: target.profile, file: target.file, format, contentType }
 }
 

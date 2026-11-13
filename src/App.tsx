@@ -8,6 +8,7 @@ import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
 import { subagentHistory } from './lib/subagent-history'
+import type { AgentProcess } from './lib/agent-process'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
@@ -47,6 +48,7 @@ import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificatio
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const MAX_OPEN_DOCUMENTS = 8
 const NO_SUBAGENTS: SubagentRow[] = []
+const NO_AGENT_PROCESSES: AgentProcess[] = []
 /** Reads the turns of every bot. Hermes Desktop re-reads its roster every 5 s. */
 const LIVE_STATUS_MS = 6_000
 /** Subagents and background processes, every profile. They outlast a turn by minutes: no need to read them as often. */
@@ -76,7 +78,7 @@ const {
   showProfileFromList, enterProfile, applySyncedChat,
 } = useChatStore.getState()
 const { addPrompt, settlePrompt, removePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest, removeServerRequest, setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
-const { applyEvent: applySubagentEvent, applyList: applySubagentList, setProcesses: setChatProcesses } = useSubagentsStore.getState()
+const { applyEvent: applySubagentEvent, applyList: applySubagentList, setProcesses: setChatProcesses, setAgentProcesses } = useSubagentsStore.getState()
 
 const systemPrefersDark = () => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
 
@@ -133,6 +135,7 @@ export default function App() {
   const serverRequests = useRequestsStore((state) => state.serverRequests)
   const browserVaultRequests = useRequestsStore((state) => state.browserVaultRequests)
   const subagentRows = useSubagentsStore((state) => state.rows)
+  const agentProcessRows = useSubagentsStore((state) => state.agentProcesses)
   const chatProcesses = useSubagentsStore((state) => state.processes)
   const [detailsOpen, setDetailsOpen] = useState(false)
   // A tab the details panel must show when it opens or is already open (the Subagents history).
@@ -589,9 +592,10 @@ export default function App() {
     const refresh = () => {
       if (busy || document.hidden) return
       busy = true
-      loadChatBackground(client, chat).then(({ processes, subagents }) => {
+      loadChatBackground(client, chat).then(({ processes, agentProcesses, subagents }) => {
         if (stopped) return
         if (processes !== undefined) setChatProcesses(openSession, processes)
+        if (agentProcesses) setAgentProcesses(openSession, agentProcesses)
         if (subagents) applySubagentList(openSession, subagents)
       }).finally(() => { busy = false })
     }
@@ -1232,7 +1236,8 @@ export default function App() {
   const openChatSession = activeChat && activeChat.profile === rosterSelected?.slug ? activeChat.sessionId : undefined
   const openSubagents = (openChatSession && subagentRows[openChatSession]) || NO_SUBAGENTS
   // Every child of the open conversation: the history's calls and results, joined with this window's live rows.
-  const subagentEntries = useMemo(() => subagentHistory(messages, openSubagents), [messages, openSubagents])
+  const openAgentProcesses = (openChatSession && agentProcessRows[openChatSession]) || NO_AGENT_PROCESSES
+  const subagentEntries = useMemo(() => subagentHistory(messages, openSubagents, openAgentProcesses), [messages, openSubagents, openAgentProcesses])
   const openProcesses = openChatSession ? chatProcesses[openChatSession] ?? 0 : 0
   // The open conversation’s reads and events are fresher than the roster’s for this bot.
   const openWork = chatBackground(openSubagents, openProcesses)

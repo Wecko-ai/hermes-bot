@@ -1,5 +1,6 @@
 import type { ChatMessage, DelegationTask } from '../types'
 import { isSubagentActive, type SubagentRow, type SubagentState } from './subagents'
+import { parseProcessEnd, type AgentProcess, type AgentRun } from './agent-process'
 
 type Json = Record<string, unknown>
 const asObject = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {})
@@ -8,7 +9,8 @@ const text = (value: unknown) => (typeof value === 'string' ? value : '')
 /**
  * One child the bot delegated in the open conversation. It joins what the history keeps (the `delegate_task`
  * call with the whole prompt, then the gateway's completion message with the full result) and what this window
- * saw live (`subagent.*` events, `subagent.list`).
+ * saw live (`subagent.*` events, `subagent.list`). A coding agent the bot started from its terminal
+ * (`claude -p`…) is one too: its call, the gateway's end of process, and its `process.list` row.
  */
 export interface SubagentEntry {
   id: string
@@ -32,6 +34,11 @@ export interface SubagentEntry {
   taskCount: number
   /** Live row of this window: transcript tail, last tool, tool count. */
   live?: SubagentRow
+  /** Coding agent started from the terminal: tool, folder, prompt file, log file. */
+  run?: AgentRun & { background?: boolean }
+  /** Its background process as `process.list` gives it: live output, exit code. */
+  process?: AgentProcess
+  exitCode?: number
 }
 
 export const isEntryActive = (entry: SubagentEntry) => entry.status === 'queued' || entry.status === 'running'
@@ -206,12 +213,30 @@ const MAX_ENTRIES = 60
  * Every child of the conversation, most recent first. A dispatch with neither an end in the history nor a live
  * row has `ended`: it may still run elsewhere, or its end was folded away by a compaction.
  */
-export function subagentHistory(messages: ChatMessage[], live: SubagentRow[]): SubagentEntry[] {
-  const entries: Array<SubagentEntry & { done?: boolean; early?: boolean; order: number }> = []
+export function subagentHistory(messages: ChatMessage[], live: SubagentRow[], processes: AgentProcess[] = []): SubagentEntry[] {
+  type Built = SubagentEntry & { done?: boolean; early?: boolean; processId?: string; order: number }
+  const entries: Built[] = []
   let order = 0
-  const add = (entry: SubagentEntry & { done?: boolean; early?: boolean }) => { entries.push({ ...entry, order: order++ }) }
+  const add = (entry: Omit<Built, 'order'>) => { entries.push({ ...entry, order: order++ }) }
 
   for (const message of messages) {
+    if (message.agentRun) {
+      const at = time(message.createdAt)
+      // In the foreground, the call's row is written once the agent is done; its exit code is not kept.
+      const background = message.agentRun.background
+      add({ id: `${message.id}:run`, goal: message.agentRun.prompt ?? '', run: message.agentRun, status: 'ended', startedAt: at, finishedAt: background ? undefined : at, taskIndex: 0, taskCount: 1, done: !background })
+      continue
+    }
+    if (message.role === 'user' && message.content.startsWith('[IMPORTANT: Background process')) {
+      const end = parseProcessEnd(message.content)
+      if (!end?.run) continue
+      const at = time(message.createdAt)
+      const outcome = { status: end.status, exitCode: end.exitCode, finishedAt: at, result: end.output, processId: end.processId, done: true }
+      const target = entries.find((entry) => entry.run && !entry.done && entry.run.key === end.key)
+      if (target) Object.assign(target, outcome)
+      else add({ id: `${message.id}:end`, goal: end.run.prompt ?? '', run: end.run, taskIndex: 0, taskCount: 1, ...outcome })
+      continue
+    }
     if (message.delegation?.length) {
       const at = time(message.createdAt)
       message.delegation.forEach((task, index) => add({
@@ -229,7 +254,7 @@ export function subagentHistory(messages: ChatMessage[], live: SubagentRow[]): S
     const at = time(message.createdAt)
     parseDelegationCompletion(message.content).forEach((result, index) => {
       // The oldest dispatch of this goal still waiting; an early failure notice gives way to the batch result.
-      const target = entries.find((entry) => (!entry.done || (entry.early && !result.early)) && sameGoal(entry.goal, result.goal))
+      const target = entries.find((entry) => !entry.run && (!entry.done || (entry.early && !result.early)) && sameGoal(entry.goal, result.goal))
       const outcome = {
         status: result.status,
         truncated: result.truncated || undefined,
@@ -264,7 +289,7 @@ export function subagentHistory(messages: ChatMessage[], live: SubagentRow[]): S
     let target: (typeof entries)[number] | undefined
     for (let index = entries.length - 1; index >= 0 && !target; index -= 1) {
       const entry = entries[index]
-      if (!entry.live && (!entry.done || !active) && sameGoal(entry.goal, row.goal)) target = entry
+      if (!entry.run && !entry.live && (!entry.done || !active) && sameGoal(entry.goal, row.goal)) target = entry
     }
     if (!target) {
       add({ id: `live:${row.id}`, goal: row.goal, status: row.status, taskIndex: row.taskIndex, taskCount: row.taskCount })
@@ -280,10 +305,38 @@ export function subagentHistory(messages: ChatMessage[], live: SubagentRow[]): S
     target.finishedAt = active ? undefined : row.updatedAt
   }
 
+  for (const process of processes) {
+    const active = process.status === 'running' || process.status === 'queued'
+    // Its own end in the history first, else the latest call of the same command not yet tied to a process.
+    let target = entries.find((entry) => entry.processId === process.id)
+    for (let index = entries.length - 1; index >= 0 && !target; index -= 1) {
+      const entry = entries[index]
+      if (entry.run && !entry.process && entry.run.key === process.run.key && (!entry.done || !active)) target = entry
+    }
+    if (!target) {
+      add({ id: `process:${process.id}`, goal: process.run.prompt ?? '', run: { ...process.run, background: true }, status: process.status, taskIndex: 0, taskCount: 1 })
+      target = entries[entries.length - 1]
+    }
+    target.process = process
+    target.processId = process.id
+    target.startedAt = process.startedAt ?? target.startedAt
+    if (target.done) continue
+    target.status = process.status
+    target.exitCode = process.exitCode
+    target.finishedAt = active ? undefined : process.finishedAt
+    if (!active && process.outputTail) target.result ??= process.outputTail
+  }
+
+  for (const entry of entries) {
+    if (entry.run && entry.durationSeconds === undefined && entry.startedAt !== undefined && entry.finishedAt !== undefined && entry.finishedAt > entry.startedAt) {
+      entry.durationSeconds = (entry.finishedAt - entry.startedAt) / 1000
+    }
+  }
+
   return entries
     .sort((a, b) => (b.startedAt ?? b.finishedAt ?? 0) - (a.startedAt ?? a.finishedAt ?? 0) || b.order - a.order)
     .slice(0, MAX_ENTRIES)
-    .map(({ done: _done, early: _early, order: _order, ...entry }) => entry)
+    .map(({ done: _done, early: _early, processId: _processId, order: _order, ...entry }) => entry)
 }
 
 // ── What the panels show ─────────────────────────────────────────────────────────────────────────────────────

@@ -813,6 +813,12 @@ body::before {
 .subagent-tail-button { align-self: flex-start; padding: 5px 10px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; font-weight: 560; }
 .subagent-tail-button:hover { background: var(--hover); color: var(--text); }
 .subagent-history { display: flex; flex-direction: column; gap: 8px; }
+.subagent-file { margin: 0; color: var(--text-secondary); font-size: 12.5px; }
+.subagent-file code, .subagent-file-button code { font-size: 12px; overflow-wrap: anywhere; }
+.subagent-file-button { align-self: flex-start; max-width: 100%; display: inline-flex; align-items: center; gap: 6px; margin: 0 0 6px; padding: 6px 10px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; font-weight: 560; text-align: left; }
+.subagent-file-button:hover { background: var(--hover); color: var(--text); }
+.subagent-file-button code { min-width: 0; overflow: hidden; color: var(--text-tertiary); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-prompt .subagent-file-button, .subagent-tail .subagent-file-button { display: flex; }
 .subagent-card { border-radius: 12px; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border); }
 .subagent-card.is-running, .subagent-card.is-queued { box-shadow: inset 0 0 0 .5px var(--border), inset 3px 0 0 color-mix(in srgb, var(--standby) 70%, transparent); }
 .subagent-card .subagent-goal { font-size: 13px; }
@@ -849,6 +855,7 @@ body::before {
 .document-toolbar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .document-toolbar .plain-icon { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); }
 .document-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
+.document-text { flex: 1; min-height: 0; margin: 0; overflow: auto; padding: 18px 22px 40px; color: var(--text); font-size: 12.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .document-markdown { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 26px 40px; font-size: 14px; line-height: 22px; }
 .document-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-tertiary); font-size: 12px; }
 .media-document { cursor: pointer; text-align: left; }

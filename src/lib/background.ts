@@ -1,4 +1,5 @@
 import type { BackgroundWork, Bot, BotStatus } from '../types'
+import { parseAgentProcesses, type AgentProcess } from './agent-process'
 import { HermesRpcError, type ActiveChat, type HermesClient } from './hermes'
 import { parseSubagentList, type SubagentSnapshot } from './subagents'
 import { i18n } from '../i18n'
@@ -108,6 +109,8 @@ export interface ChatBackground {
   processes?: number
   /** Live children of this conversation; `undefined` when the read failed. */
   subagents?: SubagentSnapshot[]
+  /** Background processes that run a coding agent (`claude -p`…), finished ones included. */
+  agentProcesses?: AgentProcess[]
 }
 
 /**
@@ -125,8 +128,11 @@ export async function loadChatBackground(client: HermesClient, chat: Pick<Active
       return undefined
     }
   }
-  const [processes, subagents] = await Promise.all([read('process.list', runningProcesses), read('subagent.list', parseSubagentList)])
-  return { processes, subagents }
+  const [listed, subagents] = await Promise.all([
+    read('process.list', (value) => ({ count: runningProcesses(value), agents: parseAgentProcesses(value) })),
+    read('subagent.list', parseSubagentList),
+  ])
+  return { processes: listed?.count, agentProcesses: listed?.agents, subagents }
 }
 
 export interface SubagentTail {

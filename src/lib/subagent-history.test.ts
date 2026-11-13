@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types'
 import { delegationTasks, parseDelegationCompletion, plainPreview, sameGoal, subagentHistory, subagentTitle } from './subagent-history'
 import type { SubagentRow } from './subagents'
+import { agentRun, type AgentProcess } from './agent-process'
 
 const BACKEND = 'Implement the BACKEND of the affiliate program exactly as specified in /Users/test/projects/site/docs/affiliation/SPEC.md, until npm test is green.'
 const FRONTEND = 'Implement the FRONTEND of the affiliate program.'
@@ -131,6 +132,28 @@ describe('historique des sous-agents', () => {
   it('reconnaît un but coupé par la gateway', () => {
     expect(sameGoal(BACKEND, `${BACKEND.slice(0, 60)}…`)).toBe(true)
     expect(sameGoal('Short goal', 'Short goal and more')).toBe(false)
+  })
+})
+
+describe('agents de code lancés du terminal', () => {
+  const COMMAND = 'cd /Users/test/site && claude -p "$(cat /Users/test/prompt.md)" > /Users/test/out.log 2>&1'
+  const run = agentRun(COMMAND)!
+
+  it('relie l’appel à sa fin de processus, puis un nouvel appel à son processus vivant', () => {
+    const live: AgentProcess = { id: 'proc_2', run, status: 'running', startedAt: Date.parse('2026-11-13T11:00:00Z'), outputTail: 'Écriture des tests' }
+    const entries = subagentHistory([
+      message('t1', { role: 'tool', technical: true, createdAt: '2026-11-13T10:00:00.000Z', agentRun: { ...run, background: true } }),
+      message('e1', { technical: true, createdAt: '2026-11-13T10:05:00.000Z', content: `[IMPORTANT: Background process proc_1 completed normally (exit code 0).\nCommand: ${COMMAND}\nOutput:\n]` }),
+      message('t2', { role: 'tool', technical: true, createdAt: '2026-11-13T11:00:00.000Z', agentRun: { ...run, background: true } }),
+    ], [], [live])
+    expect(entries.map((entry) => [entry.id, entry.status])).toEqual([['t2:run', 'running'], ['t1:run', 'completed']])
+    expect(entries[0].process?.outputTail).toBe('Écriture des tests')
+    expect(entries[1]).toMatchObject({ exitCode: 0, durationSeconds: 300, run: { promptFile: '/Users/test/prompt.md', logFile: '/Users/test/out.log' } })
+  })
+
+  it('un processus sans appel dans l’historique reste visible, et ne se mêle pas aux sous-agents', () => {
+    const entries = subagentHistory([message('d', { role: 'tool', delegation: [{ goal: 'Go' }] })], [], [{ id: 'proc_9', run: agentRun('claude -p "Go"')!, status: 'failed', exitCode: 1, finishedAt: 5 }])
+    expect(entries.map((entry) => [entry.id, entry.status, entry.exitCode])).toEqual([['d:0', 'ended', undefined], ['process:proc_9', 'failed', 1]])
   })
 })
 

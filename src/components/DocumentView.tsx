@@ -40,10 +40,11 @@ export function DocumentView({ document, active, onReload }: DocumentViewProps) 
   useEffect(() => {
     const controller = new AbortController()
     setState('loading')
-    fetch(url, { method: format === 'markdown' ? 'GET' : 'HEAD', credentials: 'same-origin', signal: controller.signal }).then(async (response) => {
+    const readsText = format === 'markdown' || format === 'text'
+    fetch(url, { method: readsText ? 'GET' : 'HEAD', credentials: 'same-origin', signal: controller.signal }).then(async (response) => {
       if (response.status === 413) return setState('tooLarge')
       if (!response.ok) return setState('missing')
-      if (format === 'markdown') setText(await response.text())
+      if (readsText) setText(await response.text())
       setState('ready')
     }).catch((error) => {
       if (error.name !== 'AbortError') setState('missing')
@@ -65,6 +66,7 @@ export function DocumentView({ document, active, onReload }: DocumentViewProps) 
       {state === 'ready' && format === 'pdf' && <iframe key={url} className="document-frame" title={document.name} src={url} />}
       {/* Without allow-same-origin: the page reaches neither the app nor its session. */}
       {state === 'ready' && format === 'html' && <iframe key={url} className="document-frame" title={document.name} src={url} sandbox="allow-scripts" referrerPolicy="no-referrer" />}
+      {state === 'ready' && format === 'text' && <pre className="document-text">{text}</pre>}
       {state === 'ready' && format === 'markdown' && (
         <div className="document-markdown message-content"><Markdown content={text} profile={document.profile} version={`${document.path}#${document.revision}`} onOpenImages={openImages} /></div>
       )}

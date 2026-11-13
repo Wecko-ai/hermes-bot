@@ -48,12 +48,27 @@ const PLAYABLE: Record<string, MediaKind> = {
   pdf: 'document', html: 'document', htm: 'document', md: 'document', markdown: 'document',
 }
 
-export type DocumentFormat = 'pdf' | 'html' | 'markdown'
+export type DocumentFormat = 'pdf' | 'html' | 'markdown' | 'text'
+
+/**
+ * Plain text, shown as is: the prompt or the log of a coding agent, opened from the Subagents panel. Not offered
+ * for a file cited in a message, which stays a file. Must stay identical to the server's text DOCUMENT_TYPES.
+ */
+const TEXT_DOCUMENTS = new Set(['txt', 'log'])
+
+const extensionOf = (path: string) => /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase() || ''
 
 export function documentFormat(path: string): DocumentFormat {
-  const extension = /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase() || ''
+  const extension = extensionOf(path)
   if (extension === 'pdf') return 'pdf'
+  if (TEXT_DOCUMENTS.has(extension)) return 'text'
   return extension === 'html' || extension === 'htm' ? 'html' : 'markdown'
+}
+
+/** A file `/api/document` serves, so a tab beside the chat can show it. */
+export function openableDocument(path: string) {
+  const extension = extensionOf(path)
+  return PLAYABLE[extension] === 'document' || TEXT_DOCUMENTS.has(extension)
 }
 
 /** `revision` forces a fresh read when a bot has rewritten the file. */

@@ -3,6 +3,7 @@ import { splitUserImages, withoutFileRefs } from './attachments'
 import { withoutMentionNote } from './mentions'
 import { agentChatMessages, agentMessagesFromRow } from './inter-agent'
 import { delegationTasks, subagentTitle } from './subagent-history'
+import { agentRun, runSubject } from './agent-process'
 import { getAppConfig } from './app-config'
 import { isRemovedProfile } from './bot-manage'
 import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
@@ -112,6 +113,14 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
     if (!tasks.length) return agents
     const goals = tasks.map((task) => subagentTitle(task.goal, 70)).join(' · ')
     return [{ id, role: 'tool', content: i18n.t('subagents.dispatched', { count: tasks.length, goals }), createdAt, technical: true, delegation: tasks }, ...agents]
+  }
+  // A terminal call that starts a coding agent headless: kept as one, without its command.
+  if (rawRole === 'tool' && (asString(message.name) || asString(message.tool_name)) === 'terminal') {
+    const args = asObject(message.args)
+    const run = agentRun(asString(args.command))
+    if (!run) return agents
+    const what = run.prompt ? subagentTitle(run.prompt, 70) : runSubject(run)
+    return [{ id, role: 'tool', content: i18n.t('subagents.launched', { tool: run.tool, what }), createdAt, technical: true, agentRun: { ...run, background: args.background === true } }, ...agents]
   }
   const text = textContent(message).trim()
   if (!text) return agents
