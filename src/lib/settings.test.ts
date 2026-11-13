@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hiddenModelKey, parseSettings, selectableModels, withModelsVisible, withPinned } from './settings'
+import { dictationLanguageCode, hiddenModelKey, parseSettings, selectableModels, withModelsVisible, withPinned } from './settings'
 import type { ModelOption } from '../types'
 
 const option = (model: string, provider = 'anthropic'): ModelOption => ({ model, provider, providerName: provider })
@@ -12,7 +12,7 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], localModel: '', notifications: true })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], localModel: '', notifications: true })
   })
 
   it('garde les bots épinglés dans leur ordre, sans valeur étrangère', () => {
@@ -30,6 +30,16 @@ describe('réglages', () => {
   it('garde le mode caveman choisi et refuse une valeur qui n’est pas un booléen', () => {
     expect(parseSettings('{"caveman":true}').caveman).toBe(true)
     expect(parseSettings('{"caveman":"oui"}').caveman).toBe(false)
+  })
+
+  it('écoute la dictée dans la langue choisie, sinon dans celle de l’interface', () => {
+    expect(parseSettings('{"dictationLanguage":"fr"}').dictationLanguage).toBe('fr')
+    expect(parseSettings('{"dictationLanguage":"de"}').dictationLanguage).toBe('interface')
+    expect(dictationLanguageCode('fr', 'en')).toBe('fr')
+    expect(dictationLanguageCode('en', 'fr')).toBe('en')
+    expect(dictationLanguageCode('interface', 'fr')).toBe('fr')
+    expect(dictationLanguageCode('interface', 'en')).toBe('en')
+    expect(dictationLanguageCode('interface', 'de')).toBe('en')
   })
 
   it('remplace une valeur invalide au lieu de la propager', () => {

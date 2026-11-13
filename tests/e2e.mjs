@@ -1301,6 +1301,26 @@ try {
   }
   // The language stays blocked until the next launch (it does not come back by itself): the mic says so.
   await page.getByRole('button', { name: 'Dictée indisponible' }).waitFor({ timeout: 2_000 })
+  // Another dictation language (Settings > Conversations), here one this Mac knows: the mic comes back and listens in it.
+  await dictationState({ exists: true })
+  const dictationSettings = page.getByRole('dialog', { name: 'Réglages' })
+  const chooseDictationLanguage = async (name) => {
+    await page.getByRole('button', { name: 'Réglages', exact: true }).click()
+    await dictationSettings.getByRole('button', { name: 'Conversations' }).click()
+    await dictationSettings.getByRole('radiogroup', { name: 'Langue de la dictée' }).getByRole('radio', { name }).click()
+    await dictationSettings.getByRole('button', { name: 'Fermer les réglages' }).click()
+    await dictationSettings.waitFor({ state: 'detached', timeout: 3_000 })
+  }
+  await chooseDictationLanguage('English')
+  await page.getByRole('button', { name: 'Dicter', exact: true }).click()
+  await pill.waitFor({ timeout: 3_000 })
+  const englishPrepare = (await dictationCalls('prepare')).at(-1)
+  const englishStart = (await dictationCalls('start')).at(-1)
+  if (englishPrepare?.localeId !== 'en-US' || englishStart?.localeId !== 'en-US') throw new Error(`Dictée en anglais sous une interface en français : ${JSON.stringify({ englishPrepare, englishStart })}`)
+  await page.keyboard.press('Escape')
+  await pill.waitFor({ state: 'detached', timeout: 3_000 })
+  await chooseDictationLanguage('Interface')
+  if ((await page.evaluate(() => JSON.parse(localStorage.getItem('hermesbot-settings')))).dictationLanguage !== 'interface') throw new Error('La langue de la dictée doit revenir à celle de l’interface.')
 
   // Send button: black and white, flat, in both themes (the disc has the text colour, the arrow the background colour).
   await orionBox.fill('Un message')

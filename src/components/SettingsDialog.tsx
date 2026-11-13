@@ -6,7 +6,7 @@ import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
-import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
+import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, localModelLabel, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
@@ -161,6 +161,9 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
     <>
       <Row label={t('settings.sendWith')}>
         <Segments<SendKey> label={t('settings.sendWith')} value={settings.sendKey} options={[{ id: 'enter', label: t('settings.sendKeys.enter') }, { id: 'cmd-enter', label: t('settings.sendKeys.cmdEnter') }]} onChange={(sendKey) => updateSettings({ sendKey })} />
+      </Row>
+      <Row label={t('settings.dictationLanguage')} hint={t('settings.dictationLanguageHint')}>
+        <Segments<DictationLanguage> label={t('settings.dictationLanguage')} value={settings.dictationLanguage} options={[{ id: 'interface', label: t('settings.dictationLanguageOptions.interface') }, { id: 'fr', label: t('settings.languageOptions.fr') }, { id: 'en', label: t('settings.languageOptions.en') }]} onChange={(dictationLanguage) => updateSettings({ dictationLanguage })} />
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
       <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />

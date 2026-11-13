@@ -7,7 +7,7 @@ import { defaultPrompt, filterAttachments, formatBytes, toAttachment, type Pendi
 import { mentionOptions, mentionTokenAt, type MentionOption, type MentionToken } from '../lib/mentions'
 import { CHAT_MODES, loadModes, modePlaceholder, saveModes, type ChatMode } from '../lib/modes'
 import { DELIVERY_MODES, deliveryPlaceholder, loadDraft, saveDraft, type DeliveryMode } from '../lib/delivery'
-import { useSettings } from '../lib/settings'
+import { dictationLanguageCode, getSettings, useSettings } from '../lib/settings'
 import { i18n } from '../i18n'
 import { DictationController, type DictationSnapshot } from '../lib/dictation'
 import { createDictationEngine } from '../lib/dictation-engines'
@@ -61,8 +61,8 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
 export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage }: ComposerProps) {
-  const { t } = useTranslation()
-  const { sendKey } = useSettings()
+  const { t, i18n: translation } = useTranslation()
+  const { sendKey, dictationLanguage } = useSettings()
   const [text, setText] = useState(() => loadDraft(bot.slug))
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -95,10 +95,12 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   // One controller for the composer's life; `null`: nothing can dictate here, so no mic button.
   const dictationRef = useRef<DictationController | null | undefined>(undefined)
   if (dictationRef.current === undefined) {
-    const engine = createDictationEngine({ demo: DEMO, language: i18n.language === 'fr' ? 'fr' : 'en', languageCode: () => (i18n.language === 'fr' ? 'fr' : 'en') })
+    // Read at each dictation: a change in Settings applies to the next one.
+    const languageCode = () => dictationLanguageCode(getSettings().dictationLanguage, i18n.language)
+    const engine = createDictationEngine({ demo: DEMO, language: languageCode(), languageCode })
     dictationRef.current = engine && new DictationController({
       engine,
-      languageCode: () => (i18n.language === 'fr' ? 'fr' : 'en'),
+      languageCode,
       getText: () => textRef.current,
       setText: (next) => { textRef.current = next; setText(next) },
       isOffline: () => !navigator.onLine,
@@ -131,6 +133,9 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     textarea.style.height = '0px'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`
   }, [text])
+
+  // Another dictation language may be one this Mac knows: the mic is offered again.
+  useEffect(() => { dictation?.recheckLanguage() }, [dictation, dictationLanguage, translation.language])
 
   // The microphone is given back when the composer goes away.
   useEffect(() => () => dictation?.cancel(), [dictation])

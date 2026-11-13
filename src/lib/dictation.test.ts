@@ -351,6 +351,17 @@ describe('refus et erreurs', () => {
     expect(engine.listenCalls).toBe(0)
   })
 
+  it('langue absente : une autre langue de dictée rend le micro, la même non', async () => {
+    const controller = make(new FakeDictationEngine({ localeAvailable: false }))
+    await controller.start()
+    expect(controller.blocked).toBe('language')
+    controller.recheckLanguage()
+    expect(controller.blocked).toBe('language')
+    language = 'en'
+    controller.recheckLanguage()
+    expect(controller.blocked).toBeNull()
+  })
+
   it('hors ligne sans modèle local : message, bouton réutilisable', async () => {
     offline = true
     const engine = new FakeDictationEngine({ onDevice: false })

@@ -131,6 +131,8 @@ export class DictationController {
   private words = ''
   private completeFinal: (() => void) | null = null
   private finishing: Promise<void> | null = null
+  /** The language this machine could not recognize: another one may work. */
+  private blockedLanguage: string | null = null
 
   constructor(options: DictationControllerOptions) {
     this.options = options
@@ -157,6 +159,7 @@ export class DictationController {
   /** The mic button. */
   async start(): Promise<void> {
     if (this.disposed || this.snapshot.phase !== 'idle') return
+    this.recheckLanguage()
     const blocked = this.snapshot.blocked
     if (blocked) {
       // Disabled: the reason is repeated, the OS is not asked again.
@@ -241,6 +244,11 @@ export class DictationController {
     this.session += 1
     void this.options.engine.cancel().catch(() => {})
     this.toIdle()
+  }
+
+  /** The dictation language changed in Settings: a language that could not be recognized no longer blocks the mic. */
+  recheckLanguage() {
+    if (this.snapshot.blocked === 'language' && this.options.languageCode() !== this.blockedLanguage) this.update({ blocked: null })
   }
 
   /** The window is back in front: a refusal may have been lifted in System Settings. The next click tries again. */
@@ -336,6 +344,7 @@ export class DictationController {
     this.session += 1
     if (cancel) void this.options.engine.cancel().catch(() => {})
     this.toIdle()
+    if (block === 'language') this.blockedLanguage = this.options.languageCode()
     this.update({ blocked: block })
     this.notice(noticeFor(block))
   }

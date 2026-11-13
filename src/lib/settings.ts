@@ -5,10 +5,13 @@ import { LANGUAGES, type LanguageChoice } from '../i18n'
 export const THEMES = ['system', 'light', 'dark'] as const
 export const TEXT_SIZES = ['small', 'normal', 'large'] as const
 export const SEND_KEYS = ['enter', 'cmd-enter'] as const
+/** Language the dictation listens for. `interface`: the interface language. */
+export const DICTATION_LANGUAGES = ['interface', 'fr', 'en'] as const
 
 export type ThemeChoice = (typeof THEMES)[number]
 export type TextSize = (typeof TEXT_SIZES)[number]
 export type SendKey = (typeof SEND_KEYS)[number]
+export type DictationLanguage = (typeof DICTATION_LANGUAGES)[number]
 
 export interface AppSettings {
   /** Interface language. `system` follows macOS: French if it is French, English otherwise. */
@@ -18,6 +21,8 @@ export interface AppSettings {
   reduceMotion: boolean
   showUsage: boolean
   sendKey: SendKey
+  /** Language macOS listens for when dictating. Lets French be dictated under an English interface. */
+  dictationLanguage: DictationLanguage
   /** Caveman mode: every bot answers in few words. A note read with each turn sent from the composer. */
   caveman: boolean
   activitySort: boolean
@@ -54,6 +59,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     reduceMotion: flag(value.reduceMotion, false),
     showUsage: flag(value.showUsage, legacy('hermesbot-show-usage') === '1'),
     sendKey: oneOf(value.sendKey, SEND_KEYS, 'enter'),
+    dictationLanguage: oneOf(value.dictationLanguage, DICTATION_LANGUAGES, 'interface'),
     caveman: flag(value.caveman, false),
     activitySort: flag(value.activitySort, legacy('hermesbot-sort') === 'activity'),
     showHidden: flag(value.showHidden, false),
@@ -91,6 +97,12 @@ function subscribe(listener: () => void) {
 export const subscribeSettings = subscribe
 
 export const useSettings = () => useSyncExternalStore(subscribe, getSettings)
+
+/** The language the dictation listens for: the chosen one, else the interface's. */
+export function dictationLanguageCode(choice: DictationLanguage, interfaceLanguage: string): 'en' | 'fr' {
+  if (choice !== 'interface') return choice
+  return interfaceLanguage === 'fr' ? 'fr' : 'en'
+}
 
 /** Pins or unpins a bot. A new pin goes after the others: the pinned group keeps its order. */
 export function withPinned(pinned: readonly string[], slug: string, pin: boolean): string[] {
