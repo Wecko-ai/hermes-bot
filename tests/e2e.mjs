@@ -829,9 +829,10 @@ try {
   }, name, { timeout: 5_000 }).then(() => true, () => false)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   if (!await heartbeatIs('none')) throw new Error(`Le logo du chargement bat malgré « réduire les animations » (${await heartbeat()}).`)
+  // Back to "no-preference", Playwright's own default, and not to null: null hands the choice to the machine,
+  // and a CI runner that prefers reduced motion would then run every later step without animated avatars.
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   if (!await heartbeatIs('logo-heartbeat')) throw new Error(`Le logo du chargement ne bat plus (${await heartbeat()}).`)
-  await page.emulateMedia({ reducedMotion: null })
   releaseProfiles()
   await page.locator('.chat-skeleton span').first().waitFor({ timeout: 15_000 })
   await page.locator('.chat-loading').getByText('Ouverture de la conversation avec Nova…').waitFor({ timeout: 5_000 })
@@ -1192,7 +1193,7 @@ try {
   await page.evaluate(() => window.__dictation.emit({ type: 'level', value: 0 }))
   await delay(300)
   const stillQuiet = await waveHeight()
-  await page.emulateMedia({ reducedMotion: null })
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   if (stillFull < 14 || stillQuiet > 4.5) throw new Error(`Animations réduites : onde ${stillFull} puis ${stillQuiet}`)
   // Stop: the final words land, the pill goes, the text stays and can be edited.
   await dictationState({ finalText: 'dictée en cours terminée' })
