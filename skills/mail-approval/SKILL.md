@@ -16,7 +16,7 @@ Never in a scheduled task: a cron stays automatic and follows its own instructio
 ## Propose a draft
 
 1. Prepare the mail as usual. If it replies to a message, first save the draft in the `drafts` folder and note its identifier.
-2. In your reply, add this block, with exactly these four-backtick fences. It becomes a card that the user edits, dismisses or sends.
+2. In your reply, add this block, with exactly these four-backtick fences. It becomes a card that the user edits, dismisses or sends. **The complete block is mandatory whenever you ask for mail approval.** Never replace it with a plain-text draft headed "Draft:" or "Subject:", and do not repeat the mail in prose outside the block: without `Id`, `From`, `To`, `Subject` and a body inside the block, HermesBot cannot build the card or send the mail safely.
 
 `````text
 ````hermes-mail
