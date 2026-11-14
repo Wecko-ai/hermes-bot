@@ -479,7 +479,10 @@ a { color: inherit; }
 .media-viewer-figure { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 100%; max-height: 100%; margin: 0; }
 .media-viewer-figure img { display: block; max-width: 100%; max-height: calc(100dvh - 150px); border-radius: 14px; box-shadow: 0 30px 80px -24px rgb(0 0 0 / 70%); animation: viewer-zoom 240ms cubic-bezier(.2, .9, .3, 1.15); }
 .media-viewer-missing { display: inline-flex; align-items: center; gap: 8px; padding: 18px 22px; border-radius: 14px; background: rgb(255 255 255 / 8%); color: #e8f1efc0; }
-.media-viewer figcaption { display: flex; gap: 10px; color: #e8f1efd6; font-size: 12px; }
+.media-viewer figcaption { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; color: #e8f1efd6; font-size: 12px; }
+.media-viewer-path { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; color: inherit; background: transparent; cursor: pointer; }
+.media-viewer-path:hover { color: #fff; background: rgb(255 255 255 / 10%); }
+.media-viewer-finder-error { color: #ffb4a8; }
 .media-viewer-count { color: #e8f1ef85; font-variant-numeric: tabular-nums; }
 .media-viewer-nav, .media-viewer-close { position: absolute; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 999px; color: #fff; background: rgb(255 255 255 / 12%); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: inset 0 0 0 .5px rgb(255 255 255 / 28%), inset 0 1px 0 rgb(255 255 255 / 18%); transition: background 140ms ease, transform 140ms ease; }
 .media-viewer-nav:hover, .media-viewer-close:hover { background: rgb(255 255 255 / 22%); }

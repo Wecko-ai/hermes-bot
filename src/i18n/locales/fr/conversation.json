@@ -101,6 +101,8 @@
     "localFile": "Fichier local",
     "relativePath": "Chemin relatif",
     "enlarge": "Agrandir {{name}}",
+    "openFinder": "Ouvrir {{name}} dans le Finder",
+    "finderUnavailable": "Fichier absent sur ce Mac.",
     "previous": "Image précédente",
     "next": "Image suivante",
     "close": "Fermer",

@@ -11,6 +11,7 @@ const { messages } = require('./messages.cjs')
 const { externalUrl } = require('./links.cjs')
 const { createDictation, UNAVAILABLE } = require('./dictation.cjs')
 const { createDictationGate } = require('./dictation-gate.cjs')
+const { revealMedia } = require('./reveal-media.cjs')
 
 const ORIGIN = 'http://127.0.0.1:4330'
 // Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
@@ -302,6 +303,12 @@ const fromWindow = (event) => Boolean(mainWindow)
   && event.sender === mainWindow.webContents
   && Boolean(event.senderFrame) && !event.senderFrame.parent
   && event.senderFrame.url.startsWith(`${ORIGIN}/`)
+
+// A media path named by a bot opens in this Mac's Finder, never as a file: URL in the page.
+ipcMain.handle('hermes-bot:reveal-media', (event, mediaPath) => {
+  if (!fromWindow(event)) return false
+  return revealMedia(mediaPath, { reveal: (localPath) => shell.showItemInFolder(localPath) })
+})
 
 // In client mode, the user's agreement to the microphone, for this launch only: nothing is kept on disk.
 let consentAsked = null

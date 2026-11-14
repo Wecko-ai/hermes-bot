@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { ChevronLeft, ChevronRight, ExternalLink, FileText, ImageOff, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, FileText, FolderOpen, ImageOff, X } from 'lucide-react'
 import { isServablePath, mediaUrl, type MediaRef } from '../lib/media'
 
 export interface ViewerState {
@@ -98,8 +98,9 @@ export function MediaViewer({ viewer, onClose, onMove }: MediaViewerProps) {
   const count = images.length
   const media = images[index]
   const [failed, setFailed] = useState(false)
+  const [finderFailed, setFinderFailed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  useEffect(() => setFailed(false), [index])
+  useEffect(() => { setFailed(false); setFinderFailed(false) }, [index])
   // On close, focus goes back to where it was (the clicked thumbnail).
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -135,8 +136,21 @@ export function MediaViewer({ viewer, onClose, onMove }: MediaViewerProps) {
           ? <span className="media-viewer-missing"><ImageOff size={22} />{t('media.previewUnavailable')}</span>
           : <img key={media.path} src={mediaUrl(profile, media.path, version)} alt={media.name} onError={() => setFailed(true)} />}
         <figcaption>
-          <span title={media.path}>{media.name}</span>
+          {window.hermesBot?.revealInFinder
+            ? <button
+                type="button"
+                className="media-viewer-path"
+                title={media.path}
+                aria-label={t('media.openFinder', { name: media.name })}
+                onClick={async (event) => {
+                  event.stopPropagation()
+                  const shown = await window.hermesBot?.revealInFinder?.(media.path)
+                  setFinderFailed(!shown)
+                }}
+              ><FolderOpen size={13} /><span>{media.name}</span></button>
+            : <span title={media.path}>{media.name}</span>}
           {count > 1 && <span className="media-viewer-count">{index + 1} / {count}</span>}
+          {finderFailed && <span className="media-viewer-finder-error" role="alert">{t('media.finderUnavailable')}</span>}
         </figcaption>
       </figure>
       {count > 1 && (

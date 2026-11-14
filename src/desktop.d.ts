@@ -5,6 +5,8 @@ interface Window {
     restartTunnel: () => Promise<void>
     /** Brings the window to the front (a notification was clicked). */
     focusWindow?: () => Promise<void>
+    /** Reveals an existing local media file in Finder; false when this Mac does not have it. */
+    revealInFinder?: (path: string) => Promise<boolean>
     /** Dictation by the Mac's speech recognition, through the native speech helper. */
     dictation?: {
       /** Asks for the microphone and speech recognition permissions, and probes the language. */

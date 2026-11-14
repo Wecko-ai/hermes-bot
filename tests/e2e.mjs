@@ -926,9 +926,17 @@ try {
   await page.locator('.message-content pre').getByText('MEDIA:/Users/test/exemple-de-syntaxe.png').waitFor()
   if (mediaRequests.some((item) => item.path.includes('exemple-de-syntaxe'))) throw new Error('Un exemple de code a été chargé comme média.')
   if (await page.locator('img[src^="file:"], video[src^="file:"], audio[src^="file:"]').count()) throw new Error('Un média est lu en file://.')
+  // The filename under the image is the Finder action in Electron; the browser test uses its bridge.
+  await page.evaluate(() => {
+    window.__revealedMedia = ''
+    window.hermesBot = { revealInFinder: async (path) => { window.__revealedMedia = path; return true } }
+  })
   await page.locator('.media-group.is-grid .media-thumb').first().click()
   await page.locator('.media-viewer img').waitFor({ timeout: 5_000 })
   await page.locator('.media-viewer-count').getByText('1 / 2').waitFor()
+  await page.locator('.media-viewer-path').click()
+  await page.waitForFunction(() => window.__revealedMedia === '/Users/test/visuels/slide 01.jpg')
+  await page.evaluate(() => { delete window.hermesBot })
   await page.keyboard.press('ArrowRight')
   await page.locator('.media-viewer-count').getByText('2 / 2').waitFor()
   await page.waitForFunction(() => { const image = document.querySelector('.media-viewer img'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 5_000 })
