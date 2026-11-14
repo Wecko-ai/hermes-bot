@@ -6,10 +6,9 @@ import { formatDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, type SubagentEntry } from '../lib/subagent-history'
 import { modelLabel } from '../lib/model'
 import { dateTime, shortTime } from '../lib/time'
-import { toolLabel } from '../lib/work-summary'
 import type { MediaRef } from '../lib/media'
 import { Markdown } from './MessageList'
-import { entryDuration, entryTitle, ProcessOutput, PromptView, runMeta, statusText, SubagentTailView, type TailState } from './SubagentsPanel'
+import { entryDuration, EntryNow, EntryType, entryTitle, ProcessOutput, PromptView, runMeta, statusText, SubagentTailView, useAgentProgress, type TailState } from './SubagentsPanel'
 
 interface SubagentHistoryProps {
   entries: SubagentEntry[]
@@ -49,6 +48,7 @@ function SubagentCard({ entry, now, profile, onLoadTail, onOpenImages, onOpenDoc
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [tail, setTail] = useState<TailState | null>(null)
+  const progress = useAgentProgress(entry, profile)
   const duration = entryDuration(entry, now)
   const active = isEntryActive(entry)
   const live = entry.live
@@ -69,14 +69,15 @@ function SubagentCard({ entry, now, profile, onLoadTail, onOpenImages, onOpenDoc
       <button className="subagent-card-head" aria-expanded={open} title={t('subagents.showDetails')} onClick={() => setOpen(!open)}>
         <span className="subagent-line">
           <span className={`subagent-state is-${entry.status}`}><span className="status-dot" aria-hidden="true" />{statusText(t, entry)}</span>
+          <EntryType entry={entry} />
           <span className="subagent-meta" title={when ? dateTime(new Date(when).toISOString()) : undefined}>
             {[when ? shortTime(new Date(when).toISOString()) : '', duration !== undefined ? formatDuration(duration) : ''].filter(Boolean).join(' · ')}
           </span>
         </span>
         <strong className="subagent-goal">{entryTitle(t, entry)}</strong>
         {meta.length > 0 && <span className="subagent-meta">{meta.join(' · ')}</span>}
-        {!open && promptPreview(entry.goal) && <span className="subagent-prompt-preview">{promptPreview(entry.goal)}</span>}
-        {!open && active && live?.lastTool && <span className="subagent-now">{t('subagents.lastTool', { tool: toolLabel(live.lastTool) })}</span>}
+        {!open && !entry.run && promptPreview(entry.goal) && <span className="subagent-prompt-preview">{promptPreview(entry.goal)}</span>}
+        {!open && <EntryNow entry={entry} progress={progress} />}
         {!open && (entry.result || entry.error) && <span className="subagent-result-preview">{plainPreview(entry.result || entry.error || '', 220)}</span>}
       </button>
       {open && (
@@ -89,7 +90,7 @@ function SubagentCard({ entry, now, profile, onLoadTail, onOpenImages, onOpenDoc
               {entry.result && <div className="message-content subagent-result-body"><Markdown content={entry.result} profile={profile} version={entry.id} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} /></div>}
             </div>
           )}
-          <ProcessOutput entry={entry} onOpenDocument={onOpenDocument} />
+          <ProcessOutput entry={entry} progress={progress} onOpenDocument={onOpenDocument} />
           {!entry.result && !entry.error && !active && !entry.run?.logFile && <p className="subagent-tail-note">{t('subagents.noResult')}</p>}
           {live && !tail && <button className="subagent-tail-button" onClick={loadTail}>{t(active ? 'subagents.showLiveTail' : 'subagents.showOutputTail')}</button>}
           {tail && <SubagentTailView tail={tail} entry={entry} />}

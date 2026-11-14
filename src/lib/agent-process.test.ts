@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentRun, commandKey, parseAgentProcesses, parseProcessEnd, runFilePath, runLabel } from './agent-process'
+import { agentRun, commandKey, parseAgentProcesses, parseAgentProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
 
 // As a bot launched it on 2026-11-13 (paths changed).
 const REAL = 'cd /Users/test/projects/site-affilies && claude -p "$(cat /Users/test/.hermes/profiles/site/cache/scratch/prompt-front-fix.md)" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" > /Users/test/.hermes/profiles/site/cache/scratch/front-fix.log 2>&1'
@@ -42,6 +42,36 @@ describe('commande d’un agent de code', () => {
     expect(agentRun('ANTHROPIC_MODEL=x nohup timeout 3600 /Users/test/.local/bin/claude -p "Go"')?.prompt).toBe('Go')
     expect(agentRun('~/bin/mq run --name fix --owner site --class cpu -- claude -p "Fix"')?.prompt).toBe('Fix')
     expect(agentRun(`bash -lc 'cd /tmp/app && codex exec "Ajoute les tests"'`)).toMatchObject({ tool: 'Codex', cwd: '/tmp/app', prompt: 'Ajoute les tests' })
+  })
+
+  it('reconnaît cck dans zsh et trouve le journal ETAT.md du rendu', () => {
+    const command = `zsh -ic 'cck -p "Exécute intégralement le brief /tmp/final/BRIEF.md"' > '/tmp/final/work/cck-session.log' 2>&1`
+    expect(agentRun(command)).toEqual({
+      tool: 'Claude Code · Kimi',
+      prompt: 'Exécute intégralement le brief /tmp/final/BRIEF.md',
+      logFile: '/tmp/final/work/cck-session.log',
+      statusFile: '/tmp/final/ETAT.md',
+      key: commandKey(command),
+    })
+    expect(agentRun('cck')).toBeNull()
+  })
+
+  it('garde les trois derniers FAITS et l’étape en cours du journal', () => {
+    const text = [
+      '# ÉTAT',
+      '1. [FAIT] Projet retrouvé.',
+      '2. [FAIT 19:04] Sources lues.',
+      '3. [FAIT 19:10] Timeline cartographiée.',
+      '4. [FAIT 19:18] Overlays créés.',
+      '5. [EN COURS 19:21] Script de rendu et tests.',
+    ].join('\n')
+    expect(parseAgentProgress(text)).toEqual([
+      '2. [FAIT 19:04] Sources lues.',
+      '3. [FAIT 19:10] Timeline cartographiée.',
+      '4. [FAIT 19:18] Overlays créés.',
+      '5. [EN COURS 19:21] Script de rendu et tests.',
+    ])
+    expect(parseAgentProgress('Rien de structuré.')).toEqual([])
   })
 
   it('reconnaît les autres agents sans ligne de commande interactive', () => {

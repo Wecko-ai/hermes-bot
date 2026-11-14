@@ -16,6 +16,8 @@ export interface AgentRun {
   promptFile?: string
   /** File the output is written to (`> file`, `| tee file`), resolved against `cwd`. */
   logFile?: string
+  /** Optional task journal beside a `work/` log (`ETAT.md` in the video workflow). */
+  statusFile?: string
   /** Fingerprint of the command: ties the call, its end and the live process together. */
   key: string
 }
@@ -95,6 +97,7 @@ const CLAUDE = 'Claude Code'
 const AGENTS: Record<string, { tool: string; headless: (words: string[]) => boolean; promptFlags?: string[] }> = {
   claude: { tool: CLAUDE, headless: (words) => words.some((word) => word === '-p' || word === '--print'), promptFlags: ['-p', '--print'] },
   'claude-code': { tool: CLAUDE, headless: (words) => words.some((word) => word === '-p' || word === '--print'), promptFlags: ['-p', '--print'] },
+  cck: { tool: 'Claude Code · Kimi', headless: (words) => words.some((word) => word === '-p' || word === '--print'), promptFlags: ['-p', '--print'] },
   codex: { tool: 'Codex', headless: (words) => words[0] === 'exec' || words[0] === 'e' },
   gemini: { tool: 'Gemini CLI', headless: (words) => words.some((word) => word === '-p' || word === '--prompt'), promptFlags: ['-p', '--prompt'] },
   qwen: { tool: 'Qwen Code', headless: (words) => words.some((word) => word === '-p' || word === '--prompt'), promptFlags: ['-p', '--prompt'] },
@@ -147,6 +150,17 @@ function heredocs(command: string) {
   return bodies
 }
 
+/** Resolve paths after shell unwrapping too: `zsh -ic 'cck …' > work/log` redirects outside the quotes. */
+function resolveRunFiles(run: AgentRun): AgentRun {
+  if (run.promptFile) run.promptFile = runFilePath(run, run.promptFile)
+  if (run.logFile) {
+    run.logFile = runFilePath(run, run.logFile)
+    const workRoot = /^(.*\/)work\/[^/]+$/.exec(run.logFile)?.[1]
+    if (workRoot) run.statusFile = `${workRoot}ETAT.md`
+  }
+  return run
+}
+
 /** The coding agent this command starts headless, if any. */
 export function agentRun(command: string, depth = 0): AgentRun | null {
   if (!command.trim() || depth > 2) return null
@@ -196,7 +210,19 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
     if (SHELLS.has(name)) {
       const script = words.slice(start + 1).find((token, index, rest) => token.kind === 'word' && index > 0 && rest[index - 1].kind === 'word' && /^-\w*c$/.test(rest[index - 1].value))
       const inner = script?.kind === 'word' ? agentRun(script.value, depth + 1) : null
-      if (inner) return { ...inner, cwd: inner.cwd ?? cwd, key: commandKey(command) }
+      if (inner) {
+        const wrapped = { ...inner, key: commandKey(command) }
+        if (cwd) wrapped.cwd = inner.cwd ?? cwd
+        const shellArgs = words.slice(start + 1)
+        for (let index = 0; index < shellArgs.length; index += 1) {
+          const token = shellArgs[index]
+          const next = shellArgs[index + 1]
+          if (token.kind !== 'op' || next?.kind !== 'word') continue
+          if (token.value === '<' && !wrapped.promptFile) wrapped.promptFile = next.value
+          if (token.value === '>' || token.value === '>>' || token.value === '&>') wrapped.logFile = next.value
+        }
+        return resolveRunFiles(wrapped)
+      }
       continue
     }
     if (!Object.hasOwn(AGENTS, name)) continue
@@ -237,9 +263,7 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
       if (file) run.promptFile = file
       else if (candidate.value.trim() && !candidate.value.startsWith('-')) run.prompt = candidate.value.trim()
     }
-    if (run.promptFile) run.promptFile = runFilePath(run, run.promptFile)
-    if (run.logFile) run.logFile = runFilePath(run, run.logFile)
-    return run
+    return resolveRunFiles(run)
   }
   return null
 }
@@ -253,6 +277,19 @@ export function runSubject(run: Pick<AgentRun, 'promptFile' | 'cwd'>) {
 /** A short name for a run without a written prompt: its tool and prompt file, else its folder. */
 export function runLabel(run: Pick<AgentRun, 'tool' | 'promptFile' | 'cwd'>) {
   return [run.tool, runSubject(run)].filter(Boolean).join(' · ')
+}
+
+// ── Task journals written by the agent ──────────────────────────────────────────────────────────────────────
+
+const PROGRESS_STEP = /^\s*\d+[.)]\s*\[(?:FAIT|DONE|EN COURS|IN PROGRESS|BLOQUÉ|BLOCKED)(?:\s+[^\]]+)?\]/i
+const PROGRESS_CURRENT = /^\s*\d+[.)]\s*\[(?:EN COURS|IN PROGRESS|BLOQUÉ|BLOCKED)(?:\s+[^\]]+)?\]/i
+
+/** Last three completed steps and the current one, verbatim: no model call and no invented status. */
+export function parseAgentProgress(text: string): string[] {
+  const steps = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => PROGRESS_STEP.test(line))
+  const current = [...steps].reverse().find((line) => PROGRESS_CURRENT.test(line))
+  if (!current) return steps.slice(-4)
+  return [...steps.filter((line) => !PROGRESS_CURRENT.test(line)).slice(-3), current]
 }
 
 // ── Background processes: the gateway's end message and `process.list` ──────────────────────────────────────

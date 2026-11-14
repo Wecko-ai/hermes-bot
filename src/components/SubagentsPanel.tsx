@@ -1,12 +1,12 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, FileText, History, Network, ScrollText } from 'lucide-react'
+import { Activity, Bot, Check, ChevronDown, ChevronRight, Code2, FileText, History, Network, ScrollText } from 'lucide-react'
 import type { SubagentTail } from '../lib/background'
 import { formatDuration, subagentDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, subagentTitle, type SubagentEntry } from '../lib/subagent-history'
 import { toolLabel } from '../lib/work-summary'
-import { runLabel } from '../lib/agent-process'
-import { openableDocument, type MediaRef } from '../lib/media'
+import { runLabel, parseAgentProgress } from '../lib/agent-process'
+import { documentUrl, openableDocument, type MediaRef } from '../lib/media'
 
 /** What is kept of a transcript on screen: its end, where the child is now. */
 const TAIL_CHARS = 4000
@@ -15,6 +15,7 @@ export const FINISHED_LINGER_MS = 8_000
 
 interface SubagentsPanelProps {
   entries: SubagentEntry[]
+  profile: string
   /** Background processes of the conversation still running. */
   processes: number
   onLoadTail: (subagentId: string) => Promise<SubagentTail>
@@ -32,6 +33,63 @@ const visibleInChat = (entry: SubagentEntry, now: number, opened: ReadonlySet<st
 
 const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
 const lastLine = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
+
+/** Reads the agent's own task journal through the local document route, never through a model or a remote URL. */
+export function useAgentProgress(entry: SubagentEntry, profile: string): string[] {
+  const statusFile = entry.run?.statusFile
+  const active = isEntryActive(entry)
+  const [progress, setProgress] = useState<string[]>([])
+  useEffect(() => {
+    setProgress([])
+    if (!statusFile) return
+    let cancelled = false
+    let controller: AbortController | undefined
+    const load = () => {
+      controller?.abort()
+      controller = new AbortController()
+      fetch(documentUrl(profile, statusFile, Date.now()), { credentials: 'same-origin', signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) return ''
+          return response.text()
+        })
+        .then((text) => { if (!cancelled && text) setProgress(parseAgentProgress(text)) })
+        .catch(() => { /* Missing or changing journal: keep the last readable state. */ })
+    }
+    load()
+    const timer = active ? window.setInterval(load, 5000) : undefined
+    return () => {
+      cancelled = true
+      controller?.abort()
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }, [entry.id, profile, statusFile, active])
+  return progress
+}
+
+const isCurrentProgress = (line: string) => /^\d+[.)]\s*\[(?:EN COURS|IN PROGRESS|BLOQUÉ|BLOCKED)/i.test(line)
+
+/** Same visual language for a delegated Hermes child and a coding agent launched from a terminal. */
+export function EntryType({ entry }: { entry: SubagentEntry }) {
+  const { t } = useTranslation()
+  const coding = Boolean(entry.run)
+  const label = coding ? t('subagents.kindCode') : t('subagents.kindAgent')
+  return (
+    <span className={`subagent-type ${coding ? 'is-code' : 'is-agent'}`} title={entry.run?.tool ?? label}>
+      {coding ? <Code2 size={12} aria-hidden="true" /> : <Bot size={12} aria-hidden="true" />}<span>{label}</span>
+    </span>
+  )
+}
+
+/** The essential live fact, whichever kind of child is running. */
+export function EntryNow({ entry, progress = [] }: { entry: SubagentEntry; progress?: string[] }) {
+  const { t } = useTranslation()
+  if (!isEntryActive(entry)) return null
+  const text = progress.at(-1)
+    || (entry.live?.lastTool ? t('subagents.lastTool', { tool: toolLabel(entry.live.lastTool) }) : '')
+    || (entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
+  if (!text) return null
+  return <span className="subagent-now subagent-live-box"><Activity size={12} aria-hidden="true" /><span>{text}</span></span>
+}
 
 /** A child's title: the first sentence of its prompt; for a coding agent without one, its tool and prompt file. */
 export function entryTitle(t: (key: string) => string, entry: SubagentEntry) {
@@ -62,7 +120,7 @@ export function entryDuration(entry: SubagentEntry, now: number) {
  * A child leaves the chat a few seconds after it ends; the Subagents tab keeps them all. Read only: nothing
  * here steers or stops a child.
  */
-export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory, onOpenDocument }: SubagentsPanelProps) {
+export function SubagentsPanel({ entries, profile, processes, onLoadTail, onOpenHistory, onOpenDocument }: SubagentsPanelProps) {
   const { t } = useTranslation()
   const [now, setNow] = useState(() => Date.now())
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
@@ -116,7 +174,7 @@ export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory, 
         </div>
         {!collapsed && (
           <ul className="subagents-list">
-            {shown.map((entry) => <SubagentItem key={entry.id} entry={entry} now={now} open={opened.has(entry.id)} onOpen={(open) => setOpen(entry.id, open)} onLoadTail={onLoadTail} onOpenDocument={onOpenDocument} />)}
+            {shown.map((entry) => <SubagentItem key={entry.id} entry={entry} profile={profile} now={now} open={opened.has(entry.id)} onOpen={(open) => setOpen(entry.id, open)} onLoadTail={onLoadTail} onOpenDocument={onOpenDocument} />)}
           </ul>
         )}
       </section>
@@ -124,9 +182,10 @@ export function SubagentsPanel({ entries, processes, onLoadTail, onOpenHistory, 
   )
 }
 
-function SubagentItem({ entry, now, open, onOpen, onLoadTail, onOpenDocument }: { entry: SubagentEntry; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail']; onOpenDocument?: (media: MediaRef) => void }) {
+function SubagentItem({ entry, profile, now, open, onOpen, onLoadTail, onOpenDocument }: { entry: SubagentEntry; profile: string; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail']; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   const [tail, setTail] = useState<TailState | null>(null)
+  const progress = useAgentProgress(entry, profile)
   const duration = entryDuration(entry, now)
   const live = entry.live
   const active = isEntryActive(entry)
@@ -148,18 +207,18 @@ function SubagentItem({ entry, now, open, onOpen, onLoadTail, onOpenDocument }: 
       <button className="subagent-main" aria-expanded={open} title={t('subagents.showDetails')} onClick={toggle}>
         <span className="subagent-line">
           <span className={`subagent-state is-${entry.status}`}><span className="status-dot" aria-hidden="true" />{statusText(t, entry)}</span>
+          <EntryType entry={entry} />
           {meta.length > 0 && <span className="subagent-meta">{meta.join(' · ')}</span>}
         </span>
         <span className="subagent-goal">{entryTitle(t, entry)}</span>
-        {!open && promptPreview(entry.goal) && <span className="subagent-prompt-preview">{promptPreview(entry.goal)}</span>}
-        {active && live?.lastTool && <span className="subagent-now">{t('subagents.lastTool', { tool: toolLabel(live.lastTool) })}</span>}
-        {active && entry.process?.outputTail && <span className="subagent-now">{lastLine(entry.process.outputTail)}</span>}
+        {!open && !entry.run && promptPreview(entry.goal) && <span className="subagent-prompt-preview">{promptPreview(entry.goal)}</span>}
+        <EntryNow entry={entry} progress={progress} />
         {!active && entry.result && <span className="subagent-result-preview">{plainPreview(entry.result, 180)}</span>}
       </button>
       {open && (
         <div className="subagent-details">
           <PromptView entry={entry} onOpenDocument={onOpenDocument} />
-          <ProcessOutput entry={entry} onOpenDocument={onOpenDocument} />
+          <ProcessOutput entry={entry} progress={progress} onOpenDocument={onOpenDocument} />
           {tail && <SubagentTailView tail={tail} entry={entry} />}
         </div>
       )}
@@ -197,15 +256,25 @@ export function PromptView({ entry, onOpenDocument }: { entry: SubagentEntry; on
   )
 }
 
-/** A coding agent's output: the end of what it prints, live, and the file it writes to. */
-export function ProcessOutput({ entry, onOpenDocument }: { entry: SubagentEntry; onOpenDocument?: (media: MediaRef) => void }) {
+/** A coding agent's progress and output: its task journal, what it prints, and the files it writes. */
+export function ProcessOutput({ entry, progress = [], onOpenDocument }: { entry: SubagentEntry; progress?: string[]; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   if (!entry.run) return null
   const tail = isEntryActive(entry) ? entry.process?.outputTail : undefined
-  if (!tail && !entry.run.logFile) return null
+  if (!tail && !entry.run.logFile && !progress.length) return null
   return (
     <div className="subagent-tail">
-      <h4>{t('subagents.output')}</h4>
+      {progress.length > 0 && (
+        <div className="agent-progress">
+          <h4>{t('subagents.progress')}</h4>
+          {progress.map((line, index) => {
+            const current = isCurrentProgress(line)
+            return <p key={`${index}-${line}`} className={current ? 'is-current' : ''}><span className="agent-progress-icon" aria-hidden="true">{current ? <Activity size={13} /> : <Check size={13} />}</span><span>{line}</span></p>
+          })}
+          {entry.run.statusFile && <FileButton path={entry.run.statusFile} label={t('subagents.openProgress')} icon="log" onOpenDocument={onOpenDocument} />}
+        </div>
+      )}
+      {(tail || entry.run.logFile) && <h4>{t('subagents.output')}</h4>}
       {tail && <pre>{tail.slice(-TAIL_CHARS)}</pre>}
       {entry.run.logFile && <FileButton path={entry.run.logFile} label={t('subagents.openLog')} icon="log" onOpenDocument={onOpenDocument} />}
     </div>

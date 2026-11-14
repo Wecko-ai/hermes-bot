@@ -75,6 +75,7 @@ const MEDIA_FIXTURES = {
   // A coding agent's log and prompt, opened from the Subagents panel.
   '/Users/test/docs/agent.log': ['agent.log', 'text/plain'],
   '/Users/test/scratch/prompt-front.md': ['prompt-front.md', 'text/markdown'],
+  '/Users/test/projects/final/ETAT.md': ['agent-etat.md', 'text/markdown'],
   // Images the user sent: Hermes's copy, read back like the bot's media.
   '/Users/test/cache/upload_envoi.png': ['slide.png', 'image/png'],
   '/x/vignette.png': ['slide.png', 'image/png'],
@@ -2824,6 +2825,7 @@ try {
   processListBySession['chat-orion'] = [
     ...processListBySession['chat-orion'],
     { session_id: 'proc_claude', command: 'cd /Users/test/projects/site && ANTHROPIC_API_KEY=sk-test-secret claude -p "Ajoute les tests du formulaire partenaire" --permission-mode acceptEdits', status: 'running', started_epoch: Date.now() / 1000 - 30, output_tail: 'Lecture de SPEC.md\nÉcriture des tests' },
+    { session_id: 'proc_cck', command: `zsh -ic 'cck -p "Exécute intégralement le brief /Users/test/projects/final/BRIEF.md"' > '/Users/test/projects/final/work/cck-session.log' 2>&1`, status: 'running', started_epoch: Date.now() / 1000 - 60, output_tail: '' },
   ]
   const claudeRow = panel.locator('.subagent-row.is-running', { hasText: 'Ajoute les tests du formulaire partenaire' })
   await claudeRow.waitFor({ timeout: 8_000 })
@@ -2831,6 +2833,10 @@ try {
   await claudeRow.getByText('Écriture des tests').waitFor({ timeout: 2_000 })
   await history.locator('.subagent-card.is-running', { hasText: 'Ajoute les tests du formulaire partenaire' }).waitFor({ timeout: 2_000 })
   if (await page.getByText('sk-test-secret', { exact: false }).count() || await page.getByText('acceptEdits', { exact: false }).count()) throw new Error('La commande d’un agent de code est affichée.')
+  const cckRow = panel.locator('.subagent-row.is-running', { hasText: 'Exécute intégralement le brief' })
+  await cckRow.getByText('Claude Code · Kimi', { exact: false }).waitFor({ timeout: 8_000 })
+  await cckRow.locator('.subagent-now').getByText('5. [EN COURS 19:21] Script de rendu et tests encodeur.', { exact: true }).waitFor({ timeout: 5_000 })
+  await history.locator('.subagent-card.is-running', { hasText: 'Exécute intégralement le brief' }).getByText('EN COURS 19:21', { exact: false }).waitFor({ timeout: 2_000 })
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}subagents-agent-run.png` })
   // From the history (terminal call, end of process): its prompt file and its log open in a tab beside the chat.
@@ -2843,6 +2849,15 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}subagents-agent-log.png` })
   await page.locator('.details-panel').getByRole('tab', { name: 'Le bot' }).click()
   await history.waitFor({ timeout: 3_000 })
+  // cck/k3.1-pro: ETAT.md gives the current step in the row and the last completed steps in its details.
+  await cckRow.locator('.subagent-main').click()
+  await cckRow.locator('.agent-progress').getByText('4. [FAIT 19:18] Overlays créés.', { exact: true }).waitFor({ timeout: 3_000 })
+  await cckRow.locator('.agent-progress').screenshot({ path: `${SCREENSHOTS}subagents-agent-progress.png` })
+  await cckRow.getByRole('button', { name: /Ouvrir l’état complet/ }).click()
+  await page.locator('.document-markdown').getByText('Script de rendu et tests encodeur.', { exact: false }).waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel').getByRole('tab', { name: 'Le bot' }).click()
+  await history.waitFor({ timeout: 3_000 })
+  await cckRow.locator('.subagent-main').click()
   // Everything stops: back to idle, and the open conversation is no longer read.
   delete subagentRosterByProfile.orion
   processListBySession['chat-orion'] = [{ session_id: 'proc_dev', command: 'npm run dev', status: 'exited', exit_code: 0 }]

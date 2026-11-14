@@ -209,6 +209,10 @@
     "exitCode": "exit code {{code}}",
     "openPrompt": "Open the prompt",
     "openLog": "Open the log",
+    "progress": "Progress",
+    "openProgress": "Open full progress",
+    "kindCode": "Coding agent",
+    "kindAgent": "Subagent",
     "output": "Output",
     "promptUnknown": "The command does not show the prompt.",
     "status": {

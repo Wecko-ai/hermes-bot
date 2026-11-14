@@ -209,6 +209,10 @@
     "exitCode": "code de sortie {{code}}",
     "openPrompt": "Ouvrir le prompt",
     "openLog": "Ouvrir le journal",
+    "progress": "Avancement",
+    "openProgress": "Ouvrir l’état complet",
+    "kindCode": "Agent de code",
+    "kindAgent": "Sous-agent",
     "output": "Sortie",
     "promptUnknown": "Prompt non lisible dans la commande.",
     "status": {

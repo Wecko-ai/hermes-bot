@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- A unified, easier-to-scan Subagents design for delegated Hermes children and coding agents: type badges, a highlighted current-work line, and the agent's own `ETAT.md` progress (the last three completed steps and the current one) when its log lives in `work/`. `cck -p` is recognized too, including output redirected outside `zsh -ic`; the full progress file opens beside the chat.
 - Published X posts reported by a bot with their status link and exact text appear as X-style cards in the thread. The card is rendered locally, keeps links clickable and opens the original post on X; no remote X widget, avatar or resource is loaded.
 - Coding agents' prompt and log files written as relative paths now open from the Subagents panel: they are resolved against the agent's working folder, including `..` segments, instead of failing with "Preview unavailable".
 - In the desktop image viewer, clicking the filename below the image reveals an existing local file in Finder. No `file:` link or custom URL scheme is opened.

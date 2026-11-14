@@ -800,6 +800,10 @@ body::before {
 .subagent-row { margin-left: calc(var(--depth, 0) * 14px); padding: 2px 0; border-top: .5px solid var(--border); }
 .subagent-main, .subagent-card-head { width: 100%; display: flex; flex-direction: column; gap: 3px; padding: 8px 9px; border-radius: 10px; text-align: left; }
 .subagent-main:hover, .subagent-card-head:hover { background: var(--hover); }
+.subagent-row.is-running > .subagent-main { background: color-mix(in srgb, var(--standby) 6%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--standby) 55%, transparent); }
+.subagent-type { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 6px; font-size: 12px; font-weight: 560; line-height: 16px; }
+.subagent-type.is-code { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.subagent-type.is-agent { background: var(--surface-soft); color: var(--text-secondary); }
 .subagent-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .subagent-state { display: inline-flex; flex: none; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .subagent-state .status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: currentColor; }
@@ -817,6 +821,9 @@ body::before {
 .subagent-result-preview { padding-left: 9px; border-left: 2px solid color-mix(in srgb, var(--success) 45%, transparent); }
 .subagent-row.is-failed .subagent-result-preview, .subagent-row.is-error .subagent-result-preview, .subagent-card.is-failed .subagent-result-preview, .subagent-card.is-error .subagent-result-preview { border-left-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .subagent-now { color: var(--standby); font-size: 12px; line-height: 17px; }
+.subagent-live-box { display: flex; align-items: flex-start; gap: 6px; margin-top: 3px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--standby) 9%, transparent); font-size: 12.5px; line-height: 18px; }
+.subagent-live-box > svg { flex: none; margin-top: 2px; }
+.subagent-live-box > span { min-width: 0; overflow-wrap: anywhere; }
 .subagent-details { display: flex; flex-direction: column; gap: 10px; margin: 2px 9px 8px; }
 .subagent-details h4 { margin: 0 0 4px; color: var(--text-tertiary); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
 .subagent-prompt p, .subagent-error { max-height: 260px; margin: 0 0 8px; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -824,6 +831,12 @@ body::before {
 .subagent-error { color: var(--danger); }
 .subagent-result-body { max-height: 420px; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); font-size: 13px; }
 .subagent-tail pre { max-height: 240px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-progress { margin-bottom: 8px; }
+.agent-progress p { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 4px; padding: 6px 9px; border-radius: 7px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
+.agent-progress p > span:last-child { min-width: 0; }
+.agent-progress-icon { flex: none; display: inline-flex; margin-top: 2px; color: var(--success); }
+.agent-progress p.is-current { color: var(--standby); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--standby) 65%, transparent); }
+.agent-progress p.is-current .agent-progress-icon { color: var(--standby); }
 .subagent-tail-note { margin: 0; color: var(--text-tertiary); font-size: 12px; }
 .subagent-tail .subagent-tail-note { margin: 0 0 4px; }
 .subagent-tail-button { align-self: flex-start; padding: 5px 10px; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; font-weight: 560; }
