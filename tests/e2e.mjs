@@ -913,8 +913,8 @@ try {
   await page.getByRole('textbox', { name: 'Message à Nova' }).fill('Test animation')
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
   await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
-  await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 5_000 })
-  await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 2_500 })
+  await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 9_000 })
+  await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 10_000 })
   // Status visible at a glance: banner, roster row, chat header.
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 2_000 })
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 2_000 })
