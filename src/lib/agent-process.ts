@@ -155,8 +155,8 @@ function resolveRunFiles(run: AgentRun): AgentRun {
   if (run.promptFile) run.promptFile = runFilePath(run, run.promptFile)
   if (run.logFile) {
     run.logFile = runFilePath(run, run.logFile)
-    const workRoot = /^(.*\/)work\/[^/]+$/.exec(run.logFile)?.[1]
-    if (workRoot) run.statusFile = `${workRoot}ETAT.md`
+    const work = /^(.*\/)?work\/[^/]+$/.exec(run.logFile)
+    if (work) run.statusFile = `${work[1] ?? ''}ETAT.md`
   }
   return run
 }
@@ -290,6 +290,10 @@ export function parseAgentProgress(text: string): string[] {
   const current = [...steps].reverse().find((line) => PROGRESS_CURRENT.test(line))
   if (!current) return steps.slice(-4)
   return [...steps.filter((line) => !PROGRESS_CURRENT.test(line)).slice(-3), current]
+}
+
+export function currentAgentProgress(lines: string[]): string | undefined {
+  return [...lines].reverse().find((line) => PROGRESS_CURRENT.test(line))
 }
 
 // ── Background processes: the gateway's end message and `process.list` ──────────────────────────────────────

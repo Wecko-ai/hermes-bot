@@ -48,7 +48,7 @@ function SubagentCard({ entry, now, profile, onLoadTail, onOpenImages, onOpenDoc
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [tail, setTail] = useState<TailState | null>(null)
-  const progress = useAgentProgress(entry, profile)
+  const progress = useAgentProgress(entry, profile, open)
   const duration = entryDuration(entry, now)
   const active = isEntryActive(entry)
   const live = entry.live

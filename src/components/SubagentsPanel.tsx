@@ -5,7 +5,7 @@ import type { SubagentTail } from '../lib/background'
 import { formatDuration, subagentDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, subagentTitle, type SubagentEntry } from '../lib/subagent-history'
 import { toolLabel } from '../lib/work-summary'
-import { runLabel, parseAgentProgress } from '../lib/agent-process'
+import { runLabel, currentAgentProgress, parseAgentProgress } from '../lib/agent-process'
 import { documentUrl, openableDocument, type MediaRef } from '../lib/media'
 
 /** What is kept of a transcript on screen: its end, where the child is now. */
@@ -34,35 +34,48 @@ const visibleInChat = (entry: SubagentEntry, now: number, opened: ReadonlySet<st
 const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
 const lastLine = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
 
-/** Reads the agent's own task journal through the local document route, never through a model or a remote URL. */
-export function useAgentProgress(entry: SubagentEntry, profile: string): string[] {
+/** Shared reads: the chat and history never download the same journal twice, and a slow read is never aborted. */
+const PROGRESS_TTL_MS = 5000
+const progressCache = new Map<string, { at: number; lines: string[] }>()
+const progressPending = new Map<string, Promise<string[]>>()
+
+function readAgentProgress(profile: string, statusFile: string): Promise<string[]> {
+  const key = `${profile}\n${statusFile}`
+  const cached = progressCache.get(key)
+  if (cached && Date.now() - cached.at < PROGRESS_TTL_MS) return Promise.resolve(cached.lines)
+  const pending = progressPending.get(key)
+  if (pending) return pending
+  const request = fetch(documentUrl(profile, statusFile, Date.now()), { credentials: 'same-origin' })
+    .then(async (response) => response.ok ? parseAgentProgress(await response.text()) : [])
+    .catch(() => progressCache.get(key)?.lines ?? [])
+    .then((lines) => {
+      progressCache.set(key, { at: Date.now(), lines })
+      if (progressCache.size > 60) progressCache.delete(progressCache.keys().next().value as string)
+      return lines
+    })
+    .finally(() => { progressPending.delete(key) })
+  progressPending.set(key, request)
+  return request
+}
+
+/** Reads only a visible current step or an opened card, through the local document route. */
+export function useAgentProgress(entry: SubagentEntry, profile: string, open = false): string[] {
   const statusFile = entry.run?.statusFile
   const active = isEntryActive(entry)
+  const readable = Boolean(statusFile && (/^\//.test(statusFile) || statusFile.startsWith('~/')))
   const [progress, setProgress] = useState<string[]>([])
   useEffect(() => {
     setProgress([])
-    if (!statusFile) return
+    if (!statusFile || !readable || (!active && !open)) return
     let cancelled = false
-    let controller: AbortController | undefined
-    const load = () => {
-      controller?.abort()
-      controller = new AbortController()
-      fetch(documentUrl(profile, statusFile, Date.now()), { credentials: 'same-origin', signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) return ''
-          return response.text()
-        })
-        .then((text) => { if (!cancelled && text) setProgress(parseAgentProgress(text)) })
-        .catch(() => { /* Missing or changing journal: keep the last readable state. */ })
-    }
+    const load = () => { readAgentProgress(profile, statusFile).then((lines) => { if (!cancelled) setProgress(lines) }) }
     load()
     const timer = active ? window.setInterval(load, 5000) : undefined
     return () => {
       cancelled = true
-      controller?.abort()
       if (timer !== undefined) window.clearInterval(timer)
     }
-  }, [entry.id, profile, statusFile, active])
+  }, [entry.id, profile, statusFile, readable, active, open])
   return progress
 }
 
@@ -84,7 +97,7 @@ export function EntryType({ entry }: { entry: SubagentEntry }) {
 export function EntryNow({ entry, progress = [] }: { entry: SubagentEntry; progress?: string[] }) {
   const { t } = useTranslation()
   if (!isEntryActive(entry)) return null
-  const text = progress.at(-1)
+  const text = currentAgentProgress(progress)
     || (entry.live?.lastTool ? t('subagents.lastTool', { tool: toolLabel(entry.live.lastTool) }) : '')
     || (entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
   if (!text) return null
@@ -185,7 +198,7 @@ export function SubagentsPanel({ entries, profile, processes, onLoadTail, onOpen
 function SubagentItem({ entry, profile, now, open, onOpen, onLoadTail, onOpenDocument }: { entry: SubagentEntry; profile: string; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail']; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   const [tail, setTail] = useState<TailState | null>(null)
-  const progress = useAgentProgress(entry, profile)
+  const progress = useAgentProgress(entry, profile, open)
   const duration = entryDuration(entry, now)
   const live = entry.live
   const active = isEntryActive(entry)
