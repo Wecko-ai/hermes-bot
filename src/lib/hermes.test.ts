@@ -77,6 +77,16 @@ describe('messages de la gateway', () => {
     expect(bots[0].preview).toBe('')
   })
 
+  it('retire un marqueur de silence ajouté à l’aperçu d’une vraie réponse', async () => {
+    const request = vi.fn().mockResolvedValue({ profiles: [{
+      name: 'orion',
+      ui_meta: { 'hermes-bots': { title: 'Orion' } },
+      canonical_session: { id: 'chat', last_active: 1_000, preview: 'Passe horaire terminée.\n\n[SILENT]' },
+    }] })
+    const { bots } = await loadRoster({ request } as unknown as HermesClient)
+    expect(bots[0].preview).toBe('Passe horaire terminée.')
+  })
+
   it('ne met pas la phrase de lancement d’un bot créé ici en aperçu, entière ou coupée', async () => {
     for (const preview of [BOT_KICKOFF_TEXT, `${BOT_KICKOFF_TEXT.slice(0, 40)}...`]) {
       const request = vi.fn().mockResolvedValue({ profiles: [{ name: 'lyra', ui_meta: {}, canonical_session: { id: 'chat', last_active: 1_000, preview } }] })
@@ -93,6 +103,20 @@ describe('messages de la gateway', () => {
     ] } : {})
     const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'lyra', 'chat-lyra')
     expect(messages.map((message) => [message.role, Boolean(message.technical)])).toEqual([['user', true], ['assistant', false], ['user', false]])
+  })
+
+  it('retire les consignes du tour, la reprise après compaction et les marqueurs de silence du fil', async () => {
+    const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, messages: [
+      { row_id: 1, role: 'user', content: '[STILL IN PROGRESS — this is the active request, restated after the compaction boundary.]\nPrépare deux couvertures.\n\n[HermesBot style: caveman. For this turn only, answer first.]\n\n[HermesBot mode: EXEC. For this turn only, work.]', timestamp: 1_000 },
+      { row_id: 2, role: 'assistant', content: 'Passe horaire terminée.\n\n[SILENT]', timestamp: 2_000 },
+      { row_id: 3, role: 'assistant', content: '[SILENT]', timestamp: 3_000 },
+    ] } : {})
+    const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'orion', 'chat-orion')
+    expect(messages.map((message) => [message.content, Boolean(message.technical)])).toEqual([
+      ['Prépare deux couvertures.', false],
+      ['Passe horaire terminée.', false],
+      ['[SILENT]', true],
+    ])
   })
 
   it('garde le prompt de chaque sous-agent d’un appel delegate_task, en activité seulement', async () => {

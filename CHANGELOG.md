@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- The thread and roster hide per-turn HermesBot instructions and compaction prefixes from your messages, and remove `[SILENT]` markers appended to real bot replies. Pure silence remains available under Activity.
 - Coding agents started headless from a bot's terminal (`claude -p`, `codex exec`, `gemini -p`, `opencode run`, `aider -m`…) appear with the subagents, live and in the history: prompt or prompt file, folder, last output line, exit code, and their log, which opens as plain text in a tab (`.txt` and `.log` documents). Their command line is never shown.
 - Notifications only when a bot talks to you: a turn started by another bot's message, or one that ends in silence (`NOREPLY`, `[SILENT]`), no longer notifies. Questions and approvals still do.
 - Subagents: the block in the chat shows only the children still running (a finished one leaves after a few seconds), each with a short title, its prompt and the tool in use. A new Subagents tab in the details panel keeps the history of the conversation's children: status, time, model, whole prompt with its context, and the full result rendered as Markdown, read from the `delegate_task` calls and the gateway's completion messages.

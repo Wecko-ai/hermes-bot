@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
-import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, type ActiveChat, type PendingPrompt } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
@@ -281,10 +281,11 @@ export default function App() {
       if (event.type === 'message.complete' && event.session_id && !isCurrent) {
         const owner = useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)
         const finalText = typeof payload.text === 'string' ? payload.text : ''
+        const visibleText = withoutSilentMarkers(finalText)
         if (owner && owner.slug !== useRosterStore.getState().selected) {
-          const meaningful = finalText.trim() && !isSilentMessage(finalText)
+          const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
           appendCachedMessage(owner.slug, {
-            id: `background-${Date.now()}`, role: meaningful ? 'assistant' : 'system', content: finalText || '[NO_REPLY]', createdAt: new Date().toISOString(), technical: !meaningful,
+            id: `background-${Date.now()}`, role: meaningful ? 'assistant' : 'system', content: meaningful ? visibleText : finalText || '[NO_REPLY]', createdAt: new Date().toISOString(), technical: !meaningful,
           })
           updateCachedChat(owner.slug, { running: false })
           markDone(owner.slug)
@@ -293,7 +294,7 @@ export default function App() {
           if (meaningful) setBots((items) => items.map((bot) => bot.slug === owner.slug ? {
             ...bot,
             unread: bot.unread + (owner.workerActive ? 0 : 1),
-            preview: finalText,
+            preview: visibleText,
             timestamp: finishedAt,
             seenAt: owner.workerActive ? bot.seenAt : finishedAt,
             status: owner.workerActive ? 'working' : 'done',
@@ -332,11 +333,13 @@ export default function App() {
         const finalUsage = parseUsage(payload.usage)
         if (finalUsage) setUsage((value) => mergeUsage(value, finalUsage))
         const finalText = typeof payload.text === 'string' && payload.text.trim() ? payload.text : useChatStore.getState().streaming
-        if (finalText.trim() && !isSilentMessage(finalText)) {
+        const visibleText = withoutSilentMarkers(finalText)
+        const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
+        if (meaningful) {
           const message: ChatMessage = {
             id: useChatStore.getState().streamKey || `live-${Date.now()}`,
             role: 'assistant',
-            content: finalText,
+            content: visibleText,
             createdAt: new Date().toISOString(),
             failed: status === 'error',
           }
@@ -345,9 +348,9 @@ export default function App() {
           updateCachedChat(current.profile, { running: false })
           // No status here: markDone below sets it. An “idle” in between would hide the end of the turn
           // from the notifications, which only see a working bot become “done”.
-          updateBot(current.profile, { preview: finalText, timestamp: message.createdAt })
+          updateBot(current.profile, { preview: visibleText, timestamp: message.createdAt })
         }
-        if (isSilentMessage(finalText)) {
+        if (finalText.trim() && !meaningful) {
           const message: ChatMessage = { id: `silent-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true }
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)

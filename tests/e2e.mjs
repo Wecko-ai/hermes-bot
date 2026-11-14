@@ -440,6 +440,8 @@ wss.on('connection', (socket) => {
             },
             { row_id: 135, role: 'user', display_kind: 'steer', content: '[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nMessage glissé pendant le tour\n[/OUT-OF-BAND USER MESSAGE]', timestamp: Date.now() - 42_000 },
             { row_id: 34, role: 'assistant', content: 'NOREPLY', timestamp: Date.now() - 40_000 },
+            { row_id: 140, role: 'user', content: '[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nPrépare deux couvertures cohérentes.\n\n[HermesBot style: caveman. For this turn only, answer first.]', timestamp: Date.now() - 39_500 },
+            { row_id: 141, role: 'assistant', content: 'Passe horaire terminée, 13 commentaires en attente.\n\n[SILENT]', timestamp: Date.now() - 39_250 },
             {
               row_id: 35, role: 'assistant', timestamp: Date.now() - 39_000, content: [
                 'Voici les images à valider :',
@@ -632,6 +634,11 @@ wss.on('connection', (socket) => {
         at(80, 'message.delta', { turn_id: 'turn-silence', text: 'NO' })
         at(300, 'message.delta', { turn_id: 'turn-silence', text: 'REPLY' })
         at(900, 'message.complete', { turn_id: 'turn-silence', text: 'NOREPLY', status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test silence mixte') {
+        at(30, 'message.start', { turn_id: 'turn-silence-mixte' })
+        at(300, 'message.complete', { turn_id: 'turn-silence-mixte', text: 'Rapport terminé, rien à corriger.\n\n[SILENT]', status: 'complete' })
         return
       }
       setTimeout(() => send(socket, event(sessionId, 'message.start', { turn_id: 'turn-test' })), 30)
@@ -889,6 +896,10 @@ try {
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor()
   if (await page.locator('.messages-scroll').getByText('NOREPLY').count()) throw new Error('NOREPLY est visible dans le chat.')
+  await page.locator('.messages-scroll').getByText('Prépare deux couvertures cohérentes.').waitFor()
+  await page.locator('.messages-scroll').getByText('Passe horaire terminée, 13 commentaires en attente.').waitFor()
+  const technicalText = await page.locator('.messages-scroll').innerText()
+  if (/STILL IN PROGRESS|HermesBot (?:style|mode):|\[SILENT\]/.test(technicalText)) throw new Error('Une consigne ou un marqueur technique est visible dans le chat.')
   for (const hidden of ['Background process', 'Délégation terminée', 'demande entre bots', 'OUT-OF-BAND']) {
     if (await page.locator('.messages-scroll').getByText(hidden).count()) throw new Error(`« ${hidden} » est visible dans le chat.`)
   }
@@ -1885,6 +1896,14 @@ try {
     await delay(60)
   }
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
+
+  // A real report ending in [SILENT] keeps its text, never the marker, live and in the roster.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test silence mixte')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await page.locator('.message-assistant').getByText('Rapport terminé, rien à corriger.').waitFor({ timeout: 3_000 })
+  if (await page.locator('.messages-scroll').getByText('[SILENT]').count()) throw new Error('Un [SILENT] ajouté à une réponse est visible dans le chat.')
+  await page.locator('[data-bot=orion] .bot-row-preview').getByText('Rapport terminé, rien à corriger.').waitFor()
+  if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('[SILENT]').count()) throw new Error('Un [SILENT] ajouté à une réponse est visible dans le roster.')
 
   // /api/media over HTTP: session required, extensions and paths filtered, exact Range, strict headers.
   const sessionCookie = (await page.context().cookies('http://127.0.0.1:4332')).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')

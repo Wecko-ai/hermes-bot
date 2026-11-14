@@ -49,7 +49,10 @@ export class HermesRpcError extends Error {
 
 const asObject = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {})
 const SILENT_MESSAGES = new Set(['SILENT', '[SILENT]', 'NOREPLY', '[NOREPLY]', 'NO_REPLY', '[NO_REPLY]', 'NO RESPONSE', '[NO RESPONSE]'])
+const SILENT_MARKER_LINE = /^[ \t]*\[(?:SILENT|NOREPLY|NO_REPLY|NO RESPONSE)\][ \t]*$/gim
 export const isSilentMessage = (content: string) => SILENT_MESSAGES.has(content.trim().toUpperCase())
+/** A report ending in `[SILENT]` keeps its report; only the marker leaves the visible thread. */
+export const withoutSilentMarkers = (content: string) => content.replace(SILENT_MARKER_LINE, '').trim()
 /** While streaming: true as long as the text can still turn into `NOREPLY`, `[SILENT]`… */
 export const mayBecomeSilent = (content: string) => {
   const text = content.trim().toUpperCase()
@@ -77,8 +80,13 @@ const isoDate = (value: unknown): string | null => {
   return new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric).toISOString()
 }
 
-/** What the user wrote, without the mentions note or the `@file:` references added for the bot. */
+/** What the user wrote, without the app-only notes added for the bot or a compaction prefix. */
+const COMPACTION_REQUEST = /^(?:\[STILL IN PROGRESS\b[^\]]*\]\s*)+/
+const TURN_INSTRUCTION = /\n?[ \t]*\[HermesBot (?:mode|style):[^\]]*\][ \t]*(?=\n|$)/g
 const cleanUserText = (text: string) => withoutFileRefs(withoutMentionNote(splitUserImages(text).text))
+  .replace(COMPACTION_REQUEST, '')
+  .replace(TURN_INSTRUCTION, '')
+  .trim()
 
 function textContent(message: Json): string {
   for (const candidate of [message.text, message.content, message.display_text]) {
@@ -126,9 +134,10 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   if (!text) return agents
   const role = ['user', 'assistant', 'system', 'tool'].includes(rawRole) ? rawRole as ChatMessage['role'] : 'system'
   const sent = role === 'user' ? splitUserImages(text.replace(STEER_WRAPPER, '$1')) : { text, images: [] }
-  const content = role === 'user' ? cleanUserText(sent.text) : text
+  const silent = isSilentMessage(text)
+  // A silence on its own stays in Activity; one appended to a real reply leaves only that reply.
+  const content = silent ? text : role === 'user' ? cleanUserText(sent.text) : withoutSilentMarkers(text)
   if (!content && !sent.images.length) return agents
-  const silent = isSilentMessage(content)
   const fromGateway = role === 'user' && isGatewayMessage(content, asString(message.display_kind))
   // The first turn of a bot created here: Activity only, never a bubble of the user.
   const kickoff = role === 'user' && isKickoffMessage(content)
@@ -495,7 +504,7 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
       preview: (() => {
         const preview = asString(canonical.preview, i18n.t('hermes.noMessage'))
         // Hermes previews the first user message: for a bot created here, the kickoff sentence.
-        return isSilentMessage(preview) || isGatewayMessage(preview) || isKickoffPreview(preview) ? '' : cleanUserText(preview)
+        return isSilentMessage(preview) || isGatewayMessage(preview) || isKickoffPreview(preview) ? '' : cleanUserText(withoutSilentMarkers(preview))
       })(),
       timestamp: isoDate(canonical.last_active ?? canonical.started_at),
       // The Bot Chat does not move during a background task: worker_session and last_session fill in.
