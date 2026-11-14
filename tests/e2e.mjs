@@ -2558,7 +2558,9 @@ try {
   // Password changed: credentials forgotten, back to the screen, then the same bot resumes.
   expiredBefore = cookieCounter
   loginRefused = true
-  await refresh.click()
+  // This refusal replaces the roster with the login screen. Dispatch the click directly: waiting for the
+  // button to stay attached races the expected navigation, especially on the hosted CI runner.
+  await refresh.evaluate((button) => button.click())
   await page.locator('.login-card').waitFor({ timeout: 5_000 })
   await page.getByText('Identifiants enregistrés refusés').waitFor({ timeout: 2_000 })
   if (existsSync(SAVED_LOGIN_FILE)) throw new Error('Des identifiants refusés doivent être oubliés.')
