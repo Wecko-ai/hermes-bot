@@ -295,6 +295,58 @@ const newBotHistory = {}
 const NEW_BOT_REPLY = 'Bonjour, je suis Léa Martin, ton nouveau bot. Quel rôle veux-tu me confier ? Dis-moi ce dont je dois m’occuper.'
 const modelMutations = []
 const routeChecks = []
+// Native hosted rooms: durable logs, live member activity and idempotent client identifiers.
+const hostedRooms = []
+const roomCalls = []
+const roomSendCalls = []
+const roomStopCalls = []
+
+function roomById(roomId) {
+  const room = hostedRooms.find((item) => item.room_id === roomId)
+  if (!room) throw new Error(`unknown room ${roomId}`)
+  return room
+}
+
+function publicRoom(room) {
+  return {
+    room_id: room.room_id, name: room.name, members: room.members,
+    authority_gateway_id: room.authority_gateway_id, authority_epoch: room.authority_epoch,
+    revision: room.revision, created_at: room.created_at, updated_at: room.updated_at,
+    latest_seq: room.events.at(-1)?.seq || 0,
+  }
+}
+
+function roomState(room) {
+  return {
+    room: publicRoom(room),
+    driver_status: { running: true, working: room.activity.length > 0, blocked: false, counts: {}, pending_actions: [], member_activity: room.activity, max_rounds: 3, max_continues: 5, routing_modes: ['everyone'], peer_routes: [] },
+    context: { purpose: '', notes: '', routing: 'everyone' },
+  }
+}
+
+function pushRoomEvent(room, kind, actor, payload) {
+  const seq = (room.events.at(-1)?.seq || 0) + 1
+  const event = { room_id: room.room_id, seq, event_id: `${kind}-${room.room_id}-${seq}`, kind, actor, authority_epoch: 1, payload, created_at: Math.floor(Date.now() / 1000) }
+  room.events.push(event)
+  room.updated_at = event.created_at
+  return event
+}
+
+function scheduleRoomReplies(room) {
+  const [first, second] = room.members
+  room.activity = [{ member_id: first.member_id, status: 'running', round_index: 0, thread_id: room.threadId, started_at: Math.floor(Date.now() / 1000) }]
+  room.timers.push(setTimeout(() => {
+    room.activity = [{ member_id: second.member_id, status: 'running', round_index: 1, thread_id: room.threadId, started_at: Math.floor(Date.now() / 1000) }]
+    pushRoomEvent(room, 'message.member', { kind: 'member', id: first.member_id, profile: first.profile, display_name: first.display_name }, { member_id: first.member_id, round_index: 0, thread_id: room.threadId, text: `Je prends le premier point. @${second.handle} peux-tu vérifier la suite ?\n\nMEDIA:/Users/test/visuels/slide-02.png` })
+  }, 1200))
+  room.timers.push(setTimeout(() => {
+    room.activity = []
+    pushRoomEvent(room, 'message.member', { kind: 'member', id: second.member_id, profile: second.profile, display_name: second.display_name }, { member_id: second.member_id, round_index: 1, thread_id: room.threadId, text: 'Vérification terminée. Le plan est prêt.' })
+  }, 2400))
+  room.timers.push(setTimeout(() => {
+    pushRoomEvent(room, 'room.activity', { kind: 'driver', id: 'test' }, { status: 'settled', reason_code: 'silent_round', thread_id: room.threadId })
+  }, 3000))
+}
 
 const profiles = [{
   name: 'nova', model: 'claude-opus-5-5', description: 'Coordinateur',
@@ -387,6 +439,59 @@ wss.on('connection', (socket) => {
       // No card and no Bot Chat yet: Hermes creates the profile only.
       profiles.splice(profiles.findIndex((item) => item.is_default), 0, { name, model: 'claude-opus-5-5', description: '', canonical_session: null, ui_meta: {}, ui_meta_revisions: {} })
       return reply({ ok: true, name, path: `/x/profiles/${name}`, soul_written: true, model_set: false, mirrored: { env: true, auth: 'shared', model_inherited: true, voice: false } })
+    }
+    if (frame.method.startsWith('groups.')) {
+      roomCalls.push({ method: frame.method, params: structuredClone(frame.params) })
+      if (frame.method === 'groups.capabilities') {
+        return reply({ protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'test', room_link: { enabled: false }, features: [], methods: ['groups.capabilities', 'groups.list', 'groups.state', 'groups.log', 'groups.create', 'groups.send', 'groups.stop'], max_log_limit: 100, seatable_profiles: ['nova', 'orion', 'atlas'] })
+      }
+      if (frame.method === 'groups.list') {
+        const offset = frame.params.offset || 0
+        const limit = frame.params.limit || 100
+        const rooms = hostedRooms.slice(offset, offset + limit).map(publicRoom)
+        return reply({ rooms, next_offset: offset + limit < hostedRooms.length ? offset + limit : null })
+      }
+      if (frame.method === 'groups.create') {
+        const now = Math.floor(Date.now() / 1000)
+        const room = { room_id: frame.params.room_id, name: frame.params.name, members: frame.params.members, authority_gateway_id: 'test', authority_epoch: 1, revision: 1, created_at: now, updated_at: now, events: [], activity: [], timers: [], sent: new Map(), attempts: new Set(), stopIds: new Set(), threadId: '' }
+        hostedRooms.unshift(room)
+        return reply({ room: publicRoom(room) })
+      }
+      const room = roomById(frame.params.room_id)
+      if (frame.method === 'groups.state') return reply(roomState(room))
+      if (frame.method === 'groups.log') {
+        const since = frame.params.since_seq || 0
+        const limit = frame.params.limit || 100
+        const matching = room.events.filter((event) => event.seq > since)
+        const events = matching.slice(0, limit)
+        return reply({ events, cursor: events.at(-1)?.seq || since, latest_seq: room.events.at(-1)?.seq || 0, has_more: matching.length > events.length, authority: { gateway_id: 'test', epoch: 1 } })
+      }
+      if (frame.method === 'groups.send') {
+        const eventId = frame.params.event_id
+        const content = String(frame.params.payload?.text || '')
+        roomSendCalls.push(structuredClone(frame.params))
+        if (room.sent.has(eventId)) return reply({ event: room.sent.get(eventId), client_event_id: eventId, accepted: true, driver_started: true })
+        if (content === 'Refus salon') return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4001, message: 'not_admitted', data: { admitted: false } } })
+        if (content === 'Réessayer salon' && !room.attempts.has(eventId)) {
+          room.attempts.add(eventId)
+          return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 5000, message: 'reply_lost', data: {} } })
+        }
+        room.threadId = frame.params.payload.thread_id
+        const event = pushRoomEvent(room, 'message.user', { kind: 'user', id: 'desktop' }, { text: content, thread_id: room.threadId, attachments: [] })
+        room.sent.set(eventId, event)
+        scheduleRoomReplies(room)
+        return reply({ event, client_event_id: eventId, accepted: true, driver_started: true })
+      }
+      if (frame.method === 'groups.stop') {
+        roomStopCalls.push(structuredClone(frame.params))
+        if (room.stopIds.has(frame.params.cancel_id)) return reply({ cancelled: 0 })
+        room.stopIds.add(frame.params.cancel_id)
+        room.timers.forEach(clearTimeout)
+        room.timers = []
+        room.activity = []
+        pushRoomEvent(room, 'room.stopped', { kind: 'driver', id: 'test' }, {})
+        return reply({ cancelled: 2 })
+      }
     }
     if (frame.method === 'session.list') {
       const profile = profiles.find((item) => item.name === frame.params.profile)
@@ -906,6 +1011,61 @@ try {
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
   // The right-hand panel stays closed after login and after switching bots; only its toggle opens it.
   if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après la connexion.')
+  await page.locator('[data-bot=orion]').click()
+
+  // Hosted rooms: 2–6 bots, one user message, separate member replies and mentions, no Bot Chat fan-out.
+  const promptsBeforeRoom = promptCalls
+  await page.getByRole('button', { name: 'Nouveau salon', exact: true }).click()
+  const newRoom = page.getByRole('dialog', { name: 'Nouveau salon' })
+  await newRoom.getByRole('textbox', { name: 'Nom du salon' }).fill('Équipe produit')
+  await newRoom.getByRole('checkbox', { name: /Nova/ }).check()
+  await newRoom.getByRole('checkbox', { name: /Orion/ }).check()
+  await newRoom.getByRole('button', { name: 'Créer le salon' }).click()
+  await newRoom.waitFor({ state: 'detached', timeout: 5_000 })
+  const roomPanel = page.locator('.room-panel')
+  await roomPanel.locator('h1').getByText('Équipe produit').waitFor({ timeout: 5_000 })
+  if (promptCalls !== promptsBeforeRoom) throw new Error('La création du salon a lancé un tour de bot.')
+  const roomId = await page.locator('.room-row.is-selected').getAttribute('data-room')
+  if (!roomId) throw new Error('Le salon créé est absent du roster.')
+  const roomBox = page.getByRole('textbox', { name: 'Message au salon' })
+  await roomBox.fill('Plan salon')
+  await roomBox.press('Enter')
+  await roomPanel.locator('.room-user-message').getByText('Plan salon').waitFor({ timeout: 5_000 })
+  await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
+  const mediaBeforeRoom = mediaRequests.length
+  await roomPanel.locator('.room-member-message').getByText('Je prends le premier point.').waitFor({ timeout: 8_000 })
+  await roomPanel.locator('.room-member-message').getByText('Vérification terminée.').waitFor({ timeout: 8_000 })
+  await roomPanel.locator('.room-notice.is-settled').waitFor({ timeout: 8_000 })
+  if (await roomPanel.locator('.room-member-message').count() !== 2) throw new Error('Les deux bots doivent avoir leurs propres messages dans le salon.')
+  await roomPanel.locator('.room-member-message .mention-chip').first().waitFor()
+  if (await roomPanel.locator('.room-member-message .media-embed').count() || mediaRequests.length !== mediaBeforeRoom) throw new Error('Un MEDIA: de salon a été chargé comme un média de Bot Chat.')
+  await page.screenshot({ path: `${SCREENSHOTS}room-conversation.png` })
+
+  // An indeterminate answer keeps the exact event and thread IDs; the second attempt commits once.
+  await roomBox.fill('Réessayer salon')
+  await roomBox.press('Enter')
+  await roomPanel.locator('.room-pending').waitFor({ timeout: 5_000 })
+  await roomPanel.locator('.room-pending').click()
+  await roomPanel.locator('.room-pending').waitFor({ state: 'detached', timeout: 5_000 })
+  const retryCalls = roomSendCalls.filter((params) => params.payload.text === 'Réessayer salon')
+  if (retryCalls.length !== 2 || retryCalls[0].event_id !== retryCalls[1].event_id || retryCalls[0].payload.thread_id !== retryCalls[1].payload.thread_id) throw new Error(`Identifiants du retry de salon : ${JSON.stringify(retryCalls)}`)
+  await roomPanel.locator('.room-notice.is-settled').last().waitFor({ timeout: 8_000 })
+
+  // A pre-commit refusal returns the words to the composer without a pending retry.
+  await roomBox.fill('Refus salon')
+  await roomBox.press('Enter')
+  await roomPanel.locator('.room-error').getByText('Hermes n’a pas publié le message.').waitFor({ timeout: 5_000 })
+  if (await roomPanel.locator('.room-pending').count()) throw new Error('Un refus avant publication laisse un retry incertain.')
+  if (await roomBox.isDisabled() || await roomBox.inputValue() !== 'Refus salon') throw new Error('Le texte refusé doit rester modifiable.')
+
+  // Stop uses the native room method and leaves a visible notice.
+  await roomBox.fill('Arrêter salon')
+  await roomBox.press('Enter')
+  await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
+  await page.getByRole('button', { name: 'Arrêter le salon', exact: true }).click()
+  await roomPanel.locator('.room-notice.is-stopped').waitFor({ timeout: 5_000 })
+  if (roomStopCalls.length !== 1 || !roomStopCalls[0].cancel_id) throw new Error('Stop du salon non reçu.')
+  if (promptCalls !== promptsBeforeRoom) throw new Error('Le salon est passé par prompt.submit au lieu de groups.send.')
   await page.locator('[data-bot=orion]').click()
   await page.getByRole('textbox', { name: 'Message à Orion' }).waitFor({ timeout: 5_000 })
   if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après un changement de bot.')
@@ -2415,7 +2575,7 @@ try {
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
   if (await rosterOrder() !== 'nova,orion') throw new Error(`Ordre par groupes : ${await rosterOrder()}`)
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
-  await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.bot-section:not(.room-section) .section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
   if (await rosterOrder() !== 'orion,nova') throw new Error(`Ordre par activité : ${await rosterOrder()}`)
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
   await page.locator('.section-heading').first().waitFor({ timeout: 3_000 })
@@ -2507,7 +2667,7 @@ try {
   // Pin: a "Pinned" group at the top, in both sorts, kept after a reload, with no copy below; nothing goes to Hermes.
   configureCalls.length = 0
   const pinnedGroup = page.locator('.bot-section.is-pinned')
-  const firstHeading = () => page.locator('.section-heading span').first().textContent()
+  const firstHeading = () => page.locator('.bot-section:not(.room-section) .section-heading span').first().textContent()
   await openAtlasMenu()
   await menuItem('Épingler').click()
   await pinnedGroup.locator('[data-bot=atlas]').waitFor({ timeout: 3_000 })
@@ -2517,7 +2677,7 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await pinnedGroup.locator('[data-bot=atlas]').waitFor({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
-  await page.waitForFunction(() => document.querySelectorAll('.section-heading').length === 1, null, { timeout: 3_000 })
+  await page.waitForFunction(() => document.querySelectorAll('.bot-section:not(.room-section) .section-heading').length === 1, null, { timeout: 3_000 })
   if (await firstHeading() !== 'Épinglés' || await pinnedGroup.locator('[data-bot]').count() !== 1) throw new Error('Le groupe épinglé manque dans le classement par activité.')
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
   await page.locator('.section-heading', { hasText: 'Direction' }).waitFor({ timeout: 3_000 })
@@ -2990,7 +3150,7 @@ try {
   await delay(900)
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-light.png` })
   await page.getByRole('button', { name: 'Activité', exact: true }).click()
-  await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.bot-section:not(.room-section) .section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}demo-activity.png` })
   // English interface: same demo, English system.
@@ -3018,6 +3178,18 @@ try {
   await english.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
   await delay(900)
   await english.screenshot({ path: `${SCREENSHOTS}demo-english.png` })
+  await english.goto('http://127.0.0.1:4332/?demo=1&room=1', { waitUntil: 'domcontentloaded' })
+  await english.locator('.room-panel h1').getByText('Launch room').waitFor({ timeout: 5_000 })
+  if (await english.locator('.room-member-message').count() !== 4) throw new Error('La démo du salon doit montrer quatre voix distinctes.')
+  await english.getByRole('button', { name: 'Replay the live demo' }).click()
+  await english.locator('.room-member-message').getByText('All 128 checks pass.').waitFor({ timeout: 8_000 })
+  await english.locator('.room-working-row').waitFor({ timeout: 3_000 })
+  await english.screenshot({ path: `${SCREENSHOTS}room-demo-live.png` })
+  await english.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await delay(200)
+  await english.screenshot({ path: `${SCREENSHOTS}room-demo-live-dark.png` })
+  await english.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+  await english.locator('.room-notice.is-settled').waitFor({ timeout: 10_000 })
   await english.close()
   if (await page.locator('.sidebar-filter-row').evaluate((row) => row.scrollWidth > row.clientWidth)) throw new Error('La ligne de filtres déborde de la sidebar.')
   await page.getByRole('button', { name: 'Groupes', exact: true }).click()
@@ -3025,6 +3197,24 @@ try {
   await delay(700)
   await page.screenshot({ path: `${SCREENSHOTS}demo-glass-dark.png` })
   await chooseThemeInSettings('Clair')
+  // Demo room: replayable local playback and mention targeting, with no gateway or model call.
+  const roomCallsBeforeDemo = roomCalls.length
+  await page.goto('http://127.0.0.1:4332/?demo=1&room=1', { waitUntil: 'domcontentloaded' })
+  await page.locator('.room-panel h1').getByText('Salon de lancement').waitFor({ timeout: 5_000 })
+  await page.getByRole('button', { name: 'Rejouer la démo en direct' }).click()
+  await page.locator('.room-member-message').getByText('Les 128 vérifications passent.').waitFor({ timeout: 8_000 })
+  await page.locator('.room-notice.is-settled').waitFor({ timeout: 10_000 })
+  const demoRoomBox = page.getByRole('textbox', { name: 'Message au salon' })
+  await demoRoomBox.fill('@Nova')
+  await page.locator('.room-mention-menu').getByText('Nova', { exact: true }).waitFor({ timeout: 3_000 })
+  await demoRoomBox.press('Enter')
+  await demoRoomBox.pressSequentially('Prépare le plan')
+  await page.locator('.room-routing').getByText('Seuls Nova seront sollicités').waitFor()
+  await demoRoomBox.press('Enter')
+  await page.locator('.room-user-message').getByText('@nova Prépare le plan').waitFor({ timeout: 5_000 })
+  await page.locator('.room-notice.is-settled').waitFor({ timeout: 10_000 })
+  if (roomCalls.length !== roomCallsBeforeDemo) throw new Error('La démo du salon a appelé la gateway.')
+  await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
   // Demo: the bot menu works without a gateway. Pin stays local, the other actions only change the roster on screen.
   const configureBeforeDemo = configureCalls.length
   const demoRow = page.locator('[data-bot=vega]')

@@ -1,0 +1,28 @@
+{
+  "newRoom": {
+    "title": "Nouveau salon",
+    "intro": "Réunis quelques bots dans une même conversation.",
+    "nameLabel": "Nom du salon",
+    "namePlaceholder": "Équipe lancement, Recherche, Préparation voyage…",
+    "nameHint": "Obligatoire, 200 caractères maximum.",
+    "nameRequired": "Saisis un nom de salon.",
+    "botsLabel": "Bots",
+    "selectionHint": "Sélectionne 2 à 6 bots distincts. Les bots masqués ne sont pas affichés.",
+    "selectedCount_one": "{{count}} sur 6 sélectionné",
+    "selectedCount_other": "{{count}} sur 6 sélectionnés",
+    "searchLabel": "Rechercher des bots",
+    "searchPlaceholder": "Rechercher par nom ou rôle",
+    "clearSearch": "Effacer la recherche",
+    "noBots": "Aucun bot visible ne peut rejoindre un salon.",
+    "noResults": "Aucun bot ne correspond à cette recherche.",
+    "noRole": "Aucun rôle précisé",
+    "cancel": "Annuler",
+    "create": "Créer le salon",
+    "creating": "Création…",
+    "offline": "Hermes est déconnecté. Reconnecte-le, puis crée le salon.",
+    "createFailed": "Le salon n’a pas pu être créé. Réessaie.",
+    "invalidCount": "Sélectionne entre 2 et 6 bots.",
+    "duplicateHandles": "Ces bots n’ont pas des @identifiants uniques. Renomme l’un d’eux avant de créer le salon.",
+    "turnNote": "La création du salon ne lance elle-même aucun tour de modèle. Les bots ne démarrent qu’après ton premier message."
+  }
+}

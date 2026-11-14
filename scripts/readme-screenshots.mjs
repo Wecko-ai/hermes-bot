@@ -157,9 +157,18 @@ try {
       await page.getByText('Morning briefing').waitFor({ timeout: 3_000 })
       await settle(900)
     }],
+    ['ui-room', async () => {
+      await page.goto(`${BASE}/?demo=1&room=1`, { waitUntil: 'domcontentloaded' })
+      await page.locator('.room-panel h1').getByText('Launch room').waitFor({ timeout: 5_000 })
+      await page.getByRole('button', { name: 'Replay the live demo' }).click()
+      await page.locator('.room-member-message').getByText('All 128 checks pass.').waitFor({ timeout: 8_000 })
+      await page.locator('.room-working-row').waitFor({ timeout: 3_000 })
+      await settle(200)
+      return { targets: [page.locator('.room-panel')], pad: 0 }
+    }],
     ['ui-activity', async () => {
       await page.getByRole('button', { name: 'Activity', exact: true }).click()
-      await page.locator('.section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
+      await page.locator('.bot-section:not(.room-section) .section-heading').first().waitFor({ state: 'detached', timeout: 3_000 })
       await settle()
       // The roster column, top part only.
       return { targets: [page.locator('aside.sidebar')], pad: 8, maxHeight: 520 }

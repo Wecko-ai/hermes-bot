@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Multi-bot rooms hosted by Hermes: create a room with 2–6 bots, send to everyone or only mentioned bots, and watch each bot answer in its own named bubble with live member activity. Bots mention each other into follow-up rounds and the room settles itself. Native Stop, cursor-paginated history, authority resets, and exact-ID retry after an uncertain send. A fictional `?demo=1&room=1` room replays the exchange without network or model calls.
 - A unified, easier-to-scan Subagents design for delegated Hermes children and coding agents: type badges, a highlighted current-work line, and the agent's own `ETAT.md` progress (the last three completed steps and the current one) when its log lives in `work/`. `cck -p` is recognized too, including output redirected outside `zsh -ic`; the full progress file opens beside the chat.
 - Published X posts reported by a bot with their status link and exact text appear as X-style cards in the thread. The card is rendered locally, keeps links clickable and opens the original post on X; no remote X widget, avatar or resource is loaded.
 - Coding agents' prompt and log files written as relative paths now open from the Subagents panel: they are resolved against the agent's working folder, including `..` segments, instead of failing with "Preview unavailable".

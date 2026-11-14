@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, X } from 'lucide-react'
+import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
+import type { Room } from '../lib/rooms'
+import type { RoomSupport } from '../store/rooms'
 import { BotContextMenu } from './BotContextMenu'
 import { DeleteBotDialog, RenameBotDialog } from './BotDialogs'
 import { avatarColor, statusLabel } from './BotAvatar'
@@ -24,7 +26,12 @@ const SECTION_LABELS: Record<string, string> = { [UNASSIGNED_SECTION_NAME]: 'sid
 
 interface SidebarProps {
   bots: Bot[]
+  rooms: Room[]
   selected: string
+  selectedRoomId: string
+  roomSupport: RoomSupport
+  roomPreviews: Record<string, string>
+  roomWorking: Record<string, boolean>
   connected: boolean
   reconnecting: boolean
   onReconnect: () => void
@@ -33,8 +40,10 @@ interface SidebarProps {
   mobileOpen: boolean
   onCloseMobile: () => void
   onSelect: (bot: Bot) => void
+  onSelectRoom: (roomId: string) => void
   /** Opens the new bot dialog. */
   onNewBot: () => void
+  onNewRoom: () => void
   onOpenSettings: () => void
   /** Hermes answers (or the demo runs): the menu offers the actions that write to it. */
   canManage: boolean
@@ -43,7 +52,7 @@ interface SidebarProps {
   onNotice: (message: string) => void
 }
 
-export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onNewBot, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const { ui } = useAppConfig()
@@ -73,6 +82,16 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
     // Pinned bots first, then by activity a single list with no sections, or one group per section.
     return rosterGroups(visible, { pinned: pinnedBots, activitySort, compareSections: sectionOrder })
   }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort, sectionOrder, pinnedBots])
+  const visibleRooms = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase(locale())
+    return rooms.filter((room) => {
+      if (unreadOnly) return false
+      if (workingOnly && !roomWorking[room.room_id]) return false
+      if (!needle) return true
+      const members = room.members.map((member) => member.display_name || member.handle || member.member_id).join(' ')
+      return `${room.name} ${members}`.toLocaleLowerCase(locale()).includes(needle)
+    })
+  }, [rooms, search, unreadOnly, workingOnly, roomWorking])
 
   // Right-click menu and its two dialogs. Kept by slug: the row's bot changes with every roster read.
   const [menu, setMenu] = useState<{ slug: string; at: { x: number; y: number } } | null>(null)
@@ -169,6 +188,44 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
         </div>
 
         <nav className="bot-list" ref={listRef}>
+          <section className="bot-section room-section">
+            <div className="room-section-heading">
+              <button className="section-heading" onClick={() => toggleSection('__rooms')} aria-expanded={!collapsed.has('__rooms')}>
+                {collapsed.has('__rooms') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                <span>{t('room.rooms')}</span>
+                <span className="section-count">{visibleRooms.length}</span>
+              </button>
+              <button className="plain-icon room-add" aria-label={t('room.newRoom')} title={roomSupport === 'ready' ? t('room.newRoom') : t('room.unsupported')} disabled={!canManage || roomSupport !== 'ready'} onClick={onNewRoom}><Plus size={15} /></button>
+            </div>
+            {!collapsed.has('__rooms') && visibleRooms.map((room) => {
+              const working = Boolean(roomWorking[room.room_id])
+              const memberBots = room.members.slice(0, 2).map((member) => bots.find((bot) => bot.slug === (member.profile || member.member_id))).filter((bot): bot is Bot => Boolean(bot))
+              return (
+                <button
+                  className={`room-row ${working ? 'is-working' : ''} ${selectedRoomId === room.room_id ? 'is-selected' : ''}`}
+                  key={room.room_id}
+                  data-room={room.room_id}
+                  onClick={() => onSelectRoom(room.room_id)}
+                  aria-current={selectedRoomId === room.room_id ? 'page' : undefined}
+                >
+                  <span className="room-row-avatars" aria-hidden="true">
+                    {memberBots.length ? memberBots.map((bot) => <LiveAvatar key={bot.slug} bot={{ ...bot, status: working ? 'working' : 'idle' }} size={29} />) : <span className="room-row-icon"><UsersRound size={19} /></span>}
+                  </span>
+                  <span className="bot-row-copy">
+                    <span className="bot-row-line">
+                      <span className="bot-row-name">{room.name}</span>
+                      <span className="bot-row-time">{shortTime(new Date(room.updated_at * 1000).toISOString())}</span>
+                    </span>
+                    <span className="bot-row-line bot-row-preview-line">
+                      {working ? <span className="bot-row-status is-working">{t('room.talking', { count: 1 })}<span className="typing-dots" aria-hidden="true"><i /><i /><i /></span></span> : <span className="bot-row-preview">{cleanPreview(roomPreviews[room.room_id] || '') || t('room.memberCount', { count: room.members.length })}</span>}
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
+            {!collapsed.has('__rooms') && visibleRooms.length === 0 && roomSupport === 'ready' && <div className="room-empty-row">{t('room.noRooms')}</div>}
+            {!collapsed.has('__rooms') && (roomSupport === 'unsupported' || roomSupport === 'error') && <div className="room-support-note">{t(roomSupport === 'unsupported' ? 'room.unsupported' : 'room.loadFailed')}</div>}
+          </section>
           {groups.map(({ key, section, pinned, bots: sectionBots }) => (
             <section className={`bot-section${pinned ? ' is-pinned' : ''}`} key={key}>
               {(!activitySort || pinned) && (
@@ -215,7 +272,7 @@ export function Sidebar({ bots, selected, connected, reconnecting, onReconnect, 
               })}
             </section>
           ))}
-          {groups.length === 0 && (
+          {groups.length === 0 && visibleRooms.length === 0 && (
             <div className="sidebar-empty">
               <span>{t('sidebar.noBotFound')}</span>
               <button onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>{t('sidebar.resetFilters')}</button>

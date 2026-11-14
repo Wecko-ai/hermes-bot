@@ -1,5 +1,7 @@
 import type { Bot, ChatMessage, Routine } from '../types'
 import type { WorkSummary } from './work-summary'
+import { roomMembers, type Room, type RoomContext, type RoomDriverStatus, type RoomEvent } from './rooms'
+import { botMentionTag } from './mentions'
 
 // Fictional data for the visual demo (`?demo=1`). It follows the interface language; English is the reference.
 export type DemoLanguage = 'en' | 'fr'
@@ -60,6 +62,17 @@ const TEXTS = {
       answer: 'Visual demo mode: outside the demo, this chat talks to a model installed in Ollama.',
     },
     work: { task: 'Fix the reconnection bug', note: 'Unit tests pass, starting the full run.', step: 'Runs a command' },
+    room: {
+      name: 'Launch room',
+      purpose: 'Plan Friday’s release together.',
+      prompt: 'Ship the new release Friday. Build the plan together.',
+      replies: [
+        'The code is ready. @{{next}} can you confirm the release checks?',
+        'All 128 checks pass. @{{next}} can you own the release note?',
+        'Yes. I’ll publish Friday at 10:00. @{{next}} any budget constraint?',
+        'No new spend. Use the existing launch slot. We’re ready.',
+      ],
+    },
     context: { messages: 'Conversation', system: 'Instructions', tools: 'Tools' },
   },
   fr: {
@@ -115,6 +128,17 @@ const TEXTS = {
       answer: 'Mode démo visuelle : hors démo, ce chat parle à un modèle installé dans Ollama.',
     },
     work: { task: 'Corriger le bug de reconnexion', note: 'Les tests unitaires passent, je lance le parcours complet.', step: 'Lance une commande' },
+    room: {
+      name: 'Salon de lancement',
+      purpose: 'Préparer ensemble la sortie de vendredi.',
+      prompt: 'On sort la nouvelle version vendredi. Préparez le plan ensemble.',
+      replies: [
+        'Le code est prêt. @{{next}} peux-tu confirmer les vérifications de sortie ?',
+        'Les 128 vérifications passent. @{{next}} peux-tu prendre la note de version ?',
+        'Oui. Je publie vendredi à 10h00. @{{next}} une contrainte de budget ?',
+        'Aucune dépense nouvelle. Utilisez le créneau prévu. Nous sommes prêts.',
+      ],
+    },
     context: { messages: 'Conversation', system: 'Instructions', tools: 'Outils' },
   },
 } as const
@@ -136,6 +160,13 @@ const ROSTER: [BotSlug, string, SectionId, number, Partial<Bot>][] = [
   ['echo', 'Echo', 'travel', 33, {}],
 ]
 
+export interface DemoRoomData {
+  room: Room
+  events: RoomEvent[]
+  driver: RoomDriverStatus
+  context: RoomContext
+}
+
 export interface DemoData {
   bots: Bot[]
   /** The shared conversation: the open bot's when it has none of its own. */
@@ -147,6 +178,7 @@ export interface DemoData {
   usageDetails: ReturnType<typeof usageDetails>
   /** The local model chat: a fictional model, never called. */
   local: { model: string; messages: ChatMessage[]; answer: string }
+  room: DemoRoomData
 }
 
 /** The model shown by the local chat of the demo. */
@@ -182,6 +214,45 @@ const usageDetails = (labels: Record<'messages' | 'system' | 'tools', string>) =
     models: [{ model: 'claude-opus-5-5', tokens: 16_900_000, costUsd: 0 }, { model: 'k3.1-pro', tokens: 2_410_000, costUsd: 0 }],
   },
 })
+
+export function demoRoomDriver(memberActivity: RoomDriverStatus['member_activity'] = []): RoomDriverStatus {
+  return { running: true, working: Boolean(memberActivity?.length), blocked: false, counts: {}, pending_actions: [], member_activity: memberActivity, max_rounds: 3, max_continues: 5, routing_modes: ['everyone', 'lead', 'auto'], peer_routes: [] }
+}
+
+export function newDemoRoom(name: string, bots: Bot[], roomId = `demo-room-${Date.now()}`): Room {
+  const now = Math.floor(Date.now() / 1000)
+  return { room_id: roomId, name, members: roomMembers(bots), authority_gateway_id: 'demo', authority_epoch: 1, revision: 1, created_at: now, updated_at: now, latest_seq: 0 }
+}
+
+/** A scripted, local-only exchange: each reply addresses the next bot, then the room settles. */
+export function demoRoomEvents(room: Room, bots: Bot[], language: DemoLanguage): RoomEvent[] {
+  const texts = TEXTS[language] ?? TEXTS.en
+  const now = Math.floor(Date.now() / 1000)
+  const threadId = `demo-thread-${room.room_id}`
+  const userEventId = `demo-user-${room.room_id}-${Date.now()}`
+  const user: RoomEvent = {
+    room_id: room.room_id, seq: 1, event_id: userEventId, kind: 'message.user',
+    actor: { kind: 'user', id: 'desktop' }, authority_epoch: room.authority_epoch,
+    payload: { text: texts.room.prompt, thread_id: threadId, attachments: [] }, created_at: now - 300,
+  }
+  const replies = bots.slice(0, 4).map((bot, index): RoomEvent => {
+    const next = bots[(index + 1) % bots.length]
+    const template = texts.room.replies[index] || texts.room.replies[3]
+    const content = template.replace('{{next}}', botMentionTag(next))
+    return {
+      room_id: room.room_id, seq: index + 2, event_id: `demo-member-${room.room_id}-${index}-${Date.now()}`, kind: 'message.member',
+      actor: { kind: 'member', id: bot.slug, profile: bot.slug, display_name: bot.name }, authority_epoch: room.authority_epoch,
+      payload: { text: content, member_id: bot.slug, member_index: index, round_index: index, thread_id: threadId, discussion_event_id: userEventId },
+      created_at: now - 240 + index * 55,
+    }
+  })
+  const settled: RoomEvent = {
+    room_id: room.room_id, seq: replies.length + 2, event_id: `demo-settled-${room.room_id}-${Date.now()}`, kind: 'room.activity',
+    actor: { kind: 'driver', id: 'demo' }, authority_epoch: room.authority_epoch,
+    payload: { status: 'settled', reason_code: 'silent_round', thread_id: threadId, discussion_event_id: userEventId }, created_at: now,
+  }
+  return [user, ...replies, settled]
+}
 
 /** The demo dataset in one language. Section ids stay the same in every language, so a kept preference still applies. */
 export function demoData(language: DemoLanguage): DemoData {
@@ -234,6 +305,10 @@ export function demoData(language: DemoLanguage): DemoData {
   const local = texts.local.messages.map((content, index): ChatMessage => ({
     id: `demo-local-${index + 1}`, role: index % 2 ? 'assistant' : 'user', content, createdAt: ago(6 - index),
   }))
+  const roomBots = ['orion', 'iris', 'nova', 'sage'].map((slug) => bots.find((bot) => bot.slug === slug)!)
+  const room = newDemoRoom(texts.room.name, roomBots, 'demo-launch-room')
+  const roomEvents = demoRoomEvents(room, roomBots, language)
+  room.latest_seq = roomEvents.length
   return {
     bots,
     messages,
@@ -242,6 +317,12 @@ export function demoData(language: DemoLanguage): DemoData {
     work: { orion: { task: texts.work.task, done: 2, total: 5, note: texts.work.note, step: texts.work.step } },
     usageDetails: usageDetails(texts.context),
     local: { model: DEMO_LOCAL_MODEL, messages: local, answer: texts.local.answer },
+    room: {
+      room,
+      events: roomEvents,
+      driver: demoRoomDriver(),
+      context: { purpose: texts.room.purpose, notes: '', routing: 'everyone' },
+    },
   }
 }
 

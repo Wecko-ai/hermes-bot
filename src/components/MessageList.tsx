@@ -28,11 +28,12 @@ interface MediaContextValue {
   profile: string
   version: string
   streaming: boolean
+  botCards: boolean
   openImage: (media: MediaRef) => void
   openDocument?: (media: MediaRef) => void
 }
 
-interface MentionContextValue {
+export interface MentionContextValue {
   index: Map<string, string | null>
   bots: Map<string, Bot>
   onOpenBot: (slug: string) => void
@@ -41,7 +42,7 @@ interface MentionContextValue {
 // The Markdown components stay at module level: a new identity on every render would remount
 // the whole subtree, and a playing video would restart from zero while streaming.
 const MediaContext = createContext<MediaContextValue | null>(null)
-const MentionContext = createContext<MentionContextValue | null>(null)
+export const MentionContext = createContext<MentionContextValue | null>(null)
 const TweetContext = createContext<TweetMatch[]>([])
 
 function atTweet(tweets: TweetMatch[], offset: number | undefined): TweetMatch | undefined {
@@ -109,7 +110,7 @@ function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & Extra
   if (tweet) return <TweetCard tweet={tweet} />
   const code = node?.children[0]
   const language = code?.type === 'element' && code.tagName === 'code' && Array.isArray(code.properties?.className) ? String(code.properties.className[0]) : ''
-  if (code?.type === 'element' && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`)) {
+  if (context?.botCards !== false && code?.type === 'element' && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`)) {
     const source = code.children.map((child) => (child.type === 'text' ? child.value : '')).join('')
     return <MailBlock source={source} approvedBlock={language === `language-${MAIL_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} />
   }
@@ -130,6 +131,8 @@ interface MarkdownProps {
   /** Message id: versions the media URLs. */
   version: string
   streaming?: boolean
+  /** Bot Chat media and interactive cards. Room text sets this false: only text, mentions and web links remain. */
+  localMedia?: boolean
   /** Shows below the text the images, videos, sounds and PDFs the bot cites by path. */
   citedFiles?: boolean
   onOpenImages: OpenImages
@@ -163,29 +166,30 @@ function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpe
   )
 }
 
-export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
-  const tweets = useMemo(() => streaming ? [] : findTweets(source), [source, streaming])
+  const tweets = useMemo(() => localMedia && !streaming ? findTweets(source) : [], [source, streaming, localMedia])
   // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
   const mentionIndexValue = useContext(MentionContext)?.index
   const plugins = useMemo<NonNullable<Options['remarkPlugins']>>(() => [
     remarkGfm,
-    [remarkMedia, sink],
+    ...(localMedia ? [[remarkMedia, sink] as [typeof remarkMedia, MediaSink]] : []),
     ...(mentionIndexValue ? [[remarkMentions, { index: mentionIndexValue }] as [typeof remarkMentions, { index: Map<string, string | null> }]] : []),
-  ], [sink, mentionIndexValue])
+  ], [sink, mentionIndexValue, localMedia])
   const context = useMemo<MediaContextValue>(() => ({
     sink,
     profile,
     version,
     streaming,
+    botCards: localMedia,
     openImage: (item) => {
       // All the readable images of the message, in order: the viewer moves from one slide to the next.
       const images = sink.media.filter((entry) => entry === item || (entry.kind === 'image' && isServablePath(entry.path) && !mediaFailed(profile, entry)))
       onOpenImages(images, Math.max(0, images.indexOf(item)), version)
     },
     openDocument: onOpenDocument,
-  }), [sink, profile, version, streaming, onOpenImages, onOpenDocument])
+  }), [sink, profile, version, streaming, localMedia, onOpenImages, onOpenDocument])
   // While streaming, a path can be cut off: the files show once the message is complete.
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (

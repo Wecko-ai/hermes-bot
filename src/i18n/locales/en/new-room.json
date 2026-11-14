@@ -1,0 +1,28 @@
+{
+  "newRoom": {
+    "title": "New room",
+    "intro": "Bring a few bots together in one conversation.",
+    "nameLabel": "Room name",
+    "namePlaceholder": "Launch team, Research, Trip planning…",
+    "nameHint": "Required, up to 200 characters.",
+    "nameRequired": "Enter a room name.",
+    "botsLabel": "Bots",
+    "selectionHint": "Select 2 to 6 distinct bots. Hidden bots are not shown.",
+    "selectedCount_one": "{{count}} of 6 selected",
+    "selectedCount_other": "{{count}} of 6 selected",
+    "searchLabel": "Search bots",
+    "searchPlaceholder": "Search by name or role",
+    "clearSearch": "Clear search",
+    "noBots": "No visible bots can join a room.",
+    "noResults": "No bots match this search.",
+    "noRole": "No role specified",
+    "cancel": "Cancel",
+    "create": "Create room",
+    "creating": "Creating…",
+    "offline": "Hermes is disconnected. Reconnect it, then create the room.",
+    "createFailed": "The room could not be created. Try again.",
+    "invalidCount": "Select between 2 and 6 bots.",
+    "duplicateHandles": "These bots do not have unique @handles. Rename one bot before creating the room.",
+    "turnNote": "Creating a room itself starts no model turn. Bots run only after you send the first message."
+  }
+}

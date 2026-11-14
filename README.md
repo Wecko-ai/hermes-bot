@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/i18n-EN%20%C2%B7%20FR-000000?labelColor=555555" alt="interface in English and French" />
 </p>
 
-HermesBot is a macOS app that gives your whole team of [Hermes Agent](https://github.com/NousResearch/hermes-agent) bots one window. You see who is working, what each bot is doing and who is waiting for you, and you talk to each bot in its own chat. It is a client: your bots, their tools and their memory stay in Hermes, on your machine.
+HermesBot is a macOS app that gives your whole team of [Hermes Agent](https://github.com/NousResearch/hermes-agent) bots one window. You see who is working, what each bot is doing and who is waiting for you. Talk to each bot in its own chat, or put 2–6 bots in one room and watch them answer and mention each other. It is a client: your bots, their tools and their memory stay in Hermes, on your machine.
 
 **Yours, not rented.** A bot is a Hermes profile: its memory, skills and files live in a folder on your disk. Pick any model your Hermes is set up with (Claude, GPT, Gemini or a local model) for one conversation; the bot's profile is never rewritten. The app's server listens on `127.0.0.1` only and puts no cloud service between you and your gateway. MIT license, free, no account, no telemetry.
 
@@ -44,7 +44,7 @@ npm ci
 npm run dev
 ```
 
-Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and makes no network call.
+Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and makes no network call. Open http://127.0.0.1:4330/?demo=1&room=1 for the multi-bot room; **Replay the live demo** shows four bots handing off with mentions, then settling.
 
 ## One window
 
@@ -52,6 +52,13 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
   <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-overview-dark.png" />
   <img src="docs/readme/ui-overview-light.png" alt="HermesBot in demo mode: a roster of bots by group, a chat, and the routines of the open bot" />
 </picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-room-dark.png" />
+  <img src="docs/readme/ui-room-light.png" alt="A live HermesBot room: four bots answer in their own bubbles, mention the next bot, and show who is still working" />
+</picture>
+
+<b>One message. The whole team.</b> Create a room with 2–6 bots. Everyone answers when you name nobody; `@bot` selects only the bots you name. Each reply has its author, avatar and live status, and the room settles itself.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-palette-dark.png" />
@@ -123,6 +130,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 ## What it does
 
 - **Roster.** Bots by group, or one list with the most recent activity first. Unread counts, search, a command palette (⌘K). Right-click a bot to pin it, move it to a section, mark it as read, rename it, copy its conversation ID, hide it or delete it.
+- **Multi-bot rooms.** Put 2–6 existing bots in one Hermes-hosted room. Send to everyone, or mention only the bots you want to answer. Each bot speaks in its own named bubble; live member chips show who is queued, thinking or using a tool. Bots can pull each other into the next round with `@mentions`, and the room settles when nobody has more to add. Stop is available while the room works. Hermes owns the durable log and the turns, so the app never copies messages between Bot Chats or fans out prompts itself.
 - **New bot.** The "+" at the top of the roster creates a bot: a name, a colour and a shape. Its chat opens at once, and the bot introduces itself and asks what its role is.
 - **Live status.** A bot that works is marked "Working", with a one-line summary of its current task, built from its to-do list and tool calls without any model call. A bot that asks you something is marked "Waiting for your reply". A bot with no turn but with subagents or background processes still running is marked "Standing by", with a calm ring and no animation; hovering it says how many are left. The status is right even for a bot woken by another bot.
 - **Subagents.** In the chat, a "Subagents" block shows the children the bot is running with a type badge, a short title, the time spent and a highlighted current-work line. A child leaves the block a few seconds after it ends (unless you opened it). Click one for its whole prompt and the end of its live transcript. The Subagents tab of the details panel ("History" in the block) keeps every child of the conversation, most recent first, with its prompt, the background the bot gave it and its whole result, read from the conversation's history. Coding agents a bot starts headless from its terminal (`claude -p`, `cck -p`, `codex exec`, `gemini -p`, `opencode run`…) show up there too: the prompt (or its file, which opens in a tab), the folder, the last line they print, the exit code, and the log file they write to, opened as text. When such an agent writes `ETAT.md` beside its `work/` log, the last three completed steps and the current one appear live, and the full journal opens beside the chat. Their command line itself is never shown. Read only: nothing there steers or stops a child. Standing by and this block need a Hermes gateway that answers `subagent.roster`, `process.list` and `subagent.list`; with an older one they stay empty.
@@ -144,7 +152,7 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 
 ## Connect it to Hermes
 
-HermesBot needs **Hermes Agent with its gateway Webapp on.** By default the gateway serves it on `http://127.0.0.1:9120`. See "Use the Desktop workspace from a browser" in the Hermes documentation (`hermes config set webapp.enabled true`, then `hermes gateway restart`).
+HermesBot needs **Hermes Agent with its gateway Webapp on.** By default the gateway serves it on `http://127.0.0.1:9120`. See "Use the Desktop workspace from a browser" in the Hermes documentation (`hermes config set webapp.enabled true`, then `hermes gateway restart`). Multi-bot rooms also need the gateway's `groups.*` methods and running room driver; on an older Hermes, individual chats keep working and room creation stays unavailable.
 
 It then signs in one of two ways, and picks the right one by itself:
 
@@ -157,7 +165,7 @@ It then signs in one of two ways, and picks the right one by itself:
 Every Hermes profile shows as a bot, except `default` and a profile named `notify`. A profile can carry a card that sets its name, role and group, under `ui_meta["hermes-bots"]`: `title`, `description`, `sectionName` and `sectionId`. Profiles without a card go under "Unassigned".
 
 > [!WARNING]
-> Sending a message starts a turn with the model set in the bot's Hermes profile. Depending on your provider, a message can cost money.
+> Sending a message starts a turn with the model set in the bot's Hermes profile. Depending on your provider, a message can cost money. An unaddressed room message can start turns for every member.
 
 ### A gateway on another machine
 

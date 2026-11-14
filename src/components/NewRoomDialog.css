@@ -1,0 +1,58 @@
+/* New room: the gateway request sheet (.request-sheet), with the new-bot glass treatment. */
+.new-room-scrim { z-index: 85; }
+.new-room-sheet {
+  width: min(500px, 100%);
+  gap: 14px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+.new-room-header { display: flex; flex-direction: column; gap: 4px; }
+.request-sheet .new-room-header p { color: var(--text-tertiary); font-size: 12px; line-height: 17px; }
+.new-room-name { display: flex; flex-direction: column; gap: 5px; }
+.new-room-name > label { font-size: 12.5px; }
+.request-sheet p.new-room-hint { margin: 0; color: var(--text-tertiary); font-size: 12px; line-height: 17px; }
+.request-sheet p.new-room-hint.is-issue { color: var(--danger); }
+.new-room-sheet input[aria-invalid='true'] { border-color: var(--danger); }
+.new-room-sheet input[aria-invalid='true']:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); }
+
+.new-room-picker { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.new-room-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.new-room-picker-head h3 { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 18px; font-weight: 560; }
+.new-room-count { flex: none; color: var(--text-tertiary); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+
+.new-room-search { display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); color: var(--text-tertiary); }
+.new-room-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.request-sheet .new-room-search input { flex: 1; min-width: 0; height: 34px; padding: 0; border: 0; outline: 0; background: transparent; box-shadow: none; font-size: 12.5px; }
+.request-sheet .new-room-search input:focus { border: 0; box-shadow: none; }
+.new-room-search > svg { flex: none; }
+.new-room-search button { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-right: -5px; border-radius: 6px; color: var(--text-tertiary); }
+.new-room-search button:hover { background: var(--hover); color: var(--text); }
+
+.new-room-bot-list { max-height: min(310px, 38dvh); margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; list-style: none; scrollbar-width: thin; }
+.request-sheet .new-room-bot { min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 11px; padding: 8px 10px; border: 1px solid transparent; border-radius: 11px; color: var(--text); cursor: pointer; transition: background 140ms ease, border-color 140ms ease; }
+.request-sheet .new-room-bot:hover { background: var(--hover); }
+.request-sheet .new-room-bot:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.request-sheet .new-room-bot.is-selected { border-color: color-mix(in srgb, var(--accent) 34%, transparent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.request-sheet .new-room-bot.is-disabled { cursor: default; opacity: .48; }
+.request-sheet .new-room-bot.is-selected.is-disabled { opacity: .72; }
+.request-sheet .new-room-bot input[type='checkbox'] { flex: none; width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--accent); }
+.new-room-bot .bot-avatar { flex: none; }
+.new-room-bot-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.new-room-bot-copy strong { overflow: hidden; color: var(--text); font-size: 13px; line-height: 18px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+.new-room-bot-copy > span { overflow: hidden; color: var(--text-tertiary); font-size: 12px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.request-sheet p.new-room-empty { padding: 24px 12px; border-radius: 10px; background: var(--surface-soft); color: var(--text-tertiary); font-size: 12.5px; text-align: center; }
+
+.new-room-sheet .request-actions { margin-top: 2px; }
+.new-room-sheet .request-actions button { min-height: 30px; }
+.request-sheet p.new-room-turn-note { margin-top: -6px; color: var(--text-tertiary); font-size: 12px; line-height: 17px; }
+
+@media (max-width: 520px) {
+  .new-room-bot-list { max-height: 32dvh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .request-sheet .new-room-bot { transition: none; }
+}

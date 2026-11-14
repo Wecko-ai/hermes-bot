@@ -11,12 +11,15 @@ import { subagentHistory } from './lib/subagent-history'
 import type { AgentProcess } from './lib/agent-process'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
-import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore } from './store'
+import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel } from './store'
+import { createRoom, listRooms, loadRoomCapabilities, readRoom, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
-import { demoChat, demoData, type DemoLanguage } from './lib/demo'
+import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
+import { RoomView } from './components/RoomView'
+import { NewRoomDialog } from './components/NewRoomDialog'
 import { CommandPalette } from './components/CommandPalette'
 import { BOT_RAIL_TAB, DetailsPanel, type DetailsTabRequest } from './components/DetailsPanel'
 import type { OpenDocument } from './components/DocumentView'
@@ -46,6 +49,13 @@ import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/rec
 import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
+const DEMO_ROOM = DEMO && new URLSearchParams(location.search).get('room') === '1'
+const DEMO_ROOM_CAPABILITIES: RoomCapabilities = {
+  protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'demo',
+  features: [], methods: ['groups.capabilities', 'groups.list', 'groups.state', 'groups.log', 'groups.create', 'groups.send', 'groups.stop'], max_log_limit: 100,
+}
+const ROOM_LIST_MS = 10_000
+const ROOM_POLL_MS = 2_000
 const MAX_OPEN_DOCUMENTS = 8
 const NO_SUBAGENTS: SubagentRow[] = []
 const NO_AGENT_PROCESSES: AgentProcess[] = []
@@ -68,6 +78,10 @@ if (DEMO) {
   const demo = demoData(resolveLanguage(getSettings().language))
   useRosterStore.setState({ bots: demo.bots, selected: 'nova', rosterLoaded: true, connected: true, workSummaries: demo.work })
   useChatStore.setState({ messages: demoChat(demo, 'nova'), routines: demo.routines, chatLoading: false })
+  useRoomStore.setState({
+    rooms: [demo.room.room], capabilities: DEMO_ROOM_CAPABILITIES, support: 'ready', selectedRoomId: DEMO_ROOM ? demo.room.room.room_id : '',
+    cache: { [demo.room.room.room_id]: { room: demo.room.room, driver: demo.room.driver, context: demo.room.context, events: demo.room.events, cursor: demo.room.events.length, epoch: 1, loading: false, error: '' } },
+  })
 }
 
 // Store actions have a stable identity: we take them once, without subscribing.
@@ -79,6 +93,7 @@ const {
 } = useChatStore.getState()
 const { addPrompt, settlePrompt, removePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest, removeServerRequest, setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
 const { applyEvent: applySubagentEvent, applyList: applySubagentList, setProcesses: setChatProcesses, setAgentProcesses } = useSubagentsStore.getState()
+const { setRooms, setCapabilities, setSupport, selectRoom: selectRoomInStore, closeRoom, setRoomLoading, setRoomError, applySnapshot, setPendingSend, setSendFlight } = useRoomStore.getState()
 
 const systemPrefersDark = () => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
 
@@ -120,6 +135,13 @@ export default function App() {
   const connected = useRosterStore((state) => state.connected)
   const reconnecting = useRosterStore((state) => state.reconnecting)
   const workSummaries = useRosterStore((state) => state.workSummaries)
+  const rooms = useRoomStore((state) => state.rooms)
+  const selectedRoomId = useRoomStore((state) => state.selectedRoomId)
+  const roomCapabilities = useRoomStore((state) => state.capabilities)
+  const roomSupport = useRoomStore((state) => state.support)
+  const roomCache = useRoomStore((state) => state.cache)
+  const roomPendingSends = useRoomStore((state) => state.pendingSends)
+  const roomSendFlights = useRoomStore((state) => state.sendFlights)
   const activeChat = useChatStore((state) => state.activeChat)
   const chatModel = useChatStore((state) => state.chatModel)
   const messages = useChatStore((state) => state.messages)
@@ -151,6 +173,10 @@ export default function App() {
     const demo = demoData(language === 'fr' ? 'fr' : 'en')
     useRosterStore.setState({ bots: demo.bots, workSummaries: demo.work })
     useChatStore.setState({ messages: demoChat(demo, useRosterStore.getState().selected), routines: demo.routines })
+    setRooms([demo.room.room, ...useRoomStore.getState().rooms.filter((room) => room.room_id !== demo.room.room.room_id)])
+    if (useRoomStore.getState().selectedRoomId === demo.room.room.room_id) {
+      applySnapshot(demo.room.room.room_id, { room: demo.room.room, driver: demo.room.driver, context: demo.room.context, events: demo.room.events, cursor: demo.room.events.length, latestSeq: demo.room.events.length, epoch: 1, reset: true })
+    }
   }, [language])
   const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
@@ -182,7 +208,13 @@ export default function App() {
     return { available: true, models: [model], defaultModel: model }
   })
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newRoomOpen, setNewRoomOpen] = useState(false)
   const [newBotRetry, setNewBotRetry] = useState<{ slug: string; name: string } | null>(null)
+  const roomRequestRef = useRef(new Map<string, number>())
+  const roomBusyRef = useRef(new Set<string>())
+  const roomIndexRequestRef = useRef(0)
+  const demoRoomTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  const selectRoomRef = useRef<(roomId: string) => void>(() => undefined)
   // Bots just created here whose chat has not opened yet, by slug.
   const freshBotsRef = useRef(new Map<string, FreshBot>())
 
@@ -424,7 +456,7 @@ export default function App() {
     if (DEMO || auth !== 'ready' || typeof Notification === 'undefined') return
     if (getSettings().notifications && Notification.permission === 'default') void Notification.requestPermission()
     const notify = (slug: string, kind: NotificationKind) => {
-      const viewing = !localOpenRef.current && useRosterStore.getState().selected === slug
+      const viewing = !localOpenRef.current && !useRoomStore.getState().selectedRoomId && useRosterStore.getState().selected === slug
       if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
       const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
       if (!bot || bot.hidden) return
@@ -475,12 +507,17 @@ export default function App() {
         setSettingsTab((tab) => tab ? null : 'general')
       } else if (event.altKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         // The displayed order depends on the sort and the collapsed sections: the roster on screen is authoritative.
-        const rows = [...document.querySelectorAll<HTMLElement>('[data-bot]')]
+        const rows = [...document.querySelectorAll<HTMLElement>('[data-bot], [data-room]')]
         if (!rows.length) return
         event.preventDefault()
+        const roomId = useRoomStore.getState().selectedRoomId
         const current = localOpenRef.current ? LOCAL_CHAT_SLUG : useRosterStore.getState().selected
-        const at = rows.findIndex((row) => row.dataset.bot === current)
+        const at = rows.findIndex((row) => roomId ? row.dataset.room === roomId : row.dataset.bot === current)
         const target = rows[(at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]
+        if (target.dataset.room) {
+          selectRoomRef.current(target.dataset.room)
+          return
+        }
         const bot = target.dataset.bot === LOCAL_CHAT_SLUG ? localBotRef.current : useRosterStore.getState().bots.find((item) => item.slug === target.dataset.bot)
         if (bot) selectBot(bot)
       }
@@ -657,6 +694,213 @@ export default function App() {
     }).catch(() => setUsage(null))
   }, [showUsage, selected, chatLoading, client])
 
+  const publishDemoRoom = (room: Room, events: RoomEvent[], driver: RoomDriverStatus) => {
+    const latestSeq = events.at(-1)?.seq || 0
+    applySnapshot(room.room_id, {
+      room: { ...room, latest_seq: latestSeq, updated_at: Math.floor(Date.now() / 1000) },
+      driver,
+      context: useRoomStore.getState().cache[room.room_id]?.context || { purpose: '', notes: '', routing: 'everyone' },
+      events,
+      cursor: latestSeq,
+      latestSeq,
+      epoch: room.authority_epoch,
+      reset: true,
+    })
+  }
+
+  const clearDemoRoomTimers = () => {
+    demoRoomTimersRef.current.forEach(clearTimeout)
+    demoRoomTimersRef.current = []
+  }
+
+  /** Reads the room list and the driver's capabilities independently of individual Bot Chats. */
+  const refreshRooms = async () => {
+    if (DEMO) return
+    const ticket = ++roomIndexRequestRef.current
+    if (useRoomStore.getState().support === 'unknown') setSupport('loading')
+    try {
+      const capabilities = await loadRoomCapabilities(client)
+      if (ticket !== roomIndexRequestRef.current) return
+      setCapabilities(capabilities)
+      const required = ['groups.list', 'groups.state', 'groups.log', 'groups.create', 'groups.send', 'groups.stop']
+      if (!capabilities.driver || required.some((method) => !capabilities.methods.includes(method))) {
+        setSupport('unsupported')
+        return
+      }
+      const roomList = await listRooms(client)
+      if (ticket !== roomIndexRequestRef.current) return
+      setRooms(roomList)
+      setSupport('ready')
+    } catch (error) {
+      if (ticket !== roomIndexRequestRef.current) return
+      if (roomMethodMissing(error)) setSupport('unsupported')
+      else if (useRoomStore.getState().support !== 'ready') setSupport('error')
+    }
+  }
+
+  /** Incremental state + log read. A per-room ticket fences late answers after reconnects or authority changes. */
+  const refreshRoom = async (roomId: string) => {
+    if (DEMO || !roomId || roomBusyRef.current.has(roomId)) return
+    roomBusyRef.current.add(roomId)
+    const ticket = (roomRequestRef.current.get(roomId) || 0) + 1
+    roomRequestRef.current.set(roomId, ticket)
+    const cached = useRoomStore.getState().cache[roomId]
+    if (!cached) setRoomLoading(roomId, true)
+    try {
+      const snapshot = await readRoom(client, roomId, cached?.cursor || 0, cached?.epoch)
+      if (roomRequestRef.current.get(roomId) !== ticket) return
+      applySnapshot(roomId, snapshot)
+    } catch {
+      if (roomRequestRef.current.get(roomId) === ticket) setRoomError(roomId, i18n.t('room.loadFailed'))
+    } finally {
+      roomBusyRef.current.delete(roomId)
+    }
+  }
+
+  const selectRoom = (roomId: string) => {
+    localOpenRef.current = false
+    setLocalOpen(false)
+    selectRoomInStore(roomId)
+    setMobileOpen(false)
+    setFocusSignal((value) => value + 1)
+    if (!useRoomStore.getState().cache[roomId]) setRoomLoading(roomId, true)
+    void refreshRoom(roomId)
+  }
+  selectRoomRef.current = selectRoom
+
+  useEffect(() => {
+    if (DEMO || auth !== 'ready') return
+    void refreshRooms()
+    const listTimer = setInterval(() => { if (!document.hidden) void refreshRooms() }, ROOM_LIST_MS)
+    const roomTimer = setInterval(() => {
+      const roomId = useRoomStore.getState().selectedRoomId
+      if (roomId && !document.hidden) void refreshRoom(roomId)
+    }, ROOM_POLL_MS)
+    const unsubscribe = client.onEvent((event) => {
+      if (event.type !== 'groups.changed') return
+      const ids = Array.isArray(event.payload?.room_ids) ? event.payload.room_ids : []
+      const selectedId = useRoomStore.getState().selectedRoomId
+      if (selectedId && (!ids.length || ids.includes(selectedId))) void refreshRoom(selectedId)
+      void refreshRooms()
+    })
+    return () => { clearInterval(listTimer); clearInterval(roomTimer); unsubscribe() }
+  }, [auth, client])
+
+  useEffect(() => {
+    if (!DEMO && auth === 'ready' && selectedRoomId) void refreshRoom(selectedRoomId)
+  }, [selectedRoomId, auth, client])
+
+  useEffect(() => () => clearDemoRoomTimers(), [])
+
+  const createNewRoom = async ({ name, bots: selectedBots }: { name: string; bots: Bot[] }) => {
+    const issue = validateRoomBots(selectedBots)
+    if (issue) throw new Error(i18n.t(issue === 'handles' ? 'newRoom.duplicateHandles' : 'newRoom.invalidCount'))
+    if (DEMO) {
+      const room = newDemoRoom(name, selectedBots)
+      setRooms([room, ...useRoomStore.getState().rooms])
+      setNewRoomOpen(false)
+      publishDemoRoom(room, [], demoRoomDriver())
+      selectRoom(room.room_id)
+      return
+    }
+    const room = await createRoom(client, crypto.randomUUID(), name, selectedBots)
+    setRooms([room, ...useRoomStore.getState().rooms.filter((item) => item.room_id !== room.room_id)])
+    setNewRoomOpen(false)
+    selectRoom(room.room_id)
+    setNotice(i18n.t('room.roomCreated'))
+  }
+
+  const roomBots = (room: Room) => room.members.map((member) => useRosterStore.getState().bots.find((bot) => bot.slug === (member.profile || member.member_id))).filter((bot): bot is Bot => Boolean(bot))
+
+  /** Local-only scripted playback. Timers publish the same durable event shapes as the gateway. */
+  const runDemoRoom = (room: Room, events: RoomEvent[]) => {
+    clearDemoRoomTimers()
+    const [user, ...rest] = events
+    const settled = rest.at(-1)
+    const replies = rest.slice(0, -1)
+    if (!user || !settled) return
+    const activity = (index: number) => {
+      const bot = roomBots(room)[index]
+      return bot ? [{ member_id: bot.slug, status: 'running', round_index: index, thread_id: String(user.payload.thread_id || ''), started_at: Math.floor(Date.now() / 1000) }] : []
+    }
+    publishDemoRoom(room, [user], demoRoomDriver(activity(0)))
+    replies.forEach((_reply, index) => {
+      demoRoomTimersRef.current.push(setTimeout(() => {
+        const visible = [user, ...replies.slice(0, index + 1)]
+        publishDemoRoom(room, visible, demoRoomDriver(index + 1 < replies.length ? activity(index + 1) : []))
+      }, (index + 1) * 1100))
+    })
+    demoRoomTimersRef.current.push(setTimeout(() => {
+      publishDemoRoom(room, [user, ...replies, settled], demoRoomDriver())
+    }, (replies.length + 1) * 1100))
+  }
+
+  const replayDemoRoom = () => {
+    const room = useRoomStore.getState().cache[useRoomStore.getState().selectedRoomId]?.room
+    if (!room) return
+    runDemoRoom(room, demoRoomEvents(room, roomBots(room), demoLanguage()))
+  }
+
+  const sendOpenRoom = async (content: string): Promise<boolean> => {
+    const roomId = useRoomStore.getState().selectedRoomId
+    const room = useRoomStore.getState().cache[roomId]?.room
+    if (!roomId || !room || useRoomStore.getState().sendFlights[roomId]) return false
+    const existing = useRoomStore.getState().pendingSends[roomId]
+    const pending = existing || { eventId: crypto.randomUUID(), threadId: crypto.randomUUID(), text: content }
+    if (existing && existing.text !== content) return false
+    setPendingSend(roomId, pending)
+    setSendFlight(roomId, true)
+    setRoomError(roomId, '')
+    try {
+      if (DEMO) {
+        const events = demoRoomEvents(room, roomBots(room), demoLanguage())
+        events[0] = { ...events[0], event_id: `demo-user-${pending.eventId}`, payload: { ...events[0].payload, text: content, thread_id: pending.threadId } }
+        runDemoRoom(room, events)
+      } else {
+        await sendRoomMessage(client, roomId, pending.eventId, pending.text, pending.threadId)
+        void refreshRoom(roomId)
+      }
+      setPendingSend(roomId, null)
+      return true
+    } catch (error) {
+      if (roomSendNotAdmitted(error)) {
+        setPendingSend(roomId, null)
+        setRoomError(roomId, i18n.t('room.notAdmitted'))
+      } else {
+        // Indeterminate: only a retry with the same event_id can avoid a duplicate room message.
+        setRoomError(roomId, i18n.t('room.sendFailed'))
+      }
+      return false
+    } finally {
+      setSendFlight(roomId, false)
+    }
+  }
+
+  const stopOpenRoom = async () => {
+    const roomId = useRoomStore.getState().selectedRoomId
+    if (!roomId) return
+    if (DEMO) {
+      clearDemoRoomTimers()
+      const cached = useRoomStore.getState().cache[roomId]
+      if (!cached) return
+      const seq = cached.cursor + 1
+      const stopped: RoomEvent = {
+        room_id: roomId, seq, event_id: `demo-stop-${Date.now()}`, kind: 'room.stopped',
+        actor: { kind: 'driver', id: 'demo' }, authority_epoch: cached.epoch, payload: {}, created_at: Math.floor(Date.now() / 1000),
+      }
+      publishDemoRoom(cached.room, [...cached.events, stopped], demoRoomDriver())
+      setPendingSend(roomId, null)
+      return
+    }
+    try {
+      await stopRoom(client, roomId, roomCancelId(roomId))
+      clearRoomCancel(roomId)
+      void refreshRoom(roomId)
+    } catch {
+      setNotice(i18n.t('room.stopFailed'))
+    }
+  }
+
   const initialize = async () => {
     setAuthError('')
     setRosterLoaded(false)
@@ -671,6 +915,7 @@ export default function App() {
       if (preferred) setSelected((current) => current || preferred.slug)
       void loadLocalModels().then(setLocalModels)
       void syncSharedSettings()
+      void refreshRooms()
       if (roster.bots.length === 0) setNotice(i18n.t('app.noVisibleBots'))
     } catch (error) {
       setConnected(false)
@@ -835,6 +1080,9 @@ export default function App() {
       setBots((current) => mergeRoster(current, roster.bots, useRosterStore.getState().selected, () => false))
       const reopen = useRosterStore.getState().selected
       if (reopen) await syncChat(reopen, true)
+      await refreshRooms()
+      const reopenRoom = useRoomStore.getState().selectedRoomId
+      if (reopenRoom) await refreshRoom(reopenRoom)
     } catch {
       client.close()
       setConnected(false)
@@ -857,6 +1105,7 @@ export default function App() {
   }, [selected, client])
 
   const selectBot = (bot: Bot) => {
+    closeRoom()
     const wasLocal = localOpenRef.current
     localOpenRef.current = bot.slug === LOCAL_CHAT_SLUG
     setLocalOpen(localOpenRef.current)
@@ -1255,6 +1504,13 @@ export default function App() {
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
   const openBrowserVaultRequest = browserVaultRequests[0]
   const newBotDialog = newBotOpen && <NewBotDialog bots={bots} connected={DEMO || connected} loadKnown={DEMO ? null : loadKnownProfiles} onCreate={createNewBot} onClose={() => setNewBotOpen(false)} />
+  const openRoom = selectedRoomId ? roomCache[selectedRoomId]?.room || rooms.find((room) => room.room_id === selectedRoomId) : null
+  const openRoomCache = selectedRoomId ? roomCache[selectedRoomId] : undefined
+  const seatable = roomCapabilities?.seatable_profiles
+  const roomCandidateBots = bots.filter((bot) => !bot.hidden && (!seatable || seatable.includes(bot.slug)))
+  const newRoomDialog = newRoomOpen && <NewRoomDialog bots={roomCandidateBots} connected={DEMO || (connected && roomSupport === 'ready')} onCreate={createNewRoom} onClose={() => setNewRoomOpen(false)} />
+  const roomPreviews = Object.fromEntries(rooms.map((room) => [room.room_id, roomPreview(roomCache[room.room_id]?.events || [])]))
+  const roomWorking = Object.fromEntries(rooms.map((room) => [room.room_id, Boolean(roomCache[room.room_id]?.driver?.working || roomCache[room.room_id]?.driver?.member_activity?.length)]))
 
   if (auth === 'checking') {
     return <LoadingScreen />
@@ -1270,7 +1526,12 @@ export default function App() {
     <div className="app-shell">
       <Sidebar
         bots={rosterBots}
-        selected={localOpen ? LOCAL_CHAT_SLUG : selectedBot.slug}
+        rooms={rooms}
+        selected={selectedRoomId || (localOpen ? LOCAL_CHAT_SLUG : selectedBot.slug)}
+        selectedRoomId={selectedRoomId}
+        roomSupport={roomSupport}
+        roomPreviews={roomPreviews}
+        roomWorking={roomWorking}
         connected={connected}
         reconnecting={reconnecting}
         onReconnect={reconnect}
@@ -1279,14 +1540,16 @@ export default function App() {
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
         onSelect={selectBot}
+        onSelectRoom={selectRoom}
         onNewBot={() => { setNewBotOpen(true); setMobileOpen(false) }}
+        onNewRoom={() => { setNewRoomOpen(true); setMobileOpen(false) }}
         onOpenSettings={() => setSettingsTab('general')}
         canManage={DEMO || connected}
         onBotAction={botAction}
         onNotice={setNotice}
       />
       <ChatView
-        hidden={localOpen}
+        hidden={localOpen || Boolean(selectedRoomId)}
         bot={selectedBot}
         bots={bots}
         messages={messages}
@@ -1331,8 +1594,27 @@ export default function App() {
           />
         ) : undefined}
       />
-      {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
-      {detailsOpen && !localOpen && (
+      {openRoom && (
+        <RoomView
+          room={openRoom}
+          bots={bots}
+          events={openRoomCache?.events || []}
+          driver={openRoomCache?.driver || null}
+          loading={openRoomCache?.loading ?? true}
+          error={openRoomCache?.error || ''}
+          pending={roomPendingSends[openRoom.room_id] || null}
+          sending={Boolean(roomSendFlights[openRoom.room_id])}
+          focusSignal={focusSignal}
+          onSend={sendOpenRoom}
+          onStop={stopOpenRoom}
+          onRefresh={() => { setRoomError(openRoom.room_id, ''); void refreshRoom(openRoom.room_id) }}
+          onOpenMobile={() => setMobileOpen(true)}
+          onOpenBot={openBot}
+          onReplay={DEMO ? replayDemoRoom : undefined}
+        />
+      )}
+      {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen && !selectedRoomId} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
+      {detailsOpen && !localOpen && !selectedRoomId && (
         <DetailsPanel
           bot={selectedBot}
           work={workSummaries[selectedBot.slug]}
@@ -1376,6 +1658,7 @@ export default function App() {
         />
       )}
       {newBotDialog}
+      {newRoomDialog}
       {newBotRetry && !notice && <NewBotRetry name={newBotRetry.name} onRetry={() => retryNewBot(newBotRetry.slug)} onClose={() => setNewBotRetry(null)} />}
       {notice && <div className="toast" role="status"><AlertCircle size={17} /><span>{notice}</span><button aria-label={t('app.close')} onClick={() => setNotice('')}><X size={15} /></button></div>}
       {DEMO && <div className="demo-badge">{t('app.demoBadge')}</div>}
