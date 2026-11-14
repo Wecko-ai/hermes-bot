@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Coding agents' prompt and log files written as relative paths now open from the Subagents panel: they are resolved against the agent's working folder, including `..` segments, instead of failing with "Preview unavailable".
 - In the desktop image viewer, clicking the filename below the image reveals an existing local file in Finder. No `file:` link or custom URL scheme is opened.
 - The thread and roster hide per-turn HermesBot instructions and compaction prefixes from your messages, and remove `[SILENT]` markers appended to real bot replies. Pure silence remains available under Activity.
 - Coding agents started headless from a bot's terminal (`claude -p`, `codex exec`, `gemini -p`, `opencode run`, `aider -m`…) appear with the subagents, live and in the history: prompt or prompt file, folder, last output line, exit code, and their log, which opens as plain text in a tab (`.txt` and `.log` documents). Their command line is never shown.

@@ -12,9 +12,9 @@ export interface AgentRun {
   cwd?: string
   /** Prompt written in the command (quoted argument or heredoc). */
   prompt?: string
-  /** File the prompt is read from (`"$(cat file)"`, `< file`, `cat file |`). */
+  /** File the prompt is read from (`"$(cat file)"`, `< file`, `cat file |`), resolved against `cwd`. */
   promptFile?: string
-  /** File the output is written to (`> file`, `| tee file`). */
+  /** File the output is written to (`> file`, `| tee file`), resolved against `cwd`. */
   logFile?: string
   /** Fingerprint of the command: ties the call, its end and the live process together. */
   key: string
@@ -115,6 +115,23 @@ const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? pat
 /** `$(cat file)`, `$(< file)`: the file a prompt is read from. */
 function catFile(value: string) {
   return /^\$\(\s*(?:cat\s+|<\s*)(['"]?)([^'")]+)\1\s*\)$/.exec(value.trim())?.[2]
+}
+
+/** A prompt or log path as the gateway can serve it: absolute, with dot segments resolved. */
+export function runFilePath(run: Pick<AgentRun, 'cwd'>, file: string) {
+  const relative = !file.startsWith('/') && !file.startsWith('~/')
+  const cwd = run.cwd?.replace(/\/+$/, '') ?? ''
+  const raw = relative && cwd ? `${cwd}/${file}` : file
+  const prefix = raw.startsWith('~/') ? '~/' : raw.startsWith('/') ? '/' : ''
+  const parts: string[] = []
+  for (const part of raw.slice(prefix.length).split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length && parts.at(-1) !== '..') parts.pop()
+      else if (!prefix) parts.push(part)
+    } else parts.push(part)
+  }
+  return `${prefix}${parts.join('/')}`
 }
 
 /** Heredoc bodies of a command, in order: `<<'EOF' … EOF`. */
@@ -220,6 +237,8 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
       if (file) run.promptFile = file
       else if (candidate.value.trim() && !candidate.value.startsWith('-')) run.prompt = candidate.value.trim()
     }
+    if (run.promptFile) run.promptFile = runFilePath(run, run.promptFile)
+    if (run.logFile) run.logFile = runFilePath(run, run.logFile)
     return run
   }
   return null

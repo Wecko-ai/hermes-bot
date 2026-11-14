@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentRun, commandKey, parseAgentProcesses, parseProcessEnd, runLabel } from './agent-process'
+import { agentRun, commandKey, parseAgentProcesses, parseProcessEnd, runFilePath, runLabel } from './agent-process'
 
 // As a bot launched it on 2026-11-13 (paths changed).
 const REAL = 'cd /Users/test/projects/site-affilies && claude -p "$(cat /Users/test/.hermes/profiles/site/cache/scratch/prompt-front-fix.md)" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" > /Users/test/.hermes/profiles/site/cache/scratch/front-fix.log 2>&1'
@@ -24,6 +24,18 @@ describe('commande d’un agent de code', () => {
     expect(agentRun("claude -p <<'EOF'\nÉtape 1 : lire SPEC.md\nÉtape 2 : coder\nEOF")?.prompt).toBe('Étape 1 : lire SPEC.md\nÉtape 2 : coder')
     expect(agentRun('cat /tmp/prompt.md | claude -p --output-format text | tee /tmp/out.log')).toMatchObject({ promptFile: '/tmp/prompt.md', logFile: '/tmp/out.log' })
     expect(agentRun('claude -p < /tmp/prompt.md')?.promptFile).toBe('/tmp/prompt.md')
+  })
+
+  it('résout prompt et journal relatifs dans le dossier du sous-agent', () => {
+    const run = agentRun('cd /tmp/app && claude -p < BOOTSTRAP_TASK.md > agent.log')
+    expect(run).toMatchObject({
+      cwd: '/tmp/app',
+      promptFile: '/tmp/app/BOOTSTRAP_TASK.md',
+      logFile: '/tmp/app/agent.log',
+    })
+    expect(runFilePath({ cwd: '/tmp/app' }, '../shared/prompt.md')).toBe('/tmp/shared/prompt.md')
+    expect(runFilePath({ cwd: '~' }, 'prompt.md')).toBe('~/prompt.md')
+    expect(runFilePath({}, 'relative.md')).toBe('relative.md')
   })
 
   it('traverse les enveloppes : variables, nohup, timeout, mq, bash -lc', () => {

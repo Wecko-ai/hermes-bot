@@ -64,7 +64,7 @@ const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HER
 
 // Files the fake gateway serves for orion's MEDIA: tags.
 // A coding agent a bot started from its terminal, as it appears in orion's history.
-const CLAUDE_RUN = 'cd /Users/test/projects/site && claude -p "$(cat /Users/test/scratch/prompt-front.md)" --permission-mode acceptEdits > /Users/test/docs/agent.log 2>&1'
+const CLAUDE_RUN = 'cd /Users/test/projects/site && claude -p "$(cat ../../scratch/prompt-front.md)" --permission-mode acceptEdits > ../../docs/agent.log 2>&1'
 const MEDIA_FIXTURES = {
   '/Users/test/visuels/slide 01.jpg': ['slide.jpg', 'image/jpeg'],
   '/Users/test/visuels/slide-02.png': ['slide.png', 'image/png'],
