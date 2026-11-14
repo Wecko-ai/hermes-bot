@@ -629,13 +629,32 @@ wss.on('connection', (socket) => {
           '',
           'Open source, MIT.',
           '',
-          'https://example.com/hermes',
+          'https://example.com/hermes.',
           '```',
           '',
           '- **Audience :** Everyone.',
         ].join('\n')
         at(30, 'message.start', { turn_id: 'turn-tweet' })
         at(300, 'message.complete', { turn_id: 'turn-tweet', text, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test vignette X média') {
+        const text = [
+          '[le site][site]',
+          '',
+          'MEDIA:/Users/test/visuels/slide 01.jpg',
+          '',
+          '**Lien :** https://x.com/orion_ai/status/654321?s=20',
+          '',
+          '**Texte :**',
+          '```',
+          'Second post.',
+          '```',
+          '',
+          '[site]: https://example.com/reference',
+        ].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-tweet-media' })
+        at(300, 'message.complete', { turn_id: 'turn-tweet-media', text, status: 'complete' })
         return
       }
       if (frame.params.text === 'Test liens') {
@@ -1827,8 +1846,9 @@ try {
   await delay(800)
 
   // A published X post becomes a local card from the status link and exact text, never a remote embed.
-  await page.context().route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>X</title>' }))
-  await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>ok</title>ok' }))
+  let automaticRemoteRequests = 0
+  await page.context().route('https://x.com/**', (route) => { automaticRemoteRequests += 1; return route.fulfill({ contentType: 'text/html', body: '<title>X</title>' }) })
+  await page.context().route('https://example.com/**', (route) => { automaticRemoteRequests += 1; return route.fulfill({ contentType: 'text/html', body: '<title>ok</title>ok' }) })
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test vignette X')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   const tweet = page.locator('.tweet-card')
@@ -1843,6 +1863,7 @@ try {
   await tweetMessage.getByText('Audience :', { exact: false }).waitFor()
   await tweet.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SCREENSHOTS}tweet-card.png` })
+  if (automaticRemoteRequests !== 0) throw new Error('La vignette a chargé une ressource distante avant tout clic.')
   for (const [name, url] of [['Voir sur X', 'https://x.com/orion_ai/status/123456'], ['https://example.com/hermes', 'https://example.com/hermes']]) {
     const popup = page.context().waitForEvent('page', { timeout: 5_000 })
     await tweet.getByRole('link', { name, exact: true }).click()
@@ -1851,6 +1872,19 @@ try {
     if (opened.url() !== url) throw new Error(`Le lien « ${name} » ouvre ${opened.url()} au lieu de ${url}.`)
     await opened.close()
   }
+  // One Markdown tree: MEDIA: keeps its viewer and link references cross the card in both directions.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test vignette X média')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const mediaTweetMessage = page.locator('.message-assistant').filter({ hasText: 'Second post.' })
+  await mediaTweetMessage.locator('.tweet-card').waitFor({ timeout: 5_000 })
+  const referenceLink = mediaTweetMessage.getByRole('link', { name: 'le site', exact: true })
+  await referenceLink.waitFor()
+  if (await referenceLink.getAttribute('href') !== 'https://example.com/reference') throw new Error('La référence Markdown coupée par la vignette est perdue.')
+  await mediaTweetMessage.locator('.media-thumb').click()
+  await page.locator('.media-viewer img').waitFor({ timeout: 5_000 })
+  await page.getByRole('dialog', { name: 'slide 01.jpg', exact: true }).waitFor({ timeout: 5_000 })
+  await page.keyboard.press('Escape')
+  await page.locator('.media-viewer').waitFor({ state: 'detached', timeout: 5_000 })
   await delay(300)
 
   // Links in a bot message open in a new page: a Markdown link and a bare URL.

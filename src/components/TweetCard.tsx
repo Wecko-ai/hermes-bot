@@ -10,14 +10,31 @@ function XMark({ size = 17 }: { size?: number }) {
   )
 }
 
+/** Keep sentence punctuation out of the destination, but preserve balanced URL parentheses. */
+function linkEnding(part: string): { url: string; suffix: string } {
+  let url = part
+  let suffix = ''
+  while (url) {
+    const last = url.at(-1) as string
+    const opener = last === ')' ? '(' : last === ']' ? '[' : last === '}' ? '{' : ''
+    const unbalancedCloser = opener && url.split(last).length > url.split(opener).length
+    if (!/[.,;:!?'"”’…»>]/.test(last) && !unbalancedCloser) break
+    url = url.slice(0, -1)
+    suffix = last + suffix
+  }
+  return { url, suffix }
+}
+
 /** Links already present in the exact post text. No remote markup, avatar or widget is loaded. */
 function TweetText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g)
   return (
     <p className="tweet-card-text">
-      {parts.map((part, index) => /^https?:\/\//.test(part)
-        ? <a key={index} href={part} target="_blank" rel="noreferrer noopener">{part}</a>
-        : part)}
+      {parts.map((part, index) => {
+        if (!/^https?:\/\//.test(part)) return part
+        const { url, suffix } = linkEnding(part)
+        return <span key={index}><a href={url} target="_blank" rel="noreferrer noopener">{url}</a>{suffix}</span>
+      })}
     </p>
   )
 }

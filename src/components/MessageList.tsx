@@ -11,7 +11,7 @@ import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
 import { TweetCard } from './TweetCard'
 import { findQuestions } from '../lib/questions'
-import { splitTweets } from '../lib/tweets'
+import { findTweets, type TweetMatch } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { normalizeHref } from '../lib/links'
 import { findRanges } from '../lib/find'
@@ -42,6 +42,11 @@ interface MentionContextValue {
 // the whole subtree, and a playing video would restart from zero while streaming.
 const MediaContext = createContext<MediaContextValue | null>(null)
 const MentionContext = createContext<MentionContextValue | null>(null)
+const TweetContext = createContext<TweetMatch[]>([])
+
+function atTweet(tweets: TweetMatch[], offset: number | undefined): TweetMatch | undefined {
+  return offset === undefined ? undefined : tweets.find((tweet) => offset >= tweet.start && offset < tweet.end)
+}
 
 function MarkdownLink({ href, children, node: _node, ...props }: ComponentProps<'a'> & ExtraProps) {
   const context = useContext(MediaContext)
@@ -58,6 +63,7 @@ function MarkdownLink({ href, children, node: _node, ...props }: ComponentProps<
  * `<p>`: changing the element when text arrives after a media would remount a playing video.
  */
 function MarkdownParagraph({ node, children }: ComponentProps<'p'> & ExtraProps) {
+  if (atTweet(useContext(TweetContext), node?.position?.start.offset)) return null
   const nodes = node?.children || []
   const media = nodes.filter((child) => child.type === 'element' && child.tagName === 'a' && mediaIndex(String(child.properties?.href ?? '')) >= 0)
   const onlyMedia = media.length > 0 && nodes.every((child) => media.includes(child)
@@ -99,6 +105,8 @@ function CodeCopy({ text }: { text: string }) {
 /** A `hermes-mail` code block becomes the mail card to approve; any other block gets a copy button. */
 function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
   const context = useContext(MediaContext)
+  const tweet = atTweet(useContext(TweetContext), node?.position?.start.offset)
+  if (tweet) return <TweetCard tweet={tweet} />
   const code = node?.children[0]
   const language = code?.type === 'element' && code.tagName === 'code' && Array.isArray(code.properties?.className) ? String(code.properties.className[0]) : ''
   if (code?.type === 'element' && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`)) {
@@ -157,7 +165,7 @@ function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpe
 
 export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
-  const segments = useMemo(() => streaming ? [{ kind: 'markdown' as const, content: source }] : splitTweets(source), [source, streaming])
+  const tweets = useMemo(() => streaming ? [] : findTweets(source), [source, streaming])
   // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
   const mentionIndexValue = useContext(MentionContext)?.index
@@ -182,9 +190,9 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (
     <MediaContext.Provider value={context}>
-      {segments.map((segment, index) => segment.kind === 'tweet'
-        ? <TweetCard key={`${segment.tweet.id}-${index}`} tweet={segment.tweet} />
-        : <ReactMarkdown key={index} remarkPlugins={plugins} components={MARKDOWN_COMPONENTS}>{segment.content}</ReactMarkdown>)}
+      <TweetContext.Provider value={tweets}>
+        <ReactMarkdown remarkPlugins={plugins} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown>
+      </TweetContext.Provider>
       {files.length > 0 && <CitedFiles files={files} profile={profile} version={version} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
     </MediaContext.Provider>
   )
