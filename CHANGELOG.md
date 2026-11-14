@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Published X posts reported by a bot with their status link and exact text appear as X-style cards in the thread. The card is rendered locally, keeps links clickable and opens the original post on X; no remote X widget, avatar or resource is loaded.
 - Coding agents' prompt and log files written as relative paths now open from the Subagents panel: they are resolved against the agent's working folder, including `..` segments, instead of failing with "Preview unavailable".
 - In the desktop image viewer, clicking the filename below the image reveals an existing local file in Finder. No `file:` link or custom URL scheme is opened.
 - The thread and roster hide per-turn HermesBot instructions and compaction prefixes from your messages, and remove `[SILENT]` markers appended to real bot replies. Pure silence remains available under Activity.

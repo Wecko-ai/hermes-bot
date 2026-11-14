@@ -9,7 +9,9 @@ import { LiveAvatar } from './LiveAvatar'
 import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaEmbed'
 import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
+import { TweetCard } from './TweetCard'
 import { findQuestions } from '../lib/questions'
+import { splitTweets } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { normalizeHref } from '../lib/links'
 import { findRanges } from '../lib/find'
@@ -155,6 +157,7 @@ function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpe
 
 export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
+  const segments = useMemo(() => streaming ? [{ kind: 'markdown' as const, content: source }] : splitTweets(source), [source, streaming])
   // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
   const mentionIndexValue = useContext(MentionContext)?.index
@@ -179,7 +182,9 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (
     <MediaContext.Provider value={context}>
-      <ReactMarkdown remarkPlugins={plugins} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown>
+      {segments.map((segment, index) => segment.kind === 'tweet'
+        ? <TweetCard key={`${segment.tweet.id}-${index}`} tweet={segment.tweet} />
+        : <ReactMarkdown key={index} remarkPlugins={plugins} components={MARKDOWN_COMPONENTS}>{segment.content}</ReactMarkdown>)}
       {files.length > 0 && <CitedFiles files={files} profile={profile} version={version} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
     </MediaContext.Provider>
   )

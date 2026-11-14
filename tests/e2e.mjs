@@ -617,6 +617,27 @@ wss.on('connection', (socket) => {
         at(300, 'message.complete', { turn_id: 'turn-free-questions', text, status: 'complete' })
         return
       }
+      if (frame.params.text === 'Test vignette X') {
+        const text = [
+          'Le post est publié sur @orion_ai.',
+          '',
+          '**Lien :** https://x.com/orion_ai/status/123456',
+          '',
+          '**Texte :**',
+          '```',
+          'HermesBot: your agents, in one window.',
+          '',
+          'Open source, MIT.',
+          '',
+          'https://example.com/hermes',
+          '```',
+          '',
+          '- **Audience :** Everyone.',
+        ].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-tweet' })
+        at(300, 'message.complete', { turn_id: 'turn-tweet', text, status: 'complete' })
+        return
+      }
       if (frame.params.text === 'Test liens') {
         const text = 'Voir [le lien Markdown](https://example.com/md) et aussi https://example.com/bare pour la suite.'
         at(30, 'message.start', { turn_id: 'turn-links' })
@@ -1804,6 +1825,33 @@ try {
   await page.locator('.message-assistant').getByText('Carbon : on garde l’article ou on le retire ?').waitFor({ timeout: 2_000 })
   await page.locator('.message-user').filter({ hasText: 'On le retire.' }).waitFor({ timeout: 2_000 })
   await delay(800)
+
+  // A published X post becomes a local card from the status link and exact text, never a remote embed.
+  await page.context().route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>X</title>' }))
+  await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>ok</title>ok' }))
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test vignette X')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const tweet = page.locator('.tweet-card')
+  await tweet.waitFor({ timeout: 5_000 })
+  await tweet.getByText('Orion AI', { exact: true }).waitFor()
+  await tweet.getByText('@orion_ai', { exact: true }).waitFor()
+  const tweetText = await tweet.locator('.tweet-card-text').textContent()
+  if (!tweetText.includes('HermesBot: your agents, in one window.') || !tweetText.includes('Open source, MIT.')) throw new Error('Le texte exact du post manque dans la vignette.')
+  if (await tweet.locator('.code-block').count()) throw new Error('Le texte du post reste affiché comme du code.')
+  const tweetMessage = tweet.locator('xpath=ancestor::article[contains(@class,"message-assistant")]')
+  if ((await tweetMessage.textContent()).includes('**Texte')) throw new Error('Le bloc source du post est encore visible.')
+  await tweetMessage.getByText('Audience :', { exact: false }).waitFor()
+  await tweet.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}tweet-card.png` })
+  for (const [name, url] of [['Voir sur X', 'https://x.com/orion_ai/status/123456'], ['https://example.com/hermes', 'https://example.com/hermes']]) {
+    const popup = page.context().waitForEvent('page', { timeout: 5_000 })
+    await tweet.getByRole('link', { name, exact: true }).click()
+    const opened = await popup
+    await opened.waitForLoadState('domcontentloaded').catch(() => {})
+    if (opened.url() !== url) throw new Error(`Le lien « ${name} » ouvre ${opened.url()} au lieu de ${url}.`)
+    await opened.close()
+  }
+  await delay(300)
 
   // Links in a bot message open in a new page: a Markdown link and a bare URL.
   await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>ok</title>ok' }))

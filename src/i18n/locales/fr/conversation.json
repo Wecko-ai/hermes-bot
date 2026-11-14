@@ -51,6 +51,10 @@
     "suggestionRecent": "Qu’as-tu terminé récemment ?",
     "newMessages": "Nouveaux messages"
   },
+  "tweets": {
+    "cardLabel": "Post X de {{handle}}",
+    "open": "Voir sur X"
+  },
   "prompt": {
     "approvalTitle": "{{name}} demande ton accord",
     "approvalDefault": "Cette action demande une approbation.",

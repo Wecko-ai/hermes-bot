@@ -51,6 +51,10 @@
     "suggestionRecent": "What have you finished recently?",
     "newMessages": "New messages"
   },
+  "tweets": {
+    "cardLabel": "X post by {{handle}}",
+    "open": "View on X"
+  },
   "prompt": {
     "approvalTitle": "{{name}} needs your approval",
     "approvalDefault": "This action needs approval.",
