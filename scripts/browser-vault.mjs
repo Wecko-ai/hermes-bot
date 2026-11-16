@@ -9,6 +9,8 @@ const bot = option('--bot') ?? process.env.HERMES_BOT_PROFILE
 const target = option('--target') ?? process.env.HERMES_BROWSER_TARGET
 // Sign-up only: the login being registered (an e-mail, a username). Never a password.
 const identifier = option('--identifier')
+// Hermes marks the commands of a scheduled task: the vault then refuses to create an account.
+const unattended = /^(1|true|yes|on)$/i.test(String(process.env.HERMES_CRON_SESSION || '').trim())
 const port = Number(process.env.HERMESBOT_VAULT_PORT || 4331)
 
 if (!['list', 'fill', 'save', 'code', 'signup'].includes(command) || !bot || (command !== 'list' && !target) || (command === 'signup' && !identifier)) {
@@ -20,7 +22,7 @@ try {
   const response = await fetch(`http://127.0.0.1:${port}/v1/${command}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bot, ...(command === 'list' ? {} : { target }), ...(command === 'signup' ? { identifier } : {}) }),
+    body: JSON.stringify({ bot, ...(command === 'list' ? {} : { target }), ...(command === 'signup' ? { identifier, ...(unattended ? { unattended: true } : {}) } : {}) }),
     // The server caps each CDP call; 60 s lets the two connections of a fill finish.
     signal: AbortSignal.timeout(command === 'save' || command === 'signup' ? 360_000 : command === 'code' ? 180_000 : 60_000),
   })

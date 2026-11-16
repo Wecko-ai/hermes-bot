@@ -18,10 +18,13 @@ const SAVED_LOGIN_FILE = `${SESSION_FILE}.credentials`
 const BROWSER_VAULT_KEYCHAIN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}.keychain-db`)
 const BROWSER_VAULT_AUDIT = path.join(os.tmpdir(), 'hermesbot-e2e-browser-vault-audit.jsonl')
 const BROWSER_VAULT_TOKEN = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}-vault.token`)
+// Vault settings of the test, never the real ones of the account running it.
+const BROWSER_VAULT_SETTINGS = path.join(os.tmpdir(), `hermesbot-e2e-${process.pid}-vault-settings.json`)
 const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (fake test password)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
 rmSync(BROWSER_VAULT_AUDIT, { force: true })
+rmSync(BROWSER_VAULT_SETTINGS, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
 const BROWSER_TOUR_OWNER_FILE = path.join(os.tmpdir(), 'hermesbot-e2e-browser-owner')
 const BROWSER_TOUR_FIXTURE = path.join(os.tmpdir(), 'hermesbot-e2e-browser-turn.cjs')
@@ -895,7 +898,7 @@ try {
     env: {
       ...process.env, BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
       HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
-      HERMES_ORIGIN: 'http://127.0.0.1:9121',
+      HERMESBOT_VAULT_SETTINGS: BROWSER_VAULT_SETTINGS, HERMES_ORIGIN: 'http://127.0.0.1:9121',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -2056,6 +2059,63 @@ try {
   page.once('dialog', (dialog) => dialog.accept())
   await addedEntry.getByRole('button', { name: 'Retirer' }).click()
   await addedEntry.waitFor({ state: 'detached', timeout: 5_000 })
+
+  // "Create accounts without asking": off by default, kept by the vault itself (0600 file), then a
+  // bot's sign-up goes through without a card and the user is told by a toast.
+  const vaultSettingsValue = () => { try { return JSON.parse(readFileSync(BROWSER_VAULT_SETTINGS, 'utf8')).autoSignup } catch { return undefined } }
+  const waitVaultSetting = async (value) => {
+    for (let attempt = 0; attempt < 50 && vaultSettingsValue() !== value; attempt += 1) await delay(100)
+    if (vaultSettingsValue() !== value) throw new Error(`Réglage du coffre non enregistré : ${vaultSettingsValue()}`)
+  }
+  const autoSignupSwitch = page.locator('.vault-auto-signup input[role="switch"]')
+  await page.locator('.vault-auto-signup').getByText('Créer les comptes sans me demander', { exact: true }).waitFor({ timeout: 5_000 })
+  await autoSignupSwitch.waitFor()
+  if (await autoSignupSwitch.isChecked()) throw new Error('Création de compte sans demander active par défaut.')
+  await autoSignupSwitch.check()
+  await waitVaultSetting(true)
+  if (((await import('node:fs')).statSync(BROWSER_VAULT_SETTINGS).mode & 0o777) !== 0o600) throw new Error('Réglages du coffre lisibles par d’autres comptes.')
+  // The vault's answer is in, then the switch's slide (180 ms) is over.
+  await page.locator('.vault-auto-signup input:checked:not(:disabled)').waitFor({ timeout: 5_000 })
+  await delay(400)
+  await page.screenshot({ path: `${SCREENSHOTS}vault-auto-signup.png` })
+  await page.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await page.locator('.settings-backdrop').waitFor({ state: 'detached', timeout: 3_000 })
+  cdpUrl = 'https://comptes.exemple.org/inscription'
+  const AUTO_LOGIN = 'auto-test@exemple.org'
+  const autoArgs = ['scripts/browser-vault.mjs', 'signup', '--bot', 'orion', '--target', 'onglet-steam', '--identifier', AUTO_LOGIN]
+  const injectionsBeforeAuto = cdpInjections.length
+  const autoSigned = await execFileAsync(process.execPath, autoArgs, { ...cliOptions, timeout: 20_000 })
+  const autoResult = JSON.parse(autoSigned.stdout)
+  if (autoResult.status !== 'filled' || autoResult.saved !== true) throw new Error(`Création de compte sans demander incorrecte : ${autoSigned.stdout}`)
+  if (await page.locator('.browser-vault-signup').count()) throw new Error('Une carte s’ouvre malgré « Créer les comptes sans me demander ».')
+  const autoInjection = cdpInjections.at(-1)
+  if (cdpInjections.length !== injectionsBeforeAuto + 1 || autoInjection.values[0] !== AUTO_LOGIN) throw new Error('Remplissage de la création sans demander incorrect.')
+  const autoPassword = autoInjection.values[1]
+  const storedAuto = await execFileAsync('/usr/bin/security', ['find-internet-password', '-s', 'comptes.exemple.org', '-a', AUTO_LOGIN, '-w', BROWSER_VAULT_KEYCHAIN])
+  if (storedAuto.stdout.trim() !== autoPassword) throw new Error('Le mot de passe rempli sans demander n’est pas celui rangé.')
+  const autoToast = page.locator('.toast').getByText(`Orion a créé un compte sur comptes.exemple.org avec ${AUTO_LOGIN}`, { exact: true })
+  await autoToast.waitFor({ timeout: 6_000 })
+  const autoAuditText = readFileSync(BROWSER_VAULT_AUDIT, 'utf8')
+  if ([autoSigned.stdout, autoSigned.stderr, autoAuditText, ...cdpExpressions].some((text) => text.includes(autoPassword))) throw new Error('Le mot de passe créé sans demander sort du coffre.')
+  const autoAudit = autoAuditText.trim().split('\n').map((line) => JSON.parse(line)).filter((line) => line.identifier === AUTO_LOGIN)
+  if (autoAudit.map((line) => `${line.action}:${line.result}`).join() !== 'signup:auto_approved,signed_up:filled') throw new Error(`Journal de la création sans demander incorrect : ${JSON.stringify(autoAudit)}`)
+  // A scheduled task never creates an account, setting or not.
+  const cronSignup = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'signup', '--bot', 'orion', '--target', 'onglet-steam', '--identifier', 'cron-test@exemple.org'], {
+    ...cliOptions, env: { ...cliOptions.env, HERMES_CRON_SESSION: '1' },
+  }).then(() => null, (error) => error)
+  if (!cronSignup || JSON.parse(cronSignup.stderr).error !== 'unattended_session') throw new Error('Création de compte acceptée dans une tâche planifiée.')
+  await page.locator('.toast').getByRole('button', { name: 'Fermer' }).click()
+  // Shown once: the next snapshots of the vault (every 1.5 s) still carry it, the toast stays closed.
+  await delay(2_000)
+  if (await autoToast.count()) throw new Error('La notification de compte créé revient.')
+  await execFileAsync('/usr/bin/security', ['delete-internet-password', '-s', 'comptes.exemple.org', BROWSER_VAULT_KEYCHAIN])
+  cdpUrl = 'https://store.steampowered.com/login/'
+  // Back off: the rest of the test expects cards. The switch shows what the vault kept.
+  await page.keyboard.press('Meta+,')
+  await page.locator('.settings-nav').getByRole('button', { name: 'Coffre' }).click()
+  await page.waitForFunction(() => document.querySelector('.vault-auto-signup input')?.checked === true, null, { timeout: 5_000 })
+  await autoSignupSwitch.uncheck()
+  await waitVaultSetting(false)
   await page.getByRole('button', { name: 'Fermer les réglages' }).click()
   await page.locator('.settings-backdrop').waitFor({ state: 'detached', timeout: 3_000 })
 
@@ -2129,6 +2189,15 @@ try {
   }
   if (lastPromptText.includes('seule personne')) throw new Error('Une question vide est partie.')
   await page.locator('.mail-note').getByText('2 réponses envoyées').waitFor({ timeout: 3_000 })
+  // The sent answers read as a compact question / answer list, not the raw numbered text.
+  const answersBubble = page.locator('.message-user .sent-answers').last()
+  await answersBubble.waitFor({ timeout: 3_000 })
+  if (await answersBubble.locator('.sent-answer').count() !== 2) throw new Error('La bulle des réponses doit lister les 2 réponses.')
+  await answersBubble.locator('dd').getByText('Un plan sur 90 jours.', { exact: true }).waitFor({ timeout: 2_000 })
+  if ((await answersBubble.textContent()).includes('Mes réponses à tes questions')) throw new Error('L’intro brute reste affichée dans la bulle.')
+  await answersBubble.scrollIntoViewIfNeeded()
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}questions-sent.png` })
   await delay(500)
 
   // Questions without a dedicated heading, in the latest reply: a form too; a plain Markdown reply once something follows.
@@ -3499,6 +3568,7 @@ try {
   await execFileAsync('/usr/bin/security', ['delete-keychain', BROWSER_VAULT_KEYCHAIN]).catch(() => undefined)
   rmSync(BROWSER_VAULT_KEYCHAIN, { force: true })
   rmSync(BROWSER_VAULT_TOKEN, { force: true })
+  rmSync(BROWSER_VAULT_SETTINGS, { force: true })
   wss.close()
   cdpWss.close()
   await new Promise((resolve) => mock.close(resolve))

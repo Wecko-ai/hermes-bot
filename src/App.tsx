@@ -29,7 +29,7 @@ import { LoadingScreen } from './components/LoadingScreen'
 import { LocalChatView } from './components/LocalChatView'
 import { ServerRequestDialog } from './components/ServerRequestDialog'
 import { BrowserVaultDialog } from './components/BrowserVaultDialog'
-import { respondBrowserVault, subscribeBrowserVaultRequests } from './lib/browser-vault'
+import { respondBrowserVault, subscribeBrowserVaultRequests, takeUnseenNotices, type BrowserVaultNotice } from './lib/browser-vault'
 import { SSO_NAMES, ssoSteerText, type SsoProvider } from './lib/sso'
 import { requestContext } from './lib/request-context'
 import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
@@ -410,7 +410,15 @@ export default function App() {
 
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
-    return subscribeBrowserVaultRequests(setBrowserVaultRequests)
+    // Accounts created without a card (setting in Settings, Vault): a toast, once per notice.
+    const showNotices = (notices: BrowserVaultNotice[]) => {
+      const fresh = takeUnseenNotices(notices)
+      if (!fresh.length) return
+      const botName = (slug: string) => useRosterStore.getState().bots.find((bot) => bot.slug === slug)?.name || slug
+      const site = (origin: string) => { try { return new URL(origin).host } catch { return origin } }
+      setNotice(fresh.map((notice) => i18n.t('browserVault.autoSignupNotice', { bot: botName(notice.bot), site: site(notice.origin), login: notice.identifier })).join(' · '))
+    }
+    return subscribeBrowserVaultRequests(setBrowserVaultRequests, showNotices)
   }, [auth])
 
   // Automatic reconnection: a dropped socket, a silent heartbeat, the network or the window coming back.

@@ -195,7 +195,10 @@
     "reading": "Reading the keychain…",
     "empty": "No credentials yet. A bot that needs to sign in will ask you in a window.",
     "edit": "Edit",
-    "remove": "Remove"
+    "remove": "Remove",
+    "autoSignup": "Create accounts without asking me",
+    "autoSignupHint": "When a bot needs to create an account, the vault generates the password, fills it in and stores it without a card; you are told afterwards. Requests for credentials and codes keep their card. Never in a scheduled task.",
+    "settingsFailed": "Setting not saved."
   },
   "models": {
     "closePicker": "Close model picker",
@@ -299,6 +302,8 @@
       "cdp_unavailable": "The bots’ Chrome isn’t responding.",
       "entry_exists": "Credentials are already saved for this site. The bot should use fill, or remove the old ones in Settings > Vault.",
       "target_not_found": "The bot’s tab is closed.",
+      "invalid_settings": "Vault setting refused.",
+      "settings_write_failed": "The vault could not save the setting.",
       "default": "The vault refused the request."
     },
     "cancelFailed": "Couldn’t cancel.",
@@ -324,7 +329,8 @@
     "noteSignup": "Stored in the bots machine’s keychain, reserved for {{bot}}. You’ll find it in Settings > Vault.",
     "decline": "Decline",
     "createAccount": "Create the account",
-    "signupFailed": "Account not created: {{reason}}"
+    "signupFailed": "Account not created: {{reason}}",
+    "autoSignupNotice": "{{bot}} created an account on {{site}} with {{login}}"
   },
   "hermes": {
     "gatewayUnresponsive": "The Hermes gateway isn’t responding.",

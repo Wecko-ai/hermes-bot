@@ -3,7 +3,7 @@ import { KeyRound, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { i18n } from '../i18n'
 import type { Bot } from '../types'
-import { listVaultEntries, removeVaultEntry, saveVaultEntry, type VaultEntry } from '../lib/browser-vault'
+import { getVaultSettings, listVaultEntries, removeVaultEntry, saveVaultEntry, saveVaultSettings, type VaultEntry, type VaultSettings } from '../lib/browser-vault'
 
 interface Draft {
   /** Origin of the credentials being edited; empty when adding. */
@@ -22,6 +22,20 @@ const hostOf = (origin: string) => {
 }
 
 /**
+ * "Create accounts without asking": the vault keeps this setting and reads it itself at each sign-up.
+ * Unknown (vault unreachable): shown off and locked.
+ */
+export function AutoSignupSetting({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {
+  const { t } = useTranslation()
+  return (
+    <label className="settings-row vault-auto-signup">
+      <span className="settings-row-copy"><strong>{t('vault.autoSignup')}</strong><span>{t('vault.autoSignupHint')}</span></span>
+      <input className="settings-switch" type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  )
+}
+
+/**
  * Credentials for the shared Chrome, stored in the bots machine’s keychain. The password never comes back
  * here: it is replaced, never read again.
  */
@@ -32,6 +46,8 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
   const [error, setError] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [settings, setSettings] = useState<VaultSettings | null>(null)
+  const [settingsSaving, setSettingsSaving] = useState(false)
   const names = useMemo(() => new Map(bots.map((bot) => [bot.slug, bot.name])), [bots])
   const choices = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => a.name.localeCompare(b.name, i18n.language)), [bots])
 
@@ -43,6 +59,26 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
+  useEffect(() => {
+    getVaultSettings().then(setSettings).catch(() => setSettings(null))
+  }, [])
+
+  const changeAutoSignup = async (autoSignup: boolean) => {
+    if (settingsSaving || !settings) return
+    // The switch moves at once; the vault's answer has the last word, a refusal puts it back.
+    const previous = settings
+    setSettings({ ...settings, autoSignup })
+    setSettingsSaving(true)
+    setError('')
+    try {
+      setSettings(await saveVaultSettings({ autoSignup }))
+    } catch (reason) {
+      setSettings(previous)
+      setError(reason instanceof Error ? reason.message : t('vault.settingsFailed'))
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
 
   const edit = (entry: VaultEntry) => setDraft({
     editing: entry.origin,
@@ -95,6 +131,7 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
   return (
     <>
       <p className="settings-note">{t('vault.note')}</p>
+      <AutoSignupSetting checked={settings?.autoSignup === true} disabled={!settings || settingsSaving} onChange={(checked) => void changeAutoSignup(checked)} />
       {error && <p className="settings-error" role="alert">{error}</p>}
       {!draft && (
         <div className="vault-tools">

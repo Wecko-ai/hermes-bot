@@ -623,13 +623,22 @@ async function vaultAdmin(pathname, body, hermesCookie = '') {
 // A single read of the pending requests for all open windows, every 1.5 s.
 const vaultListeners = new Set()
 let vaultSnapshot = '[]'
+// Accounts a bot created without a card (the user's setting): the app tells the user, without blocking.
+let vaultNotices = '[]'
 let vaultPoll = null
 async function pollVaultRequests() {
   const { status, body } = await vaultAdmin('/admin/v1/requests')
   const next = JSON.stringify(status === 200 && Array.isArray(body.requests) ? body.requests : [])
-  if (next === vaultSnapshot) return
-  vaultSnapshot = next
-  vaultListeners.forEach((listener) => listener(next))
+  // Vault unreachable: the last notices stay, the app has already shown them.
+  const notices = status === 200 && Array.isArray(body.notices) ? JSON.stringify(body.notices) : vaultNotices
+  if (next !== vaultSnapshot) {
+    vaultSnapshot = next
+    vaultListeners.forEach((listener) => listener('requests', next))
+  }
+  if (notices !== vaultNotices) {
+    vaultNotices = notices
+    vaultListeners.forEach((listener) => listener('notices', notices))
+  }
 }
 
 function handleBrowserVaultEvents(request, response) {
@@ -639,9 +648,11 @@ function handleBrowserVaultEvents(request, response) {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
-  const listener = (snapshot) => response.write(`data: ${snapshot}\n\n`)
+  // Requests as plain messages, as before; notices as a named event, ignored by older windows.
+  const listener = (kind, snapshot) => response.write(kind === 'notices' ? `event: notices\ndata: ${snapshot}\n\n` : `data: ${snapshot}\n\n`)
   vaultListeners.add(listener)
-  listener(vaultSnapshot)
+  listener('requests', vaultSnapshot)
+  listener('notices', vaultNotices)
   if (!vaultPoll) {
     vaultPoll = setInterval(() => { pollVaultRequests().catch(() => undefined) }, 1500)
     vaultPoll.unref()
@@ -777,6 +788,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/browser-vault/entries/remove' && request.method === 'POST') {
       return await handleBrowserVaultAdmin(request, response, '/admin/v1/entries/remove')
+    }
+    if (url.pathname === '/api/browser-vault/settings' && (request.method === 'GET' || request.method === 'POST')) {
+      return await handleBrowserVaultAdmin(request, response, '/admin/v1/settings')
     }
     if (url.pathname === '/api/auth/providers' && request.method === 'GET') {
       return await proxyJson(response, await hermesFetch(request, '/api/auth/providers'))

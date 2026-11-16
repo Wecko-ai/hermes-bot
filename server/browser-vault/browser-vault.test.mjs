@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import { createBrowserVault } from './service.mjs'
 import { generatePassword, PASSWORD_ALPHABET, PASSWORD_CLASSES } from './password.mjs'
 import { CODE_FIELD, FEDERATED_SIGNIN, FILL_CODE, FILL_LOGIN, FILL_SIGNUP, LOGIN_FIELDS, SIGNUP_FIELDS } from './cdp.mjs'
 import { accountPageProvider, federatedSignIn, useSsoResult } from './sso.mjs'
+import { fileSettings, memorySettings, parseSettings } from './settings.mjs'
 
 const darwin = process.platform === 'darwin' && existsSync('/usr/bin/security')
 
@@ -318,21 +319,28 @@ function memoryStore(events, initial = []) {
 describe('coffre navigateur — création de compte', () => {
   const SITE = 'https://comptes.exemple.org'
 
-  async function setup({ passwords = 2, failFill = false, initial = [] } = {}) {
+  async function setup({ passwords = 2, failFill = false, initial = [], settings, verifyUser = async () => true } = {}) {
     const events = []
     const lines = []
     const chrome = await fakeChrome({ origin: SITE, passwords, failFill }, events)
     const probe = http.createServer()
     const port = await listenOn(probe)
     await closeServer(probe)
+    const store = memoryStore(events, initial)
     const vault = createBrowserVault({
-      port, adminToken: 'x', verifyUser: async () => true, cdpOrigin: chrome.origin,
-      store: memoryStore(events, initial), audit: { append: (line) => lines.push(line) },
+      port, adminToken: 'x', verifyUser, cdpOrigin: chrome.origin,
+      store, audit: { append: (line) => lines.push(line) }, ...(settings ? { settings } : {}),
     })
     await vault.listen()
-    const call = (body) => fetch(`http://127.0.0.1:${port}/v1/signup`, {
+    const command = (action, body) => fetch(`http://127.0.0.1:${port}/v1/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet', ...body }),
     }).then(async (response) => ({ status: response.status, raw: await response.text() }))
+    const call = (body) => command('signup', body)
+    const admin = (pathname, body, headers = {}) => fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Authorization: 'Bearer x', 'X-Hermes-Cookie': 'session=test', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).then(async (response) => ({ status: response.status, body: await response.json() }))
     const pending = async () => {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const [request] = vault.requests.snapshot()
@@ -342,7 +350,7 @@ describe('coffre navigateur — création de compte', () => {
       throw new Error('no request')
     }
     const close = async () => { await vault.close(); await chrome.close() }
-    return { events, lines, vault, call, pending, close }
+    return { events, lines, vault, store, call, command, admin, pending, close }
   }
 
   it('montre une carte, puis rend cancelled sans rien ranger ni remplir', async () => {
@@ -423,6 +431,186 @@ describe('coffre navigateur — création de compte', () => {
       expect(JSON.parse(missing.raw)).toEqual({ error: 'invalid_credentials' })
       expect(vault.requests.snapshot()).toEqual([])
       expect(events).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  // "Create accounts without asking" (Settings, Vault): no card, everything else unchanged.
+  const parsed = (lines) => lines.map((line) => JSON.parse(line))
+
+  it('réglage actif : pas de carte, entrée rangée pour ce bot seul, audit auto_approved, notification', async () => {
+    const { events, lines, vault, call, admin, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
+    const cards = []
+    const unsubscribe = vault.subscribe((snapshot) => cards.push(...snapshot))
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(result.status).toBe(200)
+      expect(JSON.parse(result.raw)).toEqual({ status: 'filled', origin: SITE, saved: true, fields: ['password', 'confirmation'] })
+      expect(cards).toEqual([])
+      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill'])
+      const { save } = events[0]
+      expect(save).toMatchObject({ origin: SITE, identifier: 'inscription@exemple.org', bots: ['orion'] })
+      expect(save.password).toHaveLength(20)
+      expect(events[1].fill).toEqual(['inscription@exemple.org', save.password])
+      expect(result.raw).not.toContain(save.password)
+      const audit = parsed(lines)
+      expect(audit.map(({ action, result: status }) => `${action}:${status}`)).toEqual(['signup:auto_approved', 'signed_up:filled'])
+      expect(audit[0]).toMatchObject({ bot: 'orion', origin: SITE, identifier: 'inscription@exemple.org' })
+      expect(lines.join('\n')).not.toContain(save.password)
+      expect(audit.every((line) => Object.keys(line).every((key) => ['at', 'action', 'bot', 'origin', 'identifier', 'result'].includes(key)))).toBe(true)
+      // The app reads the notice with the pending requests: bot, site, login, nothing secret.
+      const { status, body } = await admin('/admin/v1/requests')
+      expect(status).toBe(200)
+      expect(body.requests).toEqual([])
+      expect(body.notices).toHaveLength(1)
+      expect(body.notices[0]).toMatchObject({ kind: 'auto_signup', bot: 'orion', origin: SITE, identifier: 'inscription@exemple.org' })
+      expect(Object.keys(body.notices[0]).sort()).toEqual(['at', 'bot', 'id', 'identifier', 'kind', 'origin'])
+      expect(JSON.stringify(body)).not.toContain(save.password)
+    } finally {
+      unsubscribe()
+      await close()
+    }
+  })
+
+  it('réglage actif, rangé mais pas rempli : saved pour un fill plus tard, notification quand même', async () => {
+    const { events, vault, call, close } = await setup({ failFill: true, settings: memorySettings({ autoSignup: true }) })
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(JSON.parse(result.raw)).toEqual({ status: 'saved', origin: SITE, saved: true, filled: false, error: 'fill_failed' })
+      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill'])
+      expect(vault.notices()).toHaveLength(1)
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage actif, sans champ de mot de passe : rien de rangé, pas de notification, l’erreur revient au bot', async () => {
+    const { events, lines, vault, call, close } = await setup({ passwords: 0, settings: memorySettings({ autoSignup: true }) })
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(result.status).toBe(422)
+      expect(JSON.parse(result.raw)).toEqual({ error: 'login_fields_not_found' })
+      expect(events).toEqual([])
+      expect(vault.notices()).toEqual([])
+      expect(parsed(lines).map(({ action, result: status }) => `${action}:${status}`)).toEqual(['signup:auto_approved', 'signup:login_fields_not_found'])
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage inactif (par défaut) : la carte comme avant, aucune notification', async () => {
+    const { events, vault, call, pending, admin, close } = await setup()
+    try {
+      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: false } })
+      const answer = call({ identifier: 'inscription@exemple.org' })
+      const request = await pending()
+      expect(request).toMatchObject({ kind: 'signup', bot: 'orion', origin: SITE, identifier: 'inscription@exemple.org' })
+      expect(events).toEqual([])
+      await vault.respond(request.id, { action: 'signup' })
+      expect(JSON.parse((await answer).raw)).toMatchObject({ status: 'filled', saved: true })
+      expect(vault.notices()).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage actif, protections gardées : entry_exists (même réservé à un autre bot), bot invalide, cron, trousseau absent', async () => {
+    const initial = [{ id: SITE, origin: SITE, identifier: 'vega@exemple.org', password: 'ancien', bots: ['vega'] }]
+    const { events, vault, store, call, close } = await setup({ initial, settings: memorySettings({ autoSignup: true }) })
+    try {
+      const existing = await call({ identifier: 'inscription@exemple.org' })
+      expect(existing.status).toBe(409)
+      expect(JSON.parse(existing.raw)).toEqual({ error: 'entry_exists' })
+      expect((await store.get(SITE)).password).toBe('ancien')
+      const invalidBot = await call({ bot: '../vega', identifier: 'inscription@exemple.org' })
+      expect(invalidBot.status).toBe(400)
+      expect(JSON.parse(invalidBot.raw)).toEqual({ error: 'invalid_bot' })
+      const cron = await call({ identifier: 'inscription@exemple.org', unattended: true })
+      expect(cron.status).toBe(403)
+      expect(JSON.parse(cron.raw)).toEqual({ error: 'unattended_session' })
+      store.available = false
+      const unavailable = await call({ identifier: 'inscription@exemple.org' })
+      expect(unavailable.status).toBe(503)
+      expect(JSON.parse(unavailable.raw)).toEqual({ error: 'vault_unavailable' })
+      expect(events).toEqual([])
+      expect(vault.requests.snapshot()).toEqual([])
+      expect(vault.notices()).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage inactif, en cron : refusé aussi, sans carte', async () => {
+    const { events, vault, call, close } = await setup()
+    try {
+      const cron = await call({ identifier: 'inscription@exemple.org', unattended: true })
+      expect(cron.status).toBe(403)
+      expect(vault.requests.snapshot()).toEqual([])
+      expect(events).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage actif : le compte créé reste réservé au bot (fill d’un autre bot refusé)', async () => {
+    const { events, command, call, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
+    try {
+      expect((await call({ identifier: 'inscription@exemple.org' })).status).toBe(200)
+      const other = await command('fill', { bot: 'vega' })
+      expect(other.status).toBe(403)
+      expect(JSON.parse(other.raw)).toEqual({ error: 'bot_not_allowed' })
+      expect(events.filter((event) => event.fill)).toHaveLength(1)
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage actif : deux inscriptions simultanées sur un site, une seule rangée, l’autre entry_exists', async () => {
+    const { events, vault, call, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
+    try {
+      const results = await Promise.all([call({ identifier: 'un@exemple.org' }), call({ bot: 'vega', identifier: 'deux@exemple.org' })])
+      expect(results.map((result) => result.status).sort()).toEqual([200, 409])
+      expect(events.filter((event) => event.save)).toHaveLength(1)
+      expect(events.filter((event) => event.fill)).toHaveLength(1)
+      expect(vault.notices()).toHaveLength(1)
+    } finally {
+      await close()
+    }
+  })
+
+  it('réglage actif : save et code gardent leur carte', async () => {
+    const { events, vault, command, pending, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
+    try {
+      for (const kind of ['save', 'code']) {
+        const answer = command(kind, {})
+        const request = await pending()
+        expect(request.kind).toBe(kind)
+        await vault.respond(request.id, { action: 'cancel' })
+        expect(JSON.parse((await answer).raw)).toEqual({ status: 'cancelled', origin: SITE })
+      }
+      expect(events.filter((event) => event.save || event.fill)).toEqual([])
+      expect(vault.notices()).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('API du réglage : lecture avec le jeton, écriture avec la session Hermes seulement, booléen strict', async () => {
+    let session = false
+    const settings = memorySettings()
+    const { lines, admin, close } = await setup({ settings, verifyUser: async () => session })
+    try {
+      expect((await admin('/admin/v1/settings', undefined, { Authorization: 'Bearer y' })).body).toEqual({ error: 'admin_forbidden' })
+      expect(await admin('/admin/v1/settings', { autoSignup: true })).toEqual({ status: 403, body: { error: 'user_session_required' } })
+      expect(settings.get().autoSignup).toBe(false)
+      session = true
+      for (const body of [{ autoSignup: 'true' }, { autoSignup: 1 }, {}, { autoSignup: true, autre: true }]) {
+        expect(await admin('/admin/v1/settings', body)).toEqual({ status: 400, body: { error: 'invalid_settings' } })
+      }
+      expect(await admin('/admin/v1/settings', { autoSignup: true })).toEqual({ status: 200, body: { settings: { autoSignup: true } } })
+      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: true } })
+      expect(parsed(lines)).toContainEqual(expect.objectContaining({ action: 'admin_settings', bot: 'hermesbot', result: 'auto_signup_on' }))
     } finally {
       await close()
     }
@@ -620,6 +808,35 @@ describe('coffre navigateur — connexion fédérée, réponse au bot', () => {
       expect((await answer).status).toBe('cancelled')
     } finally {
       await close()
+    }
+  })
+})
+
+describe('coffre navigateur — fichier des réglages', () => {
+  it('désactivé par défaut, booléen strict seulement', () => {
+    expect(parseSettings(undefined)).toEqual({ autoSignup: false })
+    expect(parseSettings({ autoSignup: 'true' })).toEqual({ autoSignup: false })
+    expect(parseSettings({ autoSignup: true, autre: 1 })).toEqual({ autoSignup: true })
+  })
+
+  it('écrit en 0600, relu au démarrage suivant ; illisible, corrompu ou ouvert aux autres : désactivé', async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-vault-settings-'))
+    const file = path.join(directory, 'HermesBot', 'browser-vault-settings.json')
+    try {
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+      await expect(fileSettings(file).set({ autoSignup: 'oui' })).rejects.toThrow('invalid_settings')
+      expect(existsSync(file)).toBe(false)
+      expect(await fileSettings(file).set({ autoSignup: true })).toEqual({ autoSignup: true })
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ autoSignup: true })
+      expect(fileSettings(file).get()).toEqual({ autoSignup: true })
+      chmodSync(file, 0o620)
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+      chmodSync(file, 0o600)
+      writeFileSync(file, '{pas du json')
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 })

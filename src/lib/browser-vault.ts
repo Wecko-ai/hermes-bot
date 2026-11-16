@@ -14,7 +14,24 @@ export interface BrowserVaultRequest {
   createdAt: string
 }
 
-export function subscribeBrowserVaultRequests(onRequests: (requests: BrowserVaultRequest[]) => void) {
+/** An account a bot created without a card, under the user's setting "Create accounts without asking". */
+export interface BrowserVaultNotice {
+  id: string
+  kind: 'auto_signup'
+  bot: string
+  origin: string
+  /** The login registered (an e-mail, a username): never a password. */
+  identifier: string
+  at: string
+}
+
+const isNotice = (value: unknown): value is BrowserVaultNotice => {
+  const notice = value as Partial<BrowserVaultNotice> | null
+  return Boolean(notice) && notice?.kind === 'auto_signup'
+    && [notice.id, notice.bot, notice.origin, notice.identifier, notice.at].every((field) => typeof field === 'string' && field.length > 0)
+}
+
+export function subscribeBrowserVaultRequests(onRequests: (requests: BrowserVaultRequest[]) => void, onNotices?: (notices: BrowserVaultNotice[]) => void) {
   const source = new EventSource('/api/browser-vault/events')
   source.onmessage = (event) => {
     try {
@@ -22,7 +39,34 @@ export function subscribeBrowserVaultRequests(onRequests: (requests: BrowserVaul
       if (Array.isArray(value)) onRequests(value)
     } catch { /* a partial frame is replaced by the next snapshot */ }
   }
+  if (onNotices) {
+    source.addEventListener('notices', (event) => {
+      try {
+        const value = JSON.parse((event as MessageEvent<string>).data)
+        if (Array.isArray(value)) onNotices(value.filter(isNotice))
+      } catch { /* the next snapshot repeats them */ }
+    })
+  }
   return () => source.close()
+}
+
+const SEEN_NOTICES = 'hermesbot:vault-notices-seen'
+
+/**
+ * Notices not shown yet in this app, oldest first. The ids already shown are kept (the last 50) so
+ * that a reload or a second window does not repeat them; the vault itself forgets them after a day.
+ */
+export function takeUnseenNotices(notices: BrowserVaultNotice[], storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = globalThis.localStorage) {
+  let seen: string[] = []
+  try {
+    const stored = JSON.parse(storage?.getItem(SEEN_NOTICES) || '[]')
+    if (Array.isArray(stored)) seen = stored.filter((id): id is string => typeof id === 'string')
+  } catch { /* unreadable: everything still known by the vault is shown once */ }
+  const fresh = notices.filter((notice) => !seen.includes(notice.id))
+  if (fresh.length) {
+    try { storage?.setItem(SEEN_NOTICES, JSON.stringify([...seen, ...fresh.map((notice) => notice.id)].slice(-50))) } catch { /* shown again at the next start */ }
+  }
+  return fresh
 }
 
 // Messages live in the catalog under browserVault.errors.<code>.
@@ -44,6 +88,8 @@ const ERROR_CODES = new Set([
   'cdp_unavailable',
   'entry_exists',
   'target_not_found',
+  'invalid_settings',
+  'settings_write_failed',
 ])
 
 const errorMessage = (code: string) => i18n.t(ERROR_CODES.has(code) ? `browserVault.errors.${code}` : 'browserVault.errors.default')
@@ -90,4 +136,22 @@ export async function saveVaultEntry(entry: { origin: string; identifier: string
 
 export async function removeVaultEntry(origin: string) {
   await vaultRequest('/api/browser-vault/entries/remove', { origin })
+}
+
+/** Vault settings, kept and read by the vault itself on the bots' machine. */
+export interface VaultSettings {
+  /** Sign-ups go through without a card; the user is told afterwards. Off by default. */
+  autoSignup: boolean
+}
+
+const vaultSettings = (value: unknown): VaultSettings => ({ autoSignup: (value as Partial<VaultSettings> | null)?.autoSignup === true })
+
+export async function getVaultSettings() {
+  const result = await vaultRequest<{ settings?: VaultSettings }>('/api/browser-vault/settings')
+  return vaultSettings(result.settings)
+}
+
+export async function saveVaultSettings(patch: Partial<VaultSettings>) {
+  const result = await vaultRequest<{ settings?: VaultSettings }>('/api/browser-vault/settings', patch)
+  return vaultSettings(result.settings)
 }

@@ -159,3 +159,33 @@ export function answersPrompt(intro: string, questions: string[], answers: strin
 }
 
 export const hasAnswer = (answers: string[]) => answers.some((answer) => answer.trim())
+
+export interface SentAnswers {
+  intro: string
+  items: { number: number; question: string; answer: string }[]
+}
+
+/** Reads back a message built by answersPrompt, to show it as a compact list; null for anything else. */
+export function parseAnswersPrompt(content: string): SentAnswers | null {
+  const text = content.replace(/\r\n/g, '\n')
+  const split = text.indexOf('\n\n')
+  if (split < 0) return null
+  const intro = text.slice(0, split).trim()
+  if (!intro || intro.includes('\n') || !/:\s*$/.test(intro)) return null
+  const items: SentAnswers['items'] = []
+  for (const line of text.slice(split + 2).split('\n')) {
+    const item = /^(\d{1,2})\. (.*\S)\s*$/.exec(line)
+    if (item) { items.push({ number: Number(item[1]), question: item[2], answer: '' }); continue }
+    const current = items[items.length - 1]
+    if (!current) return null
+    if (line.startsWith('   ')) current.answer += (current.answer ? '\n' : '') + line.slice(3)
+    else if (!line.trim()) { if (current.answer) current.answer += '\n' }
+    else return null
+  }
+  if (!items.length) return null
+  for (const item of items) {
+    item.answer = item.answer.replace(/\n{2,}/g, '\n').trim()
+    if (!item.answer) return null
+  }
+  return { intro, items }
+}

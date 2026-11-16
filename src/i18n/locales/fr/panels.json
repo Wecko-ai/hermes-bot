@@ -195,7 +195,10 @@
     "reading": "Lecture du trousseau…",
     "empty": "Aucun identifiant pour l’instant. Un bot qui doit se connecter te le demandera dans une fenêtre.",
     "edit": "Modifier",
-    "remove": "Retirer"
+    "remove": "Retirer",
+    "autoSignup": "Créer les comptes sans me demander",
+    "autoSignupHint": "Quand un bot doit créer un compte, le coffre génère le mot de passe, le remplit et le range sans carte ; tu es prévenu ensuite. Les demandes d’identifiants et de codes gardent leur carte. Jamais dans une tâche planifiée.",
+    "settingsFailed": "Réglage non enregistré."
   },
   "models": {
     "closePicker": "Fermer le choix du modèle",
@@ -299,6 +302,8 @@
       "cdp_unavailable": "Le Chrome des bots ne répond pas.",
       "entry_exists": "Un identifiant est déjà rangé pour ce site. Le bot doit utiliser fill, ou retire l’ancien dans Réglages > Coffre.",
       "target_not_found": "L’onglet du bot est fermé.",
+      "invalid_settings": "Réglage du coffre refusé.",
+      "settings_write_failed": "Le coffre n’a pas pu enregistrer le réglage.",
       "default": "Le coffre a refusé la demande."
     },
     "cancelFailed": "Annulation impossible.",
@@ -324,7 +329,8 @@
     "noteSignup": "Rangé dans le trousseau de la machine des bots, réservé à {{bot}}. Tu le retrouves dans Réglages > Coffre.",
     "decline": "Refuser",
     "createAccount": "Créer le compte",
-    "signupFailed": "Compte non créé : {{reason}}"
+    "signupFailed": "Compte non créé : {{reason}}",
+    "autoSignupNotice": "{{bot}} a créé un compte sur {{site}} avec {{login}}"
   },
   "hermes": {
     "gatewayUnresponsive": "La gateway Hermes ne répond pas.",

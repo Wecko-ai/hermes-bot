@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { answersPrompt, findQuestions, hasAnswer, splitLooseQuestions, splitOpenQuestions } from './questions'
+import { answersPrompt, findQuestions, parseAnswersPrompt, hasAnswer, splitLooseQuestions, splitOpenQuestions } from './questions'
 
 const reply = [
   'Voici la page.',
@@ -41,6 +41,12 @@ describe('questions ouvertes', () => {
   it('compose la réponse avec les seules questions remplies', () => {
     const text = answersPrompt('Mes réponses :', ['Q1 ?', 'Q2 ?', 'Q3 ?'], ['Oui', ' ', 'Non\n\nMais plus tard'])
     expect(text).toBe('Mes réponses :\n\n1. Q1 ?\n   Oui\n\n3. Q3 ?\n   Non\n\n   Mais plus tard')
+    expect(parseAnswersPrompt(text)).toEqual({ intro: 'Mes réponses :', items: [
+      { number: 1, question: 'Q1 ?', answer: 'Oui' },
+      { number: 3, question: 'Q3 ?', answer: 'Non\nMais plus tard' },
+    ] })
+    expect(parseAnswersPrompt('Salut :\n\nun texte normal')).toBeNull()
+    expect(parseAnswersPrompt('Liste :\n\n1. a\n2. b')).toBeNull()
     expect(hasAnswer(['', '  '])).toBe(false)
     expect(hasAnswer(['', 'x'])).toBe(true)
   })

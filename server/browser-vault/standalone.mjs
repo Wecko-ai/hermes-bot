@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createBrowserVault } from './service.mjs'
+import { fileSettings } from './settings.mjs'
 import { cdpOriginForBot, loadChromeTeams } from '../chrome-teams.mjs'
 
 const auditFile = process.env.HERMESBOT_VAULT_AUDIT
@@ -31,6 +32,10 @@ function adminToken() {
   return value
 }
 
+// Settings chosen in the app (Settings, Vault), next to the token: written only through the admin API.
+const settingsFile = process.env.HERMESBOT_VAULT_SETTINGS
+  || path.join(os.homedir(), 'Library/Application Support/HermesBot/browser-vault-settings.json')
+
 // The user's Hermes session, passed by the app for each write: the gateway says whether it is valid.
 const hermesOrigin = process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120'
 async function verifyUser(cookie) {
@@ -50,6 +55,7 @@ const vault = createBrowserVault({
   cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || undefined,
   cdpOriginFor: chromeTeams ? (bot) => cdpOriginForBot(chromeTeams, bot) : undefined,
   audit: { append: (line) => fs.appendFileSync(auditFile, `${line}\n`, { mode: 0o600 }) },
+  settings: fileSettings(settingsFile),
 })
 
 await vault.listen()

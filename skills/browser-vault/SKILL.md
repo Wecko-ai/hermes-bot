@@ -43,12 +43,28 @@ node <path to HermesBot>/scripts/browser-vault.mjs <list|save|fill|code|signup> 
    - received by email: read it in your mailbox and type it yourself (a one-time code is not a password);
    - otherwise: `code --bot <profile> --target <targetId>`. The user types the code into HermesBot and the vault injects it into the page.
 
+## Create an account the user asked for
+
+When the user asks you to create an account ("create a TradingView account"), do everything in your power to create it. Ask the user nothing until you are really blocked: decide yourself.
+
+1. Choose the way in, in this order:
+   1. The site's "Continue with Google" button (otherwise Apple, then Microsoft), with the Google account already signed in in this Chrome. This is the default: no password, no `signup`.
+   2. Otherwise, sign up by e-mail with the address of that same Google account. Read it in this Chrome: the Google account page (`https://myaccount.google.com`) or the account picker the site shows. The password goes through `signup` (next section).
+   3. The site wants a username: derive it yourself (from the account's name or e-mail) and try variants if it is taken.
+2. Fill in every non-secret field yourself: name, country, required terms-of-service boxes, preferences. Pick the most neutral default value; decline newsletters and marketing.
+3. Skip the optional steps (onboarding, tours, invitations). For a plan, always take the free one. Never enter a payment method.
+4. Retry before giving up: reload the page, try another way to sign up, another username variant.
+5. You are blocked only by: a CAPTCHA you cannot pass, an SMS or phone code, an e-mail code you cannot read (use `code`: its card tells the user), a required payment, an identity check, or the site refusing the sign-up. Then send one short message: where you are, what exactly blocks, and the precise action you expect from the user.
+6. At the end, one short message: "Account created on <site> with <login>" and how you sign in (Google, or password in the vault).
+
+If `signup` answers without the user seeing a card, it is the user's setting "Create accounts without asking" (HermesBot, Settings, Vault). Never ask the user to turn it on.
+
 ## Create an account
 
 When a site asks you to create an account, use `signup`. Never invent, type or read a password, and never chain `save` and two `fill` for a new account.
 
 1. Fill in everything else yourself (name, birth date, the e-mail or username you register) and go to the step that shows the password field (and its confirmation).
-2. `signup --bot <profile> --target <targetId> --identifier <login>`. `<login>` is the e-mail or username you register: not a secret. The user receives "<bot> wants to create an account on <site> with <login>" in HermesBot. The command waits up to 6 minutes.
+2. `signup --bot <profile> --target <targetId> --identifier <login>`. `<login>` is the e-mail or username you register: not a secret. The user receives "<bot> wants to create an account on <site> with <login>" in HermesBot. The command waits up to 6 minutes. With the user's setting "Create accounts without asking", there is no card: the answer comes at once, as for an accepted card, and the user is told afterwards.
    - `{"status":"filled","saved":true,"fields":[…]}`: the vault generated a strong password, stored it for this site (reserved for you) and typed it into every visible password field, plus the login field if one was visible. Submit the form yourself.
    - `{"status":"saved","saved":true,"filled":false,"error":"…"}`: stored but not typed. Show the password step again, then run `fill`.
    - `{"status":"cancelled"}`: the user declined. Do not ask again during this turn; say so in your reply.
@@ -62,5 +78,6 @@ When a site asks you to create an account, use `signup`. Never invent, type or r
 - `login_fields_not_found` or `code_field_not_found`: no field recognized. Show the right form (the "Sign in" step, the password field), then start again. After `signup`, nothing was stored.
 - `entry_exists`: credentials are already stored for this site (one per site). Use `fill`; for another account on that site, ask the user to remove the old one first (HermesBot, Settings, Vault).
 - `invalid_credentials` after `signup`: `--identifier` is missing or invalid.
+- `unattended_session`: `signup` from a scheduled task (cron) is always refused. Stop and report it.
 - `target_required`: `--target` is missing.
 - `vault_unavailable`, `vault_service_unavailable`, `request_timeout`, `cdp_unavailable`: stop and report it.

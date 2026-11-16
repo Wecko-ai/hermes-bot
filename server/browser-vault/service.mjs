@@ -1,14 +1,18 @@
 import http from 'node:http'
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { KeychainStore, botAllowed, validBots, validIdentifier } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
 import { BrowserVaultError, vaultError } from './errors.mjs'
 import { generatePassword } from './password.mjs'
 import { accountPageProvider, ssoProvider, useSsoResult } from './sso.mjs'
+import { memorySettings } from './settings.mjs'
 
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 const TARGET_ID = /^[A-Za-z0-9_-]{1,128}$/
+// Accounts created without a card, kept for the app's notice: the last 20, for one day at most.
+const NOTICE_LIMIT = 20
+const NOTICE_TTL = 24 * 60 * 60 * 1000
 
 function sendJson(response, status, body) {
   const data = JSON.stringify(body)
@@ -40,8 +44,9 @@ async function readJson(request) {
 
 /**
  * Shared Chrome vault. Bot API on `/v1/<list|fill|save|code|signup>`; HermesBot app API on
- * `/admin/v1/…` (pending requests, credentials). No route returns a password.
- * Credentials live in the macOS session keychain (`keychain.mjs`).
+ * `/admin/v1/…` (pending requests, notices, credentials, settings). No route returns a password.
+ * Credentials live in the macOS session keychain (`keychain.mjs`), the user's settings in
+ * `options.settings` (`settings.mjs`).
  */
 export function createBrowserVault(options = {}) {
   const port = options.port ?? 4331
@@ -66,6 +71,8 @@ export function createBrowserVault(options = {}) {
     verified.set(key, Date.now() + 60_000)
   }
   const store = options.store ?? new KeychainStore()
+  // Without a settings file, the defaults: every sign-up waits for the user's card.
+  const settings = options.settings ?? memorySettings()
   const requests = new BrowserVaultRequests()
   // One Chrome per bot team: one CDP client per origin, chosen by the bot making the request.
   const cdpClients = new Map()
@@ -86,6 +93,18 @@ export function createBrowserVault(options = {}) {
     // Explicitly listed fields: never a request body, a password or a raw CDP error.
     const line = JSON.stringify({ at: new Date().toISOString(), action, bot, origin: origin || null, ...(identifier ? { identifier } : {}), result })
     try { auditSink.append(line) } catch { /* the log must not block the vault */ }
+  }
+
+  // Sign-ups the user's setting let through without a card: the app tells the user afterwards.
+  // Metadata only, as on a card: bot, site, login. Never a password.
+  let notices = []
+  function currentNotices() {
+    const oldest = Date.now() - NOTICE_TTL
+    notices = notices.filter((notice) => Date.parse(notice.at) >= oldest)
+    return notices.map((notice) => ({ ...notice }))
+  }
+  function addNotice(bot, origin, identifier) {
+    notices = [...currentNotices(), { id: randomUUID(), kind: 'auto_signup', bot, origin, identifier, at: new Date().toISOString() }].slice(-NOTICE_LIMIT)
   }
 
   function validateBot(value) {
@@ -114,6 +133,9 @@ export function createBrowserVault(options = {}) {
     // `save` only: the page's "Continue with Google" (Apple, Microsoft), a hint for the card. Never blocks.
     let sso = null
     try {
+      // A scheduled task (the CLI sees Hermes's `HERMES_CRON_SESSION`): nobody is there to approve or
+      // to be told, with or without the user's setting. Declarative, like the bot name.
+      if (action === 'signup' && body.unattended === true) throw new BrowserVaultError('unattended_session', 403)
       if ((action === 'save' || action === 'signup') && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
       if (action === 'save') ({ origin, sso } = await cdpFor(bot).inspectLogin(targetId))
       else origin = await cdpFor(bot).activeOrigin(targetId)
@@ -131,6 +153,15 @@ export function createBrowserVault(options = {}) {
       if (action === 'signup') {
         // One credential per site in the keychain: a new account must never replace a stored one.
         if (await store.find(origin)) throw new BrowserVaultError('entry_exists', 409)
+        if (settings.get().autoSignup === true) {
+          // "Create accounts without asking" (Settings, Vault): the same steps as an accepted card,
+          // without the card. Only sign-ups: `save` and `code` always wait for the user.
+          audit(action, bot, origin, 'auto_approved', identifier)
+          const result = await acceptSignup({ bot, origin, targetId, identifier })
+          audit('signed_up', bot, origin, result.status, identifier)
+          addNotice(bot, origin, identifier)
+          return result
+        }
         const result = await requests.create({ kind: 'signup', bot, origin, targetId, identifier }, saveTimeout)
         audit(action, bot, origin, result.status, identifier)
         return result
@@ -147,11 +178,30 @@ export function createBrowserVault(options = {}) {
     }
   }
 
+  // One sign-up at a time per site: two at once could both pass `entry_exists`, and the second
+  // would replace in the keychain the password the first one typed.
+  const signupLocks = new Map()
+  async function oneSignupPerSite(origin, task) {
+    const run = (signupLocks.get(origin) || Promise.resolve()).then(task)
+    const tail = run.catch(() => undefined)
+    signupLocks.set(origin, tail)
+    try {
+      return await run
+    } finally {
+      if (signupLocks.get(origin) === tail) signupLocks.delete(origin)
+    }
+  }
+
   /**
-   * Sign-up accepted by the user: the vault draws the password, stores it, then types it into every
-   * password field of the page. The password exists only in this function, the keychain and the page.
+   * Sign-up accepted by the user (card or setting): the vault draws the password, stores it, then types
+   * it into every password field of the page. The password exists only in this function, the keychain
+   * and the page.
    */
-  async function acceptSignup(request) {
+  function acceptSignup(request) {
+    return oneSignupPerSite(request.origin, () => signupNow(request))
+  }
+
+  async function signupNow(request) {
     const password = generatePassword()
     let saved = false
     const saveFirst = async () => {
@@ -222,8 +272,9 @@ export function createBrowserVault(options = {}) {
   async function admin(method, pathname, request) {
     const given = Buffer.from(String(request.headers.authorization || ''))
     if (given.length !== adminToken.length || !timingSafeEqual(given, adminToken)) throw new BrowserVaultError('admin_forbidden', 403)
-    if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot() }
+    if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot(), notices: currentNotices() }
     if (method === 'GET' && pathname === '/admin/v1/entries') return { entries: await store.list() }
+    if (method === 'GET' && pathname === '/admin/v1/settings') return { settings: settings.get() }
     if (method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new BrowserVaultError('invalid_request', 400)
     await requireUser(request)
     const body = await readJson(request)
@@ -234,6 +285,11 @@ export function createBrowserVault(options = {}) {
       const entry = await store.save(body.origin, body.identifier, password, validBots(body.bots))
       audit('admin_save', 'hermesbot', entry.origin, 'ok')
       return { entry }
+    }
+    if (pathname === '/admin/v1/settings') {
+      const next = await settings.set(body)
+      audit('admin_settings', 'hermesbot', null, next.autoSignup ? 'auto_signup_on' : 'auto_signup_off')
+      return { settings: next }
     }
     if (pathname === '/admin/v1/entries/remove') {
       await store.remove(body.origin)
@@ -268,6 +324,7 @@ export function createBrowserVault(options = {}) {
     requests,
     respond,
     subscribe: (listener) => requests.subscribe(listener),
+    notices: currentNotices,
     store,
     listen() {
       return new Promise((resolve, reject) => {

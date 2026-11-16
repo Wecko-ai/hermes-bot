@@ -10,7 +10,7 @@ import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaE
 import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
 import { TweetCard } from './TweetCard'
-import { findQuestions } from '../lib/questions'
+import { findQuestions, parseAnswersPrompt } from '../lib/questions'
 import { findTweets, type TweetMatch } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { normalizeHref } from '../lib/links'
@@ -276,10 +276,21 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
   }
   // "Questions ouvertes" at the end of a reply: answered from fields, not by retyping them.
   const questions = message.role === 'assistant' && !message.streaming ? findQuestions(message.content, askable) : null
+  // Answers sent from a questions card: a tight question / answer list, not the raw numbered text.
+  const sentAnswers = message.role === 'user' ? parseAnswersPrompt(message.content) : null
   return (
     <article className={`message message-${message.role} ${message.streaming ? 'is-streaming' : ''} ${message.failed ? 'is-failed' : ''} ${isEntering(message) ? 'is-entering' : ''}`}>
       <div className="message-content">
-        {questions
+        {sentAnswers
+          ? <dl className="sent-answers" aria-label={sentAnswers.intro}>
+              {sentAnswers.items.map((item) => (
+                <div key={item.number} className="sent-answer">
+                  <dt>{item.question}</dt>
+                  <dd>{item.answer}</dd>
+                </div>
+              ))}
+            </dl>
+          : questions
           ? <>
               {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
               <QuestionsCard id={message.id} block={questions} />
