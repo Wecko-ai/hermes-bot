@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual rerun, for instance after GitHub could not find a macOS runner.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -46,10 +48,7 @@ jobs:
       - name: Secret scan
         run: gitleaks git . --redact --no-banner
 
-  swift:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Same runner as the checks above: macOS runners are scarce, one job queues once.
       - name: Swift tests (dictation helper and native core)
         run: |
           swift test --package-path native/dictation
