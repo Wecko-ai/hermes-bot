@@ -834,6 +834,8 @@ mock.on('upgrade', (request, socket, head) => {
 let cdpUrl = 'https://store.steampowered.com/login/'
 const cdpExpressions = []
 const cdpInjections = []
+// Password fields the simulated sign-up page shows (password and confirmation).
+let cdpSignupPasswords = 2
 const cdpMock = http.createServer((request, response) => {
   if (request.url !== '/json/list') { response.statusCode = 404; return response.end() }
   response.setHeader('Content-Type', 'application/json')
@@ -855,10 +857,14 @@ cdpWss.on('connection', (socket, request) => {
       }
       return send(socket, { id, result: { result: { type: 'object', objectId: 'champs-actifs' } } })
     }
+    if (method === 'Runtime.callFunctionOn' && !params.arguments) {
+      // Sign-up, before anything is stored: the vault counts the fields, without any value.
+      return send(socket, { id, result: { result: { type: 'object', value: { identifier: false, passwords: cdpSignupPasswords } } } })
+    }
     if (method === 'Runtime.callFunctionOn') {
       const values = params.arguments.map((argument) => argument.value)
       cdpInjections.push({ target, origin: new URL(cdpUrl).origin, values })
-      const filled = values.length === 2 ? ['identifier', 'password'] : ['code']
+      const filled = params.functionDeclaration.includes("'confirmation'") ? ['password', 'confirmation'] : values.length === 2 ? ['identifier', 'password'] : ['code']
       return send(socket, { id, result: { result: { type: 'object', value: { filled } } } })
     }
     send(socket, { id, error: { message: 'unsupported' } })
@@ -1784,10 +1790,10 @@ try {
   await page.locator('[data-bot=orion].is-selected').waitFor({ timeout: 3_000 })
 
   // CDP vault: bots API on 4333, local window on 4332, gateway never the recipient.
-  const vaultCall = async (action) => {
+  const vaultCall = async (action, timeout = 10_000) => {
     const response = await fetch(`http://127.0.0.1:4333/v1/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet-steam' }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeout),
     })
     const raw = await response.text()
     return { httpStatus: response.status, body: JSON.parse(raw), raw }
@@ -1869,8 +1875,56 @@ try {
   if (crossOrigin.status !== 403) throw new Error('Une page web peut appeler le service des bots.')
 
   cdpUrl = 'https://store.steampowered.com/login/?code=1'
-  const codingBrowser = vaultCall('code')
-  await browserSheet.getByLabel('Code de vérification').fill(BROWSER_CODE)
+  const codingBrowser = vaultCall('code', 60_000)
+  const codeInput = browserSheet.getByLabel('Code de vérification')
+  await codeInput.waitFor({ timeout: 5_000 })
+  // Docked sheet: no backdrop, the conversation behind stays readable, scrollable and clickable.
+  if (await browserSheet.getAttribute('aria-modal') !== 'false') throw new Error('La demande de code du coffre reste modale.')
+  const dockedScrim = await page.locator('.browser-vault-scrim').evaluate((element) => ({ background: getComputedStyle(element).backgroundColor, pointer: getComputedStyle(element).pointerEvents }))
+  if (dockedScrim.pointer !== 'none' || !['rgba(0, 0, 0, 0)', 'transparent'].includes(dockedScrim.background)) throw new Error(`Fond de la demande de code encore actif : ${JSON.stringify(dockedScrim)}`)
+  const sheetBox = await browserSheet.boundingBox()
+  const viewport = page.viewportSize()
+  if (!sheetBox || !viewport || sheetBox.x + sheetBox.width < viewport.width - 40 || sheetBox.y + sheetBox.height < viewport.height - 40) throw new Error(`La demande n’est pas ancrée en bas à droite : ${JSON.stringify(sheetBox)}`)
+  // A point of the bot's latest visible reply that the sheet does not cover: the mouse reaches the transcript there.
+  const behindPoint = await page.evaluate(() => {
+    const sheet = document.querySelector('.browser-vault-dialog').getBoundingClientRect()
+    for (const element of [...document.querySelectorAll('.message-assistant .message-content')].reverse()) {
+      const box = element.getBoundingClientRect()
+      const x = box.left + Math.min(box.width / 2, 24)
+      const y = box.top + Math.min(box.height / 2, 10)
+      if (box.width === 0 || y < 0 || y > innerHeight || (x >= sheet.left && x <= sheet.right && y >= sheet.top && y <= sheet.bottom)) continue
+      const hit = document.elementFromPoint(x, y)
+      return hit && element.contains(hit) && hit.closest('.messages-scroll') ? { x, y } : null
+    }
+    return null
+  })
+  if (!behindPoint) throw new Error('La conversation derrière la demande n’est pas visible ou ne reçoit pas la souris.')
+  const clickBehind = async () => {
+    await page.evaluate(() => {
+      window.__behindClick = ''
+      document.addEventListener('click', (event) => { window.__behindClick = event.target instanceof Element && event.target.closest('.messages-scroll') ? 'chat' : 'other' }, { once: true, capture: true })
+    })
+    await page.mouse.click(behindPoint.x, behindPoint.y)
+    if (await page.evaluate(() => window.__behindClick) !== 'chat') throw new Error('Un clic sur la conversation n’arrive pas jusqu’à elle pendant la demande.')
+  }
+  await clickBehind()
+  // Reminder: the bot, the site, what is asked and the bot's latest finished message.
+  const dockedContext = browserSheet.locator('.request-context')
+  await dockedContext.getByText('Code à usage unique').waitFor({ timeout: 2_000 })
+  if (await dockedContext.getByText('Orion', { exact: true }).count() !== 1) throw new Error('Le bot demandeur manque dans le rappel.')
+  if (!(await browserSheet.locator('.request-excerpt blockquote').innerText()).includes('Étape terminée.')) throw new Error('Le dernier message du bot manque dans la demande.')
+  // Minimize, then restore: the typed code stays.
+  await codeInput.fill(BROWSER_CODE)
+  await browserSheet.getByRole('button', { name: 'Réduire' }).click()
+  const vaultPill = browserSheet.locator('.request-pill')
+  await vaultPill.getByText('Orion attend : code pour store.steampowered.com', { exact: true }).waitFor({ timeout: 2_000 })
+  if (await codeInput.isVisible()) throw new Error('Le formulaire reste visible une fois la demande réduite.')
+  await clickBehind()
+  await vaultPill.click()
+  await codeInput.waitFor({ state: 'visible', timeout: 2_000 })
+  if (await codeInput.inputValue() !== BROWSER_CODE) throw new Error('Le code tapé est perdu après Réduire.')
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}vault-docked.png` })
   await browserSheet.getByRole('button', { name: 'Injecter le code' }).click()
   const codedBrowser = await codingBrowser
   if (codedBrowser.httpStatus !== 200 || codedBrowser.body.fields?.[0] !== 'code') throw new Error(`Code CDP refusé: ${codedBrowser.raw}`)
@@ -1880,6 +1934,44 @@ try {
   await browserSheet.getByRole('button', { name: 'Plus tard' }).waitFor({ timeout: 3_000 })
   await browserSheet.getByRole('button', { name: 'Plus tard' }).click()
   if ((await cancellingBrowser).body.status !== 'cancelled') throw new Error('Annulation du coffre CDP incorrecte.')
+
+  // Sign-up in one action: the vault draws the password, stores it, then types it in both fields.
+  // The bot, its CLI output and the vault log never see it.
+  cdpUrl = 'https://comptes.exemple.org/inscription'
+  const SIGNUP_LOGIN = 'inscription-test@exemple.org'
+  const signupArgs = ['scripts/browser-vault.mjs', 'signup', '--bot', 'orion', '--target', 'onglet-steam', '--identifier', SIGNUP_LOGIN]
+  const cliOptions = { cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' } }
+  const signingUp = execFileAsync(process.execPath, signupArgs, cliOptions)
+  const signupSheet = page.locator('.browser-vault-signup')
+  await signupSheet.getByText(`Orion veut créer un compte sur https://comptes.exemple.org avec ${SIGNUP_LOGIN}. Un mot de passe fort sera généré, rempli et rangé dans le coffre ; il ne passera jamais par le chat.`, { exact: true }).waitFor({ timeout: 5_000 })
+  await signupSheet.locator('.request-context').getByText('Création d’un compte, mot de passe généré par le coffre').waitFor()
+  if (await signupSheet.getAttribute('aria-modal') !== 'false') throw new Error('La carte de création de compte reste modale.')
+  await delay(350)
+  await page.screenshot({ path: `${SCREENSHOTS}vault-signup.png` })
+  const injectionsBeforeSignup = cdpInjections.length
+  await signupSheet.getByRole('button', { name: 'Créer le compte' }).click()
+  const signedUp = await signingUp
+  const signupResult = JSON.parse(signedUp.stdout)
+  if (signupResult.status !== 'filled' || signupResult.saved !== true || signupResult.fields?.join() !== 'password,confirmation') throw new Error(`Création de compte incorrecte : ${signedUp.stdout}`)
+  const signupInjection = cdpInjections.at(-1)
+  if (cdpInjections.length !== injectionsBeforeSignup + 1 || signupInjection.target !== 'onglet-steam' || signupInjection.values[0] !== SIGNUP_LOGIN) throw new Error('Remplissage de la création de compte incorrect.')
+  const generated = signupInjection.values[1]
+  if (!/^[A-Za-z0-9!#$%&*+\-=?@^_]{20}$/.test(generated) || ![/[a-z]/, /[A-Z]/, /[0-9]/, /[!#$%&*+\-=?@^_]/].every((pattern) => pattern.test(generated))) throw new Error('Mot de passe généré trop faible.')
+  const storedSignup = await execFileAsync('/usr/bin/security', ['find-internet-password', '-s', 'comptes.exemple.org', '-a', SIGNUP_LOGIN, '-w', BROWSER_VAULT_KEYCHAIN])
+  if (storedSignup.stdout.trim() !== generated) throw new Error('Le mot de passe rempli n’est pas celui rangé au trousseau.')
+  const signupAuditText = readFileSync(BROWSER_VAULT_AUDIT, 'utf8')
+  if ([signedUp.stdout, signedUp.stderr, signupAuditText, ...cdpExpressions].some((text) => text.includes(generated))) throw new Error('Le mot de passe généré sort du coffre.')
+  const signupAudit = signupAuditText.trim().split('\n').map((line) => JSON.parse(line)).filter((line) => line.action === 'signed_up').at(-1)
+  if (signupAudit?.identifier !== SIGNUP_LOGIN || signupAudit.result !== 'filled' || signupAudit.bot !== 'orion' || signupAudit.origin !== 'https://comptes.exemple.org') throw new Error(`Journal de la création de compte incorrect : ${JSON.stringify(signupAudit)}`)
+  await signupSheet.waitFor({ state: 'detached', timeout: 3_000 })
+  if (await page.getByText(generated).count()) throw new Error('Le mot de passe généré est affiché.')
+  // A second account on the same site never replaces the stored one: refused before any card.
+  const signupAgain = await execFileAsync(process.execPath, signupArgs, cliOptions).then(() => null, (error) => error)
+  if (!signupAgain || JSON.parse(signupAgain.stderr).error !== 'entry_exists') throw new Error('Deuxième création de compte acceptée sur un site déjà rangé.')
+  if (await signupSheet.count()) throw new Error('Une carte s’ouvre pour un site déjà rangé.')
+  // The rest of the test expects the Steam tab, and the Steam entry alone in the disposable keychain.
+  await execFileAsync('/usr/bin/security', ['delete-internet-password', '-s', 'comptes.exemple.org', BROWSER_VAULT_KEYCHAIN])
+  cdpUrl = 'https://store.steampowered.com/login/'
 
   // Settings > Vault: the identifier shows without a password, Nova is authorized in addition to Orion.
   await page.keyboard.press('Meta+,')

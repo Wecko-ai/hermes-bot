@@ -21,6 +21,8 @@ const LABEL_PREFIX = 'HermesBot · '
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 // A line break would end the `security -i` command: refused everywhere, like the other checks.
 const CONTROL = /[\u0000-\u001f\u007f]/
+// Bidirectional overrides could make a login shown on a card read like another site.
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/
 
 export const defaultKeychain = () => process.env.HERMESBOT_KEYCHAIN || path.join(os.homedir(), 'Library/Keychains/login.keychain-db')
 
@@ -133,6 +135,14 @@ export function validBots(value) {
 
 export const botAllowed = (entry, bot) => entry.bots.includes('*') || entry.bots.includes(bot)
 
+/** Login of a credential (an e-mail, a username): not a secret, but it goes into a `security -i` line. */
+export function validIdentifier(value) {
+  if (typeof value !== 'string' || !value || value.length > 1024 || CONTROL.test(value) || BIDI.test(value)) {
+    throw new BrowserVaultError('invalid_credentials', 400)
+  }
+  return value
+}
+
 export class KeychainStore {
   constructor({ keychain = defaultKeychain(), run = runSecurity } = {}) {
     this.keychain = keychain
@@ -198,9 +208,7 @@ export class KeychainStore {
   async save(originValue, identifier, password, bots) {
     const { origin, server, protocol, port } = originParts(originValue)
     const allowed = validBots(bots)
-    if (typeof identifier !== 'string' || !identifier || identifier.length > 1024 || CONTROL.test(identifier)) {
-      throw new BrowserVaultError('invalid_credentials', 400)
-    }
+    validIdentifier(identifier)
     let secret = password
     if (secret === undefined || secret === null) secret = (await this.get(origin)).password
     if (typeof secret !== 'string' || !secret || secret.length > 4096 || CONTROL.test(secret)) {

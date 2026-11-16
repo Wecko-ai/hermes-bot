@@ -30,6 +30,7 @@ import { LocalChatView } from './components/LocalChatView'
 import { ServerRequestDialog } from './components/ServerRequestDialog'
 import { BrowserVaultDialog } from './components/BrowserVaultDialog'
 import { respondBrowserVault, subscribeBrowserVaultRequests } from './lib/browser-vault'
+import { requestContext } from './lib/request-context'
 import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
 import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
@@ -1480,8 +1481,20 @@ export default function App() {
   }
 
   const answerBrowserVault = async (id: string, body: Record<string, unknown>) => {
-    await respondBrowserVault(id, body)
+    try {
+      await respondBrowserVault(id, body)
+    } catch (error) {
+      // A refused sign-up goes back to the bot and its card closes: the reason stays readable here.
+      if (body.action === 'signup') setNotice(i18n.t('browserVault.signupFailed', { reason: error instanceof Error ? error.message : i18n.t('browserVault.errors.default') }))
+      throw error
+    }
     removeBrowserVaultRequest(id)
+  }
+
+  /** A bot's messages for a request card: the open chat when it is that bot, its cache otherwise. */
+  const botMessages = (slug?: string, sessionId?: string) => {
+    if (activeChat && ((slug && activeChat.profile === slug) || (sessionId && activeChat.sessionId === sessionId))) return messages
+    return slug ? getCached(slug)?.messages : undefined
   }
 
   const rosterSelected = bots.find((bot) => bot.slug === selected) || bots[0]
@@ -1503,6 +1516,10 @@ export default function App() {
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
   const openBrowserVaultRequest = browserVaultRequests[0]
+  const openRequestSession = typeof openRequest?.params.session_id === 'string' ? openRequest.params.session_id : undefined
+  const openRequestBot = openRequestSession ? bots.find((bot) => bot.sessionId === openRequestSession) : undefined
+  const openRequestContext = openRequest && openRequest.method !== 'approval' ? requestContext(botMessages(openRequestBot?.slug, openRequestSession)) : undefined
+  const browserVaultContext = openBrowserVaultRequest ? requestContext(botMessages(openBrowserVaultRequest.bot)) : undefined
   const newBotDialog = newBotOpen && <NewBotDialog bots={bots} connected={DEMO || connected} loadKnown={DEMO ? null : loadKnownProfiles} onCreate={createNewBot} onClose={() => setNewBotOpen(false)} />
   const openRoom = selectedRoomId ? roomCache[selectedRoomId]?.room || rooms.find((room) => room.room_id === selectedRoomId) : null
   const openRoomCache = selectedRoomId ? roomCache[selectedRoomId] : undefined
@@ -1636,8 +1653,8 @@ export default function App() {
           onClose={() => setDetailsOpen(false)}
         />
       )}
-      {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={bots.find((bot) => bot.sessionId === openRequest.params.session_id)?.name || selectedBot.name} onAnswer={answerServerRequest} />}
-      {openBrowserVaultRequest && <BrowserVaultDialog key={openBrowserVaultRequest.id} request={openBrowserVaultRequest} botName={bots.find((bot) => bot.slug === openBrowserVaultRequest.bot)?.name || openBrowserVaultRequest.bot} onRespond={answerBrowserVault} />}
+      {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={openRequestBot?.name || selectedBot.name} context={openRequestContext} onAnswer={answerServerRequest} />}
+      {openBrowserVaultRequest && <BrowserVaultDialog key={openBrowserVaultRequest.id} request={openBrowserVaultRequest} botName={bots.find((bot) => bot.slug === openBrowserVaultRequest.bot)?.name || openBrowserVaultRequest.bot} context={browserVaultContext} onRespond={answerBrowserVault} />}
       {paletteOpen && <CommandPalette bots={rosterBots} onSelect={(bot) => { setPaletteOpen(false); selectBot(bot) }} onClose={() => setPaletteOpen(false)} />}
       {settingsTab && (
         <SettingsDialog

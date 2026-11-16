@@ -6,6 +6,8 @@ const publicRequest = (request) => ({
   kind: request.kind,
   bot: request.bot,
   origin: request.origin,
+  // Sign-up only: the login the bot registers, shown on the user's card (never a password).
+  ...(request.identifier ? { identifier: request.identifier } : {}),
   busy: request.busy,
   createdAt: request.createdAt,
 })
@@ -44,11 +46,11 @@ export class BrowserVaultRequests {
     return () => this.listeners.delete(listener)
   }
 
-  create({ kind, bot, origin, targetId }, timeoutMs) {
+  create({ kind, bot, origin, targetId, identifier }, timeoutMs) {
     const id = randomUUID()
     return new Promise((resolve, reject) => {
       const request = {
-        id, kind, bot, origin, targetId, busy: false, createdAt: new Date().toISOString(),
+        id, kind, bot, origin, targetId, identifier, busy: false, createdAt: new Date().toISOString(),
         deadline: Date.now() + timeoutMs, resolve, reject, timer: null,
       }
       this.pending.set(id, request)
@@ -78,6 +80,15 @@ export class BrowserVaultRequests {
     this.pending.delete(id)
     this.notify()
     request.resolve(result)
+  }
+
+  /** Ends the request with an error for the bot: it can fix its page and ask again. */
+  fail(id, error) {
+    const request = this.get(id)
+    clearTimeout(request.timer)
+    this.pending.delete(id)
+    this.notify()
+    request.reject(error)
   }
 
   cancel(id, status = 'cancelled') {

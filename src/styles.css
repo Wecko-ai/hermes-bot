@@ -762,6 +762,33 @@ body::before {
 .request-actions.is-wrap { flex-wrap: wrap; }
 .request-actions button { height: 34px; padding: 0 14px; border-radius: 9px; background: var(--hover); color: var(--text); font-size: 13px; font-weight: 520; box-shadow: inset 0 0 0 .5px var(--border); }
 .request-actions button.is-primary { background: var(--accent); color: #fff; box-shadow: none; }
+/* Vault requests: docked bottom right, no backdrop, the conversation behind stays usable. */
+.request-scrim.is-docked { display: flex; align-items: flex-end; justify-content: flex-end; padding: 16px; background: none; pointer-events: none; }
+.request-sheet.is-docked { pointer-events: auto; width: min(380px, 100%); max-height: calc(100dvh - 32px); gap: 0; padding: 18px; border: .5px solid var(--border-strong); }
+.request-sheet.is-docked.is-minimized { width: auto; max-width: min(420px, 100%); padding: 0; border: 0; background: none; box-shadow: none; overflow: visible; animation: none; }
+.request-body { display: flex; flex-direction: column; gap: 12px; }
+.request-body[hidden] { display: none; }
+.request-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.request-minimize { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border-radius: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 520; }
+.request-minimize:hover { background: var(--hover); color: var(--text); }
+.request-context { margin: 0; display: grid; gap: 4px; padding: 9px 11px; border-radius: 10px; background: var(--surface-soft); }
+.request-context > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.request-context dt { color: var(--text-tertiary); font-size: 12px; }
+.request-context dd { margin: 0; color: var(--text); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
+.request-context dd.request-origin { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+.request-excerpt { margin: 0; display: flex; flex-direction: column; gap: 4px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+.request-excerpt figcaption { color: var(--text-tertiary); font-size: 12px; }
+.request-excerpt blockquote { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
+.request-sheet p.request-lead { color: var(--text); }
+.request-pill { max-width: 100%; height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 15px; border-radius: 999px; background: var(--surface-raised); color: var(--text); font-size: 12.5px; font-weight: 560; box-shadow: var(--shadow), inset 0 0 0 .5px var(--border-strong); animation: sheet-in 200ms var(--spring) both; }
+.request-pill svg { flex: none; color: var(--accent); }
+.request-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.request-pill:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised)); }
+@media (max-width: 640px) {
+  .request-scrim.is-docked { padding: 0; }
+  .request-sheet.is-docked { width: 100%; max-height: 70dvh; border-radius: 18px 18px 0 0; }
+  .request-sheet.is-docked.is-minimized { width: auto; margin: 0 10px 10px auto; }
+}
 
 /* Question or approval from a bot mid-turn, placed above the input field. */
 .prompt-dock { width: min(100%, 880px); flex: none; margin: 0 auto; padding: 0 16px 8px; }

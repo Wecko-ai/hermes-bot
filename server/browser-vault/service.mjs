@@ -1,9 +1,10 @@
 import http from 'node:http'
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { KeychainStore, botAllowed, validBots } from './keychain.mjs'
+import { KeychainStore, botAllowed, validBots, validIdentifier } from './keychain.mjs'
 import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
 import { BrowserVaultError, vaultError } from './errors.mjs'
+import { generatePassword } from './password.mjs'
 
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 const TARGET_ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -37,7 +38,7 @@ async function readJson(request) {
 }
 
 /**
- * Shared Chrome vault. Bot API on `/v1/<list|fill|save|code>`; HermesBot app API on
+ * Shared Chrome vault. Bot API on `/v1/<list|fill|save|code|signup>`; HermesBot app API on
  * `/admin/v1/…` (pending requests, credentials). No route returns a password.
  * Credentials live in the macOS session keychain (`keychain.mjs`).
  */
@@ -79,10 +80,10 @@ export function createBrowserVault(options = {}) {
   const saveTimeout = options.saveTimeout ?? 300_000
   const codeTimeout = options.codeTimeout ?? 120_000
 
-  function audit(action, bot, origin, result) {
+  function audit(action, bot, origin, result, identifier) {
     if (!auditSink) return
-    // Explicitly listed fields: never a request body or a raw CDP error.
-    const line = JSON.stringify({ at: new Date().toISOString(), action, bot, origin: origin || null, result })
+    // Explicitly listed fields: never a request body, a password or a raw CDP error.
+    const line = JSON.stringify({ at: new Date().toISOString(), action, bot, origin: origin || null, ...(identifier ? { identifier } : {}), result })
     try { auditSink.append(line) } catch { /* the log must not block the vault */ }
   }
 
@@ -106,9 +107,11 @@ export function createBrowserVault(options = {}) {
     }
 
     const targetId = validateTarget(body.target)
+    // Sign-up: the login the bot registers (an e-mail, a username), never a password.
+    const identifier = action === 'signup' ? validIdentifier(body.identifier) : undefined
     let origin = ''
     try {
-      if (action === 'save' && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
+      if ((action === 'save' || action === 'signup') && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
       origin = await cdpFor(bot).activeOrigin(targetId)
       if (action === 'fill') {
         const known = await store.find(origin)
@@ -121,14 +124,44 @@ export function createBrowserVault(options = {}) {
         return { status: 'filled', origin, fields }
       }
 
+      if (action === 'signup') {
+        // One credential per site in the keychain: a new account must never replace a stored one.
+        if (await store.find(origin)) throw new BrowserVaultError('entry_exists', 409)
+        const result = await requests.create({ kind: 'signup', bot, origin, targetId, identifier }, saveTimeout)
+        audit(action, bot, origin, result.status, identifier)
+        return result
+      }
+
       const kind = action === 'save' ? 'save' : 'code'
       const result = await requests.create({ kind, bot, origin, targetId }, kind === 'save' ? saveTimeout : codeTimeout)
       audit(action, bot, origin, result.status)
       return result
     } catch (error) {
       const failure = vaultError(error)
-      audit(action, bot, origin, failure.code)
+      audit(action, bot, origin, failure.code, identifier)
       throw failure
+    }
+  }
+
+  /**
+   * Sign-up accepted by the user: the vault draws the password, stores it, then types it into every
+   * password field of the page. The password exists only in this function, the keychain and the page.
+   */
+  async function acceptSignup(request) {
+    const password = generatePassword()
+    let saved = false
+    const saveFirst = async () => {
+      if (await store.find(request.origin)) throw new BrowserVaultError('entry_exists', 409)
+      await store.save(request.origin, request.identifier, password, [request.bot])
+      saved = true
+    }
+    try {
+      const fields = await cdpFor(request.bot).fillSignup(request.origin, request.targetId, request.identifier, password, saveFirst)
+      return { status: 'filled', origin: request.origin, saved: true, fields }
+    } catch (error) {
+      if (!saved) throw error
+      // Stored but not typed: the bot can run `fill` once the form is back.
+      return { status: 'saved', origin: request.origin, saved: true, filled: false, error: vaultError(error).code }
     }
   }
 
@@ -149,6 +182,11 @@ export function createBrowserVault(options = {}) {
         await store.save(request.origin, body.identifier, body.password, bots)
         audit('saved', request.bot, request.origin, 'ok')
         requests.complete(id, { status: 'saved', origin: request.origin })
+      } else if (request.kind === 'signup') {
+        if (body.action !== 'signup') throw new BrowserVaultError('invalid_action', 400)
+        const result = await acceptSignup(request)
+        audit('signed_up', request.bot, request.origin, result.status, request.identifier)
+        requests.complete(id, result)
       } else {
         if (body.action !== 'code') throw new BrowserVaultError('invalid_action', 400)
         const fields = await cdpFor(request.bot).fillCode(request.origin, request.targetId, body.code)
@@ -156,10 +194,16 @@ export function createBrowserVault(options = {}) {
       }
       return { ok: true }
     } catch (error) {
-      // the user can fix or cancel; the bot keeps waiting.
       const failure = vaultError(error)
+      // A sign-up that failed before anything was stored goes back to the bot: only it can fix the page.
+      // Its own call writes the log line.
+      if (request.kind === 'signup' && failure.code !== 'invalid_action' && requests.pending.has(id)) {
+        requests.fail(id, failure)
+        throw failure
+      }
+      audit(request.kind, request.bot, request.origin, failure.code, request.identifier)
+      // the user can fix or cancel; the bot keeps waiting.
       if (requests.pending.has(id)) requests.setBusy(id, false)
-      audit(request.kind, request.bot, request.origin, failure.code)
       throw failure
     }
   }
@@ -199,7 +243,7 @@ export function createBrowserVault(options = {}) {
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') {
         throw new BrowserVaultError('invalid_request', 400)
       }
-      const match = /^\/v1\/(list|fill|save|code)$/.exec(pathname)
+      const match = /^\/v1\/(list|fill|save|code|signup)$/.exec(pathname)
       if (!match) throw new BrowserVaultError('not_found', 404)
       const body = await readJson(request)
       return sendJson(response, 200, await command(match[1], body))

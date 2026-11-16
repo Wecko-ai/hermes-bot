@@ -2,9 +2,11 @@ import { i18n } from '../i18n'
 
 export interface BrowserVaultRequest {
   id: string
-  kind: 'save' | 'code'
+  kind: 'save' | 'code' | 'signup'
   bot: string
   origin: string
+  /** Sign-up only: the login the bot registers (never a password). */
+  identifier?: string
   busy: boolean
   createdAt: string
 }
@@ -37,6 +39,8 @@ const ERROR_CODES = new Set([
   'login_fields_not_found',
   'code_field_not_found',
   'cdp_unavailable',
+  'entry_exists',
+  'target_not_found',
 ])
 
 const errorMessage = (code: string) => i18n.t(ERROR_CODES.has(code) ? `browserVault.errors.${code}` : 'browserVault.errors.default')

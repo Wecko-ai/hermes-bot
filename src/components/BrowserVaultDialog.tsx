@@ -1,22 +1,26 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
-import { KeyRound, ShieldCheck } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { BrowserVaultRequest } from '../lib/browser-vault'
+import { DockedRequestSheet } from './RequestSheet'
 
 interface BrowserVaultDialogProps {
   request: BrowserVaultRequest
   botName: string
+  /** Plain-text excerpt of the requesting bot's latest finished reply. */
+  context?: string
   onRespond: (id: string, body: Record<string, unknown>) => Promise<void>
 }
 
 /** Local CDP vault: secrets go to the 4330 server, never through the Hermes WebSocket. */
-export function BrowserVaultDialog({ request, botName, onRespond }: BrowserVaultDialogProps) {
+export function BrowserVaultDialog({ request, botName, context, onRespond }: BrowserVaultDialogProps) {
   const { t } = useTranslation()
   const [identifier, setIdentifier] = useState('')
   const [secret, setSecret] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const saving = request.kind === 'save'
+  const kind = request.kind
+  const saving = kind === 'save'
   const busy = pending || request.busy
 
   const cancel = async () => {
@@ -26,38 +30,54 @@ export function BrowserVaultDialog({ request, botName, onRespond }: BrowserVault
     try { await onRespond(request.id, { action: 'cancel' }) }
     catch (reason) { setError(reason instanceof Error ? reason.message : t('browserVault.cancelFailed')); setPending(false) }
   }
-  const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') void cancel() }
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (busy || (saving && (!secret || !identifier)) || (!saving && !secret.trim())) return
+    if (busy) return
+    if (kind === 'save' && (!secret || !identifier)) return
+    if (kind === 'code' && !secret.trim()) return
     setPending(true)
     setError('')
     try {
-      await onRespond(request.id, saving
-        ? { action: 'save', identifier, password: secret }
-        : { action: 'code', code: secret.trim() })
+      // Sign-up: no secret here, the vault draws the password itself.
+      await onRespond(request.id, kind === 'signup'
+        ? { action: 'signup' }
+        : saving
+          ? { action: 'save', identifier, password: secret }
+          : { action: 'code', code: secret.trim() })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t('browserVault.errors.default'))
       setPending(false)
     }
   }
+  const sheet = { botName, site: request.origin, context, className: 'browser-vault-dialog', scrimClassName: 'browser-vault-scrim', onDecline: () => void cancel(), onSubmit: submit }
+  const errorLine = error && <p className="request-error" role="alert">{error}</p>
+
+  if (kind === 'signup') {
+    const login = request.identifier || ''
+    return (
+      <DockedRequestSheet {...sheet} ask="signup" className="browser-vault-dialog browser-vault-signup" label={t('browserVault.ariaSignup')} title={t('browserVault.titleSignup', { bot: botName })}>
+        <p className="request-lead">{t('browserVault.bodySignup', { bot: botName, origin: request.origin, identifier: login })}</p>
+        <p className="request-note"><ShieldCheck size={13} />{t('browserVault.noteSignup', { bot: botName })}</p>
+        {errorLine}
+        <div className="request-actions">
+          <button type="button" onClick={() => void cancel()} disabled={busy}>{t('browserVault.decline')}</button>
+          <button type="submit" className="is-primary" disabled={busy} autoFocus>{busy ? t('browserVault.busy') : t('browserVault.createAccount')}</button>
+        </div>
+      </DockedRequestSheet>
+    )
+  }
 
   return (
-    <div className="request-scrim browser-vault-scrim" role="presentation" onKeyDown={onKeyDown}>
-      <form className="request-sheet browser-vault-dialog" role="dialog" aria-modal="true" aria-label={saving ? t('browserVault.ariaSave') : t('browserVault.ariaCode')} autoComplete="off" onSubmit={submit}>
-        <div className="request-icon" aria-hidden="true"><KeyRound size={18} /></div>
-        <h2>{saving ? t('browserVault.titleSave', { bot: botName }) : t('browserVault.titleCode', { bot: botName })}</h2>
-        <p>{saving ? t('browserVault.bodySave') : t('browserVault.bodyCode')}</p>
-        <p className="request-origin">{request.origin}</p>
-        {saving && <label>{t('browserVault.siteIdentifier')}<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} required autoFocus disabled={busy} /></label>}
-        <label>{saving ? t('browserVault.sitePassword') : t('browserVault.verificationCode')}<input type={saving ? 'password' : 'text'} value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete={saving ? 'new-password' : 'one-time-code'} inputMode={saving ? undefined : 'numeric'} autoCapitalize="none" spellCheck={false} required autoFocus={!saving} disabled={busy} /></label>
-        <p className="request-note"><ShieldCheck size={13} />{saving ? t('browserVault.noteSave', { bot: botName }) : t('browserVault.noteCode')}</p>
-        {error && <p className="request-error" role="alert">{error}</p>}
-        <div className="request-actions">
-          <button type="button" onClick={() => void cancel()} disabled={busy}>{saving ? t('browserVault.later') : t('browserVault.skip')}</button>
-          <button type="submit" className="is-primary" disabled={busy || !secret.trim() || (saving && !identifier)}>{busy ? t('browserVault.busy') : saving ? t('browserVault.saveAndContinue') : t('browserVault.inject')}</button>
-        </div>
-      </form>
-    </div>
+    <DockedRequestSheet {...sheet} ask={saving ? 'login' : 'code'} label={saving ? t('browserVault.ariaSave') : t('browserVault.ariaCode')} title={saving ? t('browserVault.titleSave', { bot: botName }) : t('browserVault.titleCode', { bot: botName })}>
+      <p>{saving ? t('browserVault.bodySave') : t('browserVault.bodyCode')}</p>
+      {saving && <label>{t('browserVault.siteIdentifier')}<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} required autoFocus disabled={busy} /></label>}
+      <label>{saving ? t('browserVault.sitePassword') : t('browserVault.verificationCode')}<input type={saving ? 'password' : 'text'} value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete={saving ? 'new-password' : 'one-time-code'} inputMode={saving ? undefined : 'numeric'} autoCapitalize="none" spellCheck={false} required autoFocus={!saving} disabled={busy} /></label>
+      <p className="request-note"><ShieldCheck size={13} />{saving ? t('browserVault.noteSave', { bot: botName }) : t('browserVault.noteCode')}</p>
+      {errorLine}
+      <div className="request-actions">
+        <button type="button" onClick={() => void cancel()} disabled={busy}>{saving ? t('browserVault.later') : t('browserVault.skip')}</button>
+        <button type="submit" className="is-primary" disabled={busy || !secret.trim() || (saving && !identifier)}>{busy ? t('browserVault.busy') : saving ? t('browserVault.saveAndContinue') : t('browserVault.inject')}</button>
+      </div>
+    </DockedRequestSheet>
   )
 }

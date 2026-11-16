@@ -248,6 +248,28 @@
     "skip": "Passer",
     "submit": "Valider"
   },
+  "vaultSheet": {
+    "bot": "Bot",
+    "site": "Site",
+    "asked": "Demande",
+    "ask": {
+      "login": "Identifiant et mot de passe du site",
+      "master": "Mot de passe principal de {{name}}",
+      "code": "Code à usage unique",
+      "signup": "Création d’un compte, mot de passe généré par le coffre"
+    },
+    "short": {
+      "login": "identifiants",
+      "master": "mot de passe principal",
+      "code": "code",
+      "signup": "création de compte"
+    },
+    "lastMessage": "Dernier message du bot",
+    "minimize": "Réduire",
+    "restore": "Rouvrir la demande",
+    "pill": "{{bot}} attend : {{what}} pour {{site}}",
+    "pillNoSite": "{{bot}} attend : {{what}}"
+  },
   "browserVault": {
     "errors": {
       "request_not_found": "Cette demande a expiré.",
@@ -265,6 +287,8 @@
       "login_fields_not_found": "Aucun champ de connexion trouvé.",
       "code_field_not_found": "Aucun champ de code trouvé.",
       "cdp_unavailable": "Le Chrome des bots ne répond pas.",
+      "entry_exists": "Un identifiant est déjà rangé pour ce site. Le bot doit utiliser fill, ou retire l’ancien dans Réglages > Coffre.",
+      "target_not_found": "L’onglet du bot est fermé.",
       "default": "Le coffre a refusé la demande."
     },
     "cancelFailed": "Annulation impossible.",
@@ -283,7 +307,14 @@
     "skip": "Passer",
     "busy": "En cours…",
     "saveAndContinue": "Enregistrer et continuer",
-    "inject": "Injecter le code"
+    "inject": "Injecter le code",
+    "ariaSignup": "Créer un compte sur un site",
+    "titleSignup": "{{bot}} veut créer un compte",
+    "bodySignup": "{{bot}} veut créer un compte sur {{origin}} avec {{identifier}}. Un mot de passe fort sera généré, rempli et rangé dans le coffre ; il ne passera jamais par le chat.",
+    "noteSignup": "Rangé dans le trousseau de la machine des bots, réservé à {{bot}}. Tu le retrouves dans Réglages > Coffre.",
+    "decline": "Refuser",
+    "createAccount": "Créer le compte",
+    "signupFailed": "Compte non créé : {{reason}}"
   },
   "hermes": {
     "gatewayUnresponsive": "La gateway Hermes ne répond pas.",

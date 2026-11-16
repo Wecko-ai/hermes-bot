@@ -3,6 +3,7 @@ import { KeyRound, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { i18n } from '../i18n'
 import type { ServerRequest } from '../lib/hermes'
+import { DockedRequestSheet } from './RequestSheet'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 // Getters: the label follows the interface language each time it is read.
@@ -16,6 +17,8 @@ export const CHOICE_LABELS: Record<string, string> = {
 interface ServerRequestDialogProps {
   request: ServerRequest
   botName: string
+  /** Plain-text excerpt of the requesting bot's latest finished reply. */
+  context?: string
   onAnswer: (id: string, result: Record<string, unknown>) => void
 }
 
@@ -37,8 +40,9 @@ function Sheet({ title, children, onDecline, onSubmit }: { title: string; childr
 /**
  * Requests the gateway addresses to the user during a turn: credentials vault and approvals.
  * The password only lives in this component’s state, unmounted as soon as it is answered.
+ * Vault requests are docked and leave the conversation usable; an approval stays modal.
  */
-export function ServerRequestDialog({ request, botName, onAnswer }: ServerRequestDialogProps) {
+export function ServerRequestDialog({ request, botName, context, onAnswer }: ServerRequestDialogProps) {
   const { t } = useTranslation()
   const [identifier, setIdentifier] = useState('')
   const [secret, setSecret] = useState('')
@@ -65,12 +69,13 @@ export function ServerRequestDialog({ request, botName, onAnswer }: ServerReques
     )
   }
 
+  const site = text(params.origin) || text(params.site)
+  const docked = { botName, site: site || undefined, context, onDecline: () => answerValue('') }
+
   if (method === 'vault.save_login') {
-    const origin = text(params.origin)
     return (
-      <Sheet title={t('serverRequest.credentialsTitle', { bot: botName })} onDecline={() => answerValue('')} onSubmit={submit(JSON.stringify({ identifier, password: secret }))}>
+      <DockedRequestSheet {...docked} ask="login" title={t('serverRequest.credentialsTitle', { bot: botName })} onSubmit={submit(JSON.stringify({ identifier, password: secret }))}>
         <p>{t('serverRequest.checkSite')}</p>
-        <p className="request-origin">{origin || text(params.site)}</p>
         <label>{t('serverRequest.siteIdentifier')}<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} required autoFocus /></label>
         <label>{t('serverRequest.sitePassword')}<input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete="new-password" required /></label>
         <p className="request-note"><ShieldCheck size={13} />{t('serverRequest.credentialsNote')}</p>
@@ -78,14 +83,14 @@ export function ServerRequestDialog({ request, botName, onAnswer }: ServerReques
           <button type="button" onClick={() => answerValue('')}>{t('serverRequest.later')}</button>
           <button type="submit" className="is-primary" disabled={!secret || !identifier}>{t('serverRequest.saveAndContinue')}</button>
         </div>
-      </Sheet>
+      </DockedRequestSheet>
     )
   }
 
   if (method === 'vault.unlock_prompt') {
     const name = text(params.display_name) || text(params.backend) || t('serverRequest.defaultVault')
     return (
-      <Sheet title={t('serverRequest.unlockTitle', { name })} onDecline={() => answerValue('')} onSubmit={submit(secret)}>
+      <DockedRequestSheet {...docked} ask="master" askValues={{ name }} title={t('serverRequest.unlockTitle', { name })} onSubmit={submit(secret)}>
         <p>{t('serverRequest.unlockBody', { bot: botName, name })}</p>
         <label>{t('serverRequest.masterPassword')}<input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete="new-password" required autoFocus /></label>
         <p className="request-note"><ShieldCheck size={13} />{t('serverRequest.unlockNote')}</p>
@@ -93,19 +98,19 @@ export function ServerRequestDialog({ request, botName, onAnswer }: ServerReques
           <button type="button" onClick={() => answerValue('')}>{t('serverRequest.keepLocked')}</button>
           <button type="submit" className="is-primary" disabled={!secret}>{t('serverRequest.unlock')}</button>
         </div>
-      </Sheet>
+      </DockedRequestSheet>
     )
   }
 
-  const site = text(params.site)
+  const codeSite = text(params.site)
   return (
-    <Sheet title={site ? t('serverRequest.codeTitleFor', { site }) : t('serverRequest.codeTitle')} onDecline={() => answerValue('')} onSubmit={submit(secret.trim())}>
+    <DockedRequestSheet {...docked} ask="code" title={codeSite ? t('serverRequest.codeTitleFor', { site: codeSite }) : t('serverRequest.codeTitle')} onSubmit={submit(secret.trim())}>
       <p>{text(params.hint) || t('serverRequest.codeHint', { bot: botName })}</p>
       <label>{t('serverRequest.code')}<input value={secret} onChange={(event) => setSecret(event.target.value)} inputMode="numeric" autoComplete="one-time-code" spellCheck={false} required autoFocus /></label>
       <div className="request-actions">
         <button type="button" onClick={() => answerValue('')}>{t('serverRequest.skip')}</button>
         <button type="submit" className="is-primary" disabled={!secret.trim()}>{t('serverRequest.submit')}</button>
       </div>
-    </Sheet>
+    </DockedRequestSheet>
   )
 }
