@@ -8,7 +8,7 @@ import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 import type { LanguageChoice } from '../i18n'
-import { chooseLocalModel, loadLocalModels, localModelLabel, type LocalModels } from '../lib/local-chat'
+import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
@@ -174,7 +174,7 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
       {local?.available && local.models.length > 0 && (
         <Row label={t('settings.localModel')} hint={t('settings.localModelHint')}>
           <select className="settings-select" aria-label={t('settings.localModel')} value={localModel} onChange={(event) => updateSettings({ localModel: event.target.value })}>
-            {local.models.map((model) => <option key={model} value={model}>{localModelLabel(model)}</option>)}
+            {local.models.map((model) => <option key={model} value={model}>{model}</option>)}
           </select>
         </Row>
       )}

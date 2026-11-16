@@ -209,6 +209,11 @@ export default function App() {
     const { model } = demoData(demoLanguage()).local
     return { available: true, models: [model], defaultModel: model }
   })
+  // The local chat’s menu opens: installed models read again. Ollama silent: the list stays, and the chat with it.
+  const refreshLocalModels = useCallback(() => {
+    if (DEMO) return
+    void loadLocalModels().then((next) => { if (next.available) setLocalModels(next) })
+  }, [])
   const [newBotOpen, setNewBotOpen] = useState(false)
   const [newRoomOpen, setNewRoomOpen] = useState(false)
   const [newBotRetry, setNewBotRetry] = useState<{ slug: string; name: string } | null>(null)
@@ -1536,7 +1541,9 @@ export default function App() {
   const openWork = chatBackground(openSubagents, openProcesses)
   const selectedBot = rosterSelected && openWork ? { ...rosterSelected, background: mergeBackground(rosterSelected.background, openWork) } : rosterSelected
   const localModel = chooseLocalModel(localModels, settings.localModel)
-  const localBot: Bot | null = localModel ? { ...localChatBot(localModel, appConfig.localChat.name), status: localRunning ? 'working' : 'idle' } : null
+  // The configured name belongs to the configured model: another model shows its own name.
+  const localName = !localModels?.defaultModel || localModel === localModels.defaultModel ? appConfig.localChat.name : ''
+  const localBot: Bot | null = localModel ? { ...localChatBot(localModel, localName), status: localRunning ? 'working' : 'idle' } : null
   localBotRef.current = localBot
   const shownBots = selectedBot && selectedBot !== rosterSelected ? bots.map((bot) => bot.slug === selectedBot.slug ? selectedBot : bot) : bots
   const rosterBots = !localBot ? shownBots : [...shownBots, localBot]
@@ -1658,7 +1665,7 @@ export default function App() {
           onReplay={DEMO ? replayDemoRoom : undefined}
         />
       )}
-      {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen && !selectedRoomId} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
+      {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen && !selectedRoomId} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} models={localModels} onRefreshModels={refreshLocalModels} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
       {detailsOpen && !localOpen && !selectedRoomId && (
         <DetailsPanel
           bot={selectedBot}

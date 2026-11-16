@@ -32,24 +32,122 @@ export function localChatBot(model: string, name = ''): Bot {
   }
 }
 
+/** What Ollama says of an installed model. Empty fields: not given. */
+export interface LocalModelInfo {
+  /** Size on disk, in bytes. */
+  size: number
+  /** `27.3B`. */
+  parameters: string
+  /** `Q4_K_M`. */
+  quantization: string
+  family: string
+}
+
 export interface LocalModels {
   /** `false`: Ollama is not responding. */
   available: boolean
   models: string[]
+  details?: Record<string, LocalModelInfo>
   /** Model suggested by the installation’s configuration, if any. */
   defaultModel: string
+}
+
+const text = (value: unknown) => (typeof value === 'string' ? value : '')
+const bytes = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
+
+export function parseLocalModels(body: unknown): LocalModels {
+  const value = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const models = Array.isArray(value.models) ? value.models.filter((model: unknown): model is string => typeof model === 'string' && model !== '') : []
+  const given = value.details && typeof value.details === 'object' ? value.details as Record<string, Record<string, unknown> | undefined> : {}
+  const details = Object.fromEntries(models.map((model) => {
+    const detail = given[model] && typeof given[model] === 'object' ? given[model] : {}
+    return [model, { size: bytes(detail.size), parameters: text(detail.parameters), quantization: text(detail.quantization), family: text(detail.family) }]
+  }))
+  return { available: value.available === true, models, details, defaultModel: text(value.defaultModel) }
 }
 
 export async function loadLocalModels(): Promise<LocalModels> {
   try {
     const response = await fetch('/api/local-chat/models', { credentials: 'same-origin' })
     if (!response.ok) return { available: false, models: [], defaultModel: '' }
-    const body = await response.json()
-    const models = Array.isArray(body?.models) ? body.models.filter((model: unknown): model is string => typeof model === 'string' && model !== '') : []
-    return { available: body?.available === true, models, defaultModel: typeof body?.defaultModel === 'string' ? body.defaultModel : '' }
+    return parseLocalModels(await response.json())
   } catch {
     return { available: false, models: [], defaultModel: '' }
   }
+}
+
+/** A model in memory (Ollama’s `/api/ps`). */
+export interface LoadedLocalModel {
+  model: string
+  /** Memory taken, in bytes, and the part in GPU memory. */
+  size: number
+  vram: number
+  /** ISO date at which Ollama unloads it by itself, empty if unknown. */
+  expiresAt: string
+  context: number
+  /** Loaded with the Load button: kept 30 min after the last message. */
+  kept: boolean
+}
+
+export interface LocalMemory {
+  /** `false`: Ollama is not responding. */
+  available: boolean
+  loaded: LoadedLocalModel[]
+}
+
+export function parseLocalMemory(body: unknown): LocalMemory {
+  const value = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const loaded = (Array.isArray(value.loaded) ? value.loaded : [])
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>).model === 'string')
+    .map((entry) => ({
+      model: entry.model as string,
+      size: bytes(entry.size),
+      vram: bytes(entry.vram),
+      expiresAt: text(entry.expiresAt),
+      context: typeof entry.context === 'number' && Number.isInteger(entry.context) && entry.context > 0 ? entry.context : 0,
+      kept: entry.kept === true,
+    }))
+  return { available: value.available === true, loaded }
+}
+
+export async function loadLocalMemory(): Promise<LocalMemory> {
+  try {
+    const response = await fetch('/api/local-chat/status', { credentials: 'same-origin' })
+    if (!response.ok) return { available: false, loaded: [] }
+    return parseLocalMemory(await response.json())
+  } catch {
+    return { available: false, loaded: [] }
+  }
+}
+
+/** Loads the model into memory (kept 30 min after the last message) or unloads it. Throws a readable message. */
+export async function setLocalModelLoaded(model: string, loaded: boolean) {
+  let response: Response
+  try {
+    response = await fetch(loaded ? '/api/local-chat/load' : '/api/local-chat/unload', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+  } catch {
+    throw new Error(i18n.t('localChat.ollamaDown'))
+  }
+  if (!response.ok) throw new Error(response.status === 401 || response.status === 404 || response.status === 503 ? failureMessage(response.status) : i18n.t(loaded ? 'localChat.loadFailed' : 'localChat.unloadFailed'))
+}
+
+/** `16810714518` → `16.8 GB`, in the interface’s language. */
+export function formatBytes(value: number, language = i18n.language) {
+  if (!value) return ''
+  const gb = value / 1e9
+  const number = new Intl.NumberFormat(language, { maximumFractionDigits: gb >= 100 ? 0 : 1 }).format(gb >= 1 ? gb : value / 1e6)
+  return i18n.t(gb >= 1 ? 'localChat.gigabytes' : 'localChat.megabytes', { size: number, lng: language })
+}
+
+/** `27.3B · Q4_K_M · 16.8 GB`: what is known of the model, in one line. */
+export function localModelFacts(info: LocalModelInfo | undefined) {
+  if (!info) return ''
+  return [info.parameters, info.quantization, formatBytes(info.size)].filter(Boolean).join(' · ')
 }
 
 /** The model chosen in settings if installed, else the configuration’s, else the first. Empty: no local chat. */

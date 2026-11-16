@@ -204,7 +204,7 @@ Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) 
 
 ## Optional extras
 
-- **Local chat.** With [Ollama](https://ollama.com) running, a "Local" entry in the roster chats with a model installed on your machine. You pick the model in Settings > Chats. This chat never goes through Hermes and never gets tools.
+- **Local chat.** With [Ollama](https://ollama.com) running, a "Local" entry in the roster chats with a model installed on your machine. Its header shows the exact model, switches between installed models, and loads or unloads the model from memory (a loaded model stays 30 minutes after the last message). This chat never goes through Hermes and never gets tools.
 - **Bot animations.** Put `<profile>-working.webp` and `<profile>-done.webp` in the animations folder. The bot then plays the first while it works and the second when it finishes. Without them, bots keep a still avatar.
 - **Mail approval card.** With the skill in [skills/mail-approval/](skills/mail-approval/), a bot shows an email draft as a card you can edit before it goes out (the skill uses [himalaya](https://github.com/pimalaya/himalaya)). Only the fields you approved are sent; the skill's script refuses a mail that no longer matches them, or the same mail twice.
 - **Vault for a shared Chrome.** For bots that drive a Chrome over CDP: a small service (`server/browser-vault/`) keeps site logins in the macOS login keychain and types them into the bot's tab itself, so the password never reaches the bot's context. It needs your own setup (a launchd agent for `server/browser-vault/standalone.mjs`, and the skill in [skills/browser-vault/](skills/browser-vault/)). Read "Security" below before using it.

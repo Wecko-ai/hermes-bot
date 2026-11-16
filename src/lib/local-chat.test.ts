@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LOCAL_CHAT_SLUG, chooseLocalModel, localChatBot, localModelLabel, readLocalChatFrames, visibleAnswer } from './local-chat'
+import { LOCAL_CHAT_SLUG, chooseLocalModel, formatBytes, localChatBot, localModelFacts, localModelLabel, parseLocalMemory, parseLocalModels, readLocalChatFrames, visibleAnswer } from './local-chat'
 
 describe('chat local', () => {
   it('garde une ligne coupée pour le morceau suivant', () => {
@@ -39,5 +39,31 @@ describe('chat local', () => {
 
   it('utilise un profil refusé par la route des médias', () => {
     expect(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(LOCAL_CHAT_SLUG)).toBe(false)
+  })
+
+  it('lit les détails des modèles installés sans croire le serveur sur parole', () => {
+    const local = parseLocalModels({
+      available: true,
+      models: ['exemple-27b:q4_k', 42, '', 'qwen3:4b'],
+      details: { 'exemple-27b:q4_k': { size: 16810714518, parameters: '27.3B', quantization: 'Q4_K_M', family: 'qwen3' }, 'qwen3:4b': { size: 'gros' } },
+      defaultModel: 'exemple-27b:q4_k',
+    })
+    expect(local.models).toEqual(['exemple-27b:q4_k', 'qwen3:4b'])
+    expect(local.details?.['qwen3:4b']).toEqual({ size: 0, parameters: '', quantization: '', family: '' })
+    expect(localModelFacts(local.details?.['exemple-27b:q4_k'])).toBe('27.3B · Q4_K_M · 16,8 Go')
+    expect(localModelFacts(local.details?.['qwen3:4b'])).toBe('')
+    expect(parseLocalModels(null)).toEqual({ available: false, models: [], details: {}, defaultModel: '' })
+  })
+
+  it('lit les modèles en mémoire', () => {
+    const memory = parseLocalMemory({ available: true, loaded: [{ model: 'qwen3:4b', size: 3e9, vram: 3e9, expiresAt: '2026-11-16T15:02:00.000Z', context: 32768, kept: true }, { size: 1 }, null] })
+    expect(memory).toEqual({ available: true, loaded: [{ model: 'qwen3:4b', size: 3e9, vram: 3e9, expiresAt: '2026-11-16T15:02:00.000Z', context: 32768, kept: true }] })
+    expect(parseLocalMemory({ available: 'oui', loaded: 'x' })).toEqual({ available: false, loaded: [] })
+  })
+
+  it('écrit les tailles en Go ou en Mo', () => {
+    expect(formatBytes(16810714518, 'en')).toBe('16.8 GB')
+    expect(formatBytes(512e6, 'en')).toBe('512 MB')
+    expect(formatBytes(0)).toBe('')
   })
 })

@@ -532,29 +532,112 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
 const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
 const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
 const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
-let ollamaModelsCache = { at: 0, models: null }
+let ollamaModelsCache = { at: 0, entries: null }
+// Context of every load: the chat and the Load button must ask for the same one, or Ollama reloads the model.
+const LOCAL_CHAT_OPTIONS = { num_ctx: 32768 }
+// Unloaded quickly after a reply: the machine may be shared, and a large model takes a lot of GPU memory.
+const LOCAL_CHAT_IDLE = '2m'
+// Loaded with the button: kept until 30 minutes after the last message, then Ollama unloads it by itself.
+const LOCAL_CHAT_KEEP = '30m'
+const LOCAL_CHAT_KEEP_MS = 30 * 60_000
+/** Models loaded with the button, and until when the chat keeps them. Lost on restart: back to the short delay. */
+const localChatKept = new Map()
+const keptLocalModel = (model) => (localChatKept.get(model) || 0) > Date.now()
 
-/** Models installed in Ollama (`/api/tags`), cached for 30 s. `null`: Ollama does not answer. */
-async function ollamaModels() {
-  if (ollamaModelsCache.models && Date.now() - ollamaModelsCache.at < 30_000) return ollamaModelsCache.models
+const byteCount = (value) => (Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
+const shortText = (value) => (typeof value === 'string' ? value.slice(0, 64) : '')
+
+/** Models installed in Ollama (`/api/tags`) with their details, cached for 30 s. `null`: Ollama does not answer. */
+async function ollamaModelEntries() {
+  if (ollamaModelsCache.entries && Date.now() - ollamaModelsCache.at < 30_000) return ollamaModelsCache.entries
   try {
     const upstream = await fetch(`${OLLAMA_ORIGIN}/api/tags`, { signal: AbortSignal.timeout(3000) })
     if (!upstream.ok) return null
     const body = await upstream.json()
-    const models = (Array.isArray(body?.models) ? body.models : [])
-      .map((model) => (typeof model?.name === 'string' ? model.name : ''))
-      .filter((name) => OLLAMA_MODEL.test(name))
-    ollamaModelsCache = { at: Date.now(), models }
-    return models
+    const entries = (Array.isArray(body?.models) ? body.models : [])
+      .filter((model) => typeof model?.name === 'string' && OLLAMA_MODEL.test(model.name))
+      .map((model) => ({
+        name: model.name,
+        size: byteCount(model.size),
+        parameters: shortText(model.details?.parameter_size),
+        quantization: shortText(model.details?.quantization_level),
+        family: shortText(model.details?.family),
+      }))
+    ollamaModelsCache = { at: Date.now(), entries }
+    return entries
   } catch {
     return null
   }
 }
 
+async function ollamaModels() {
+  const entries = await ollamaModelEntries()
+  return entries && entries.map((entry) => entry.name)
+}
+
 async function handleLocalModels(request, response) {
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-  const models = await ollamaModels()
-  return json(response, 200, { available: models !== null, models: models || [], defaultModel: CONFIG.localChat.model })
+  const entries = await ollamaModelEntries()
+  const details = Object.fromEntries((entries || []).map(({ name, ...detail }) => [name, detail]))
+  return json(response, 200, { available: entries !== null, models: (entries || []).map((entry) => entry.name), details, defaultModel: CONFIG.localChat.model })
+}
+
+/** Models in memory now (`/api/ps`), never cached: the Load and Unload buttons follow it. */
+async function handleLocalStatus(request, response) {
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  try {
+    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/ps`, { signal: AbortSignal.timeout(3000) })
+    if (!upstream.ok) return json(response, 200, { available: false, loaded: [] })
+    const body = await upstream.json()
+    const loaded = (Array.isArray(body?.models) ? body.models : [])
+      .filter((model) => typeof model?.name === 'string' && OLLAMA_MODEL.test(model.name))
+      .map((model) => ({
+        model: model.name,
+        size: byteCount(model.size),
+        vram: byteCount(model.size_vram),
+        expiresAt: typeof model.expires_at === 'string' && !Number.isNaN(Date.parse(model.expires_at)) ? new Date(model.expires_at).toISOString() : '',
+        context: Number.isInteger(model.context_length) && model.context_length > 0 ? model.context_length : 0,
+        kept: keptLocalModel(model.name),
+      }))
+    return json(response, 200, { available: true, loaded })
+  } catch {
+    return json(response, 200, { available: false, loaded: [] })
+  }
+}
+
+/**
+ * Load (`keep_alive` 30 min) or unload (`keep_alive` 0) an installed model, without a prompt: Ollama only moves
+ * the weights. An unload waits for a reply in progress, even another program’s, before freeing the memory.
+ */
+async function handleLocalMemory(request, response, action) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const body = await bodyJson(request)
+  const model = typeof body?.model === 'string' ? body.model : ''
+  const installed = await ollamaModels()
+  if (installed === null) return json(response, 503, { error: 'local_model_unreachable' })
+  if (!model || !installed.includes(model)) return json(response, 404, { error: 'local_model_missing' })
+  const load = action === 'load'
+  if (load) localChatKept.set(model, Date.now() + LOCAL_CHAT_KEEP_MS)
+  else localChatKept.delete(model)
+  try {
+    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(load ? { model, keep_alive: LOCAL_CHAT_KEEP, options: LOCAL_CHAT_OPTIONS } : { model, keep_alive: 0 }),
+      // A large model from the disk takes a while to load.
+      signal: AbortSignal.timeout(load ? 300_000 : 60_000),
+    })
+    await upstream.text().catch(() => '')
+    if (!upstream.ok) {
+      if (load) localChatKept.delete(model)
+      return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
+    }
+  } catch {
+    if (load) localChatKept.delete(model)
+    return json(response, 503, { error: 'local_model_unreachable' })
+  }
+  return json(response, 200, { ok: true })
 }
 
 function localChatMessages(body) {
@@ -574,6 +657,8 @@ async function handleLocalChat(request, response) {
   const installed = await ollamaModels()
   if (installed === null) return json(response, 503, { error: 'local_model_unreachable' })
   if (!requested || !installed.includes(requested)) return json(response, 404, { error: 'local_model_missing' })
+  // A model loaded with the button stays 30 minutes after this message.
+  if (keptLocalModel(requested)) localChatKept.set(requested, Date.now() + LOCAL_CHAT_KEEP_MS)
   const controller = new AbortController()
   response.on('close', () => { if (!response.writableFinished) controller.abort() })
   let upstream
@@ -581,8 +666,7 @@ async function handleLocalChat(request, response) {
     upstream = await fetch(`${OLLAMA_ORIGIN}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // Unloaded quickly: the machine may be shared, and a large model takes a lot of GPU memory.
-      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: '2m', options: { num_ctx: 32768 } }),
+      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: keptLocalModel(requested) ? LOCAL_CHAT_KEEP : LOCAL_CHAT_IDLE, options: LOCAL_CHAT_OPTIONS }),
       signal: controller.signal,
     })
   } catch {
@@ -839,6 +923,12 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/local-chat/models' && request.method === 'GET') {
       return await handleLocalModels(request, response)
+    }
+    if (url.pathname === '/api/local-chat/status' && request.method === 'GET') {
+      return await handleLocalStatus(request, response)
+    }
+    if ((url.pathname === '/api/local-chat/load' || url.pathname === '/api/local-chat/unload') && request.method === 'POST') {
+      return await handleLocalMemory(request, response, url.pathname.endsWith('/load') ? 'load' : 'unload')
     }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
       if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })

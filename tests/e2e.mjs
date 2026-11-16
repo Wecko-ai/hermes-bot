@@ -133,6 +133,10 @@ const holdReplies = (method) => {
 let emptyRoster = false
 const localChatRequests = []
 let localModelMissing = false
+// Simulated Ollama memory: model → unload date, set by the chat and by /api/generate (Load, Unload).
+const fakeOllamaLoaded = new Map()
+const localGenerateRequests = []
+const fakeKeepAlive = (value) => (value === 0 ? 0 : value === '30m' ? 30 * 60_000 : 2 * 60_000)
 const fileAttachCalls = []
 const steerCalls = []
 const queuedPrompts = []
@@ -223,14 +227,35 @@ const mock = http.createServer((request, response) => {
   }
   // Simulated Ollama: same server, no real model.
   if (url.pathname === '/api/tags' && request.method === 'GET') {
-    return response.end(JSON.stringify({ models: localModelMissing ? [{ name: 'autre-local:1b' }] : [{ name: 'modele-local:7b' }, { name: 'autre-local:1b' }] }))
+    const main = { name: 'modele-local:7b', size: 4.7e9, details: { parameter_size: '7.6B', quantization_level: 'Q4_K_M', family: 'qwen2' } }
+    return response.end(JSON.stringify({ models: localModelMissing ? [{ name: 'autre-local:1b' }] : [main, { name: 'autre-local:1b' }] }))
+  }
+  if (url.pathname === '/api/ps' && request.method === 'GET') {
+    const models = [...fakeOllamaLoaded].filter(([, until]) => until > Date.now())
+      .map(([name, until]) => ({ name, model: name, size: 4.7e9, size_vram: 4.7e9, expires_at: new Date(until).toISOString(), context_length: 32768 }))
+    return response.end(JSON.stringify({ models }))
+  }
+  if (url.pathname === '/api/generate' && request.method === 'POST') {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString())
+      localGenerateRequests.push(body)
+      const keep = fakeKeepAlive(body.keep_alive)
+      if (keep) fakeOllamaLoaded.set(body.model, Date.now() + keep)
+      else fakeOllamaLoaded.delete(body.model)
+      response.end(JSON.stringify({ model: body.model, response: '', done: true, done_reason: keep ? 'load' : 'unload' }))
+    })
+    return
   }
   if (url.pathname === '/api/chat' && request.method === 'POST') {
     const chunks = []
     request.on('data', (chunk) => chunks.push(chunk))
     request.on('end', () => {
-      localChatRequests.push(JSON.parse(Buffer.concat(chunks).toString()))
+      const body = JSON.parse(Buffer.concat(chunks).toString())
+      localChatRequests.push(body)
       if (localModelMissing) { response.statusCode = 404; return response.end(JSON.stringify({ error: 'model not found' })) }
+      fakeOllamaLoaded.set(body.model, Date.now() + fakeKeepAlive(body.keep_alive))
       response.setHeader('Content-Type', 'application/x-ndjson')
       const write = (message, done = false) => response.write(`${JSON.stringify({ message: { role: 'assistant', ...message }, done })}\n`)
       setTimeout(() => write({ content: '<think>je réfléchis' }), 30)
@@ -3319,6 +3344,58 @@ try {
   await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 3_000 })
   await page.locator('[data-bot="local:ollama"]').click()
   await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 2_000 })
+  // Exact model and memory: the chat leaves the model in memory 2 min, Unload frees it, Load keeps it 30 min.
+  fakeOllamaLoaded.delete('autre-local:1b') // left by the request with another model above
+  const localStatus = page.locator('.local-chat .chat-status')
+  const modelChip = page.locator('.local-model-chip')
+  await modelChip.getByText('modele-local:7b', { exact: true }).waitFor({ timeout: 3_000 })
+  if (localChatRequests.at(-1).keep_alive !== '2m') throw new Error(`Chat local sans le délai court : ${JSON.stringify(localChatRequests.at(-1))}`)
+  await localStatus.getByText(/^En mémoire · 4,7 Go · jusqu’à \d{2}:\d{2}$/).waitFor({ timeout: 5_000 })
+  await page.getByRole('button', { name: 'Décharger', exact: true }).click()
+  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
+  const unloadRequest = localGenerateRequests.at(-1)
+  if (unloadRequest.model !== 'modele-local:7b' || unloadRequest.keep_alive !== 0 || 'prompt' in unloadRequest) throw new Error(`Déchargement : ${JSON.stringify(unloadRequest)}`)
+  await page.getByRole('button', { name: 'Charger', exact: true }).click()
+  await localStatus.getByText(/^En mémoire · 4,7 Go · jusqu’à/).waitFor({ timeout: 5_000 })
+  const loadRequest = localGenerateRequests.at(-1)
+  if (loadRequest.model !== 'modele-local:7b' || loadRequest.keep_alive !== '30m' || loadRequest.options?.num_ctx !== 32768 || 'prompt' in loadRequest || 'messages' in loadRequest) throw new Error(`Chargement : ${JSON.stringify(loadRequest)}`)
+  await localBox.fill('Après chargement')
+  await localBox.press('Enter')
+  await page.locator('.local-chat .message-assistant').nth(1).waitFor({ timeout: 5_000 })
+  if (localChatRequests.at(-1).keep_alive !== '30m') throw new Error('Un modèle chargé au bouton doit rester 30 min après le message.')
+  // The menu: installed models with their details and memory; another model takes its own name.
+  await modelChip.click()
+  const modelMenu = page.getByRole('menu', { name: 'Modèles installés dans Ollama' })
+  await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).getByText('En mémoire').waitFor({ timeout: 3_000 })
+  await modelMenu.getByText('7.6B · Q4_K_M · 4,7 Go').waitFor()
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.local-model-popover')).opacity === '1')
+  await page.screenshot({ path: `${SCREENSHOTS}local-model-menu.png` })
+  if (await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).getAttribute('aria-checked') !== 'true') throw new Error('Le modèle actuel n’est pas coché.')
+  await modelMenu.getByRole('menuitemradio', { name: /autre-local:1b/ }).click()
+  const otherBox = page.getByRole('textbox', { name: 'Message à autre-local 1b' })
+  await otherBox.waitFor({ timeout: 3_000 })
+  await modelChip.getByText('autre-local:1b', { exact: true }).waitFor()
+  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
+  if (await page.locator('.local-chat .message-assistant').count() !== 2) throw new Error('Changer de modèle a effacé la conversation locale.')
+  await otherBox.fill('Et toi ?')
+  await otherBox.press('Enter')
+  await page.locator('.local-chat .message-assistant').nth(2).waitFor({ timeout: 5_000 })
+  const otherRequest = localChatRequests.at(-1)
+  if (otherRequest.model !== 'autre-local:1b' || otherRequest.keep_alive !== '2m' || otherRequest.messages.length !== 5) throw new Error(`Requête après changement de modèle : ${JSON.stringify(otherRequest)}`)
+  // Load and unload: the page’s origin, a session and an installed model only, nothing sent otherwise.
+  const generatesBefore = localGenerateRequests.length
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat/load', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 401) throw new Error('/api/local-chat/load répond sans session.')
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat/unload', { method: 'POST', headers: { Origin: 'https://exemple.test', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 403) throw new Error('/api/local-chat/unload accepte une autre origine.')
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat/status')).status !== 401) throw new Error('/api/local-chat/status répond sans session.')
+  if (await page.evaluate(async () => (await fetch('/api/local-chat/load', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe' }) })).status) !== 404) throw new Error('Chargement d’un modèle non installé.')
+  if (localGenerateRequests.length !== generatesBefore) throw new Error('Une demande refusée est partie vers Ollama.')
+  // Back to the configured model and its name; nothing left in memory.
+  await modelChip.click()
+  await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).click()
+  await localBox.waitFor({ timeout: 3_000 })
+  await page.getByRole('button', { name: 'Décharger', exact: true }).click()
+  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
+  fakeOllamaLoaded.clear()
   // Missing model: clear message, no crash.
   localModelMissing = true
   await localBox.fill('Encore')
