@@ -211,3 +211,18 @@ describe('notification de test', () => {
     await expect(sendTestNotification({ title: 'HermesBot', body: 'Test' })).resolves.toBe('unsupported')
   })
 })
+
+describe('recorded reply of a finished turn', () => {
+  it('returns the reply recorded at the end of the turn, never an older one', async () => {
+    const { noteTurnReply, recordedReply, forgetTurn } = await import('./notifications')
+    noteTurnReply('nova', 'Reprise terminée.', 1_000)
+    noteTurnReply('nova', 'Travail de fond terminé.\n\nNO_REPLY', 2_000)
+    expect(recordedReply('nova', 3_000)).toBe('Travail de fond terminé.')
+    expect(recordedReply('nova', 2_000 + 3 * 60_000)).toBeUndefined()
+    noteTurnReply('nova', '[SILENT]', 4_000)
+    expect(recordedReply('nova', 5_000)).toBeUndefined()
+    noteTurnReply('nova', 'Fini.', 6_000)
+    forgetTurn('nova')
+    expect(recordedReply('nova', 7_000)).toBeUndefined()
+  })
+})

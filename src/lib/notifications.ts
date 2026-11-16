@@ -1,5 +1,5 @@
 import type { BotStatus, ChatMessage } from '../types'
-import { isSilentMessage } from './hermes'
+import { isSilentMessage, withoutSilentMarkers } from './hermes'
 import { parseIncomingAgentMessage } from './inter-agent'
 
 export type NotificationKind = 'done' | 'question' | 'approval'
@@ -69,9 +69,25 @@ export function noteTurnInput(slug: string, input: string | null, reply?: string
   })
 }
 
+/** Text of each bot's last finished turn, as shown, with the time it ended. Memory only. */
+const finishedReplies = new Map<string, { text: string; at: number }>()
+
+/** Records the reply of a turn that just ended, so its notification never shows an older message. */
+export function noteTurnReply(slug: string, text: string, now = Date.now()) {
+  finishedReplies.set(slug, { text: withoutSilentMarkers(text), at: now })
+}
+
+/** The reply recorded for the turn that just ended, if it is recent; otherwise undefined. */
+export function recordedReply(slug: string, now = Date.now()) {
+  const entry = finishedReplies.get(slug)
+  if (!entry || now - entry.at > REPLY_FRESH_MS) return undefined
+  return entry.text && !isSilentMessage(entry.text) ? entry.text : undefined
+}
+
 /** Drops the previous turn so a later finish cannot inherit its flags. */
 export function forgetTurn(slug: string) {
   turns.delete(slug)
+  finishedReplies.delete(slug)
 }
 
 function rowRecord(value: unknown): Record<string, unknown> {
@@ -141,6 +157,7 @@ export function turnForUser(slug: string) {
 /** Full reset (tests). */
 export function resetTurns() {
   turns.clear()
+  finishedReplies.clear()
 }
 
 /** The bot's own chat open in a focused window: everything is already in view. */

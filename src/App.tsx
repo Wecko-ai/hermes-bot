@@ -48,7 +48,7 @@ import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
@@ -366,6 +366,7 @@ export default function App() {
           }
           updateCachedChat(owner.slug, { running: false })
           noteTurnSilence(owner.slug, finalText)
+          noteTurnReply(owner.slug, finalText)
           markDone(owner.slug)
           const finishedAt = new Date().toISOString()
           // While a worker is running, the unread mark waits for the re-read that sees the bot stopped.
@@ -448,6 +449,7 @@ export default function App() {
         updateCachedChat(current.profile, { running: false })
         setActivity('')
         noteTurnSilence(current.profile, finalText)
+        noteTurnReply(current.profile, finalText)
         markDone(current.profile)
         if (event.execution_generation) setActiveChat({ ...current, executionGeneration: event.execution_generation, running: false })
       }
@@ -522,7 +524,8 @@ export default function App() {
       if (!bot || bot.hidden) return
       // A turn between bots, or one that ends in silence, is not for the user. Questions and approvals still are.
       if (kind === 'done' && !turnForUser(slug)) return
-      const last = kind === 'done' ? turnReply(getCached(slug)?.messages || []) : undefined
+      // The reply recorded when the turn ended first: the cache can still hold the previous turn's message.
+      const last = kind === 'done' ? recordedReply(slug) ?? turnReply(getCached(slug)?.messages || []) : undefined
       const excerpt = notificationExcerpt(last)
       // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
       const body = excerpt || i18n.t(`notifications.${kind}`)
