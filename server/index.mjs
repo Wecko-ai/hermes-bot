@@ -692,7 +692,9 @@ const HISTORY_ERRORS = {
 }
 
 async function handleLocalHistory(request, response, url) {
-  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  // A real HermesBot session only: a Hermes cookie is checked by the gateway on proxied routes, never here, and
+  // any local process could send one to read the decrypted conversations.
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   if (url.pathname === '/api/local-chat/history') {
     if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
     return json(response, 200, { persistent: localChatHistory.persistent, ...localChatHistory.list() })

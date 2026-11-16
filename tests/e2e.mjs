@@ -3447,6 +3447,8 @@ try {
   if (afterDelete.conversations.length !== 1 || afterDelete.conversations[0].title !== 'Deuxième conversation') throw new Error(`Suppression : ${JSON.stringify(afterDelete)}`)
   // The routes: a session, the page's origin, and messages of the local chat only.
   if ((await fetch('http://127.0.0.1:4332/api/local-chat/history')).status !== 401) throw new Error('/api/local-chat/history répond sans session.')
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat/history', { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié ouvre l’historique local.')
+  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${afterDelete.conversations[0].id}`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié lit une conversation locale.')
   const historyId = afterDelete.conversations[0].id
   if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'http://127.0.0.1:4332' } })).status !== 401) throw new Error('Suppression sans session.')
   if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'https://exemple.test' } })).status !== 403) throw new Error('Suppression depuis une autre origine.')
