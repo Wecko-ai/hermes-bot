@@ -1,5 +1,8 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { browserTurnCommand, parseBrowserOwners, parseBrowserTurn, parseBrowserTurns, readBrowserOwners } from './browser-turn.mjs'
+import { browserTurnCommand, clearBrowserTurnCache, parseBrowserOwners, parseBrowserTurn, parseBrowserTurns, readBrowserOwners, readBrowserTurns } from './browser-turn.mjs'
 
 describe('commande de l’arbitre du Chrome', () => {
   const setting = { command: ['/opt/arbiter', 'statut'], user: 'owner', remoteCommand: ['/usr/bin/ssh', 'host', '/opt/arbiter statut'] }
@@ -19,6 +22,44 @@ describe('commande de l’arbitre du Chrome', () => {
 
   it('renvoie personne quand la commande échoue', async () => {
     expect(await readBrowserOwners(['/nonexistent/arbiter', 'statut'])).toEqual([])
+  })
+
+  it('caches the arbiter for 2s, shares one run, and hides the vault token', async () => {
+    clearBrowserTurnCache()
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'browser-turn-'))
+    const counter = path.join(dir, 'count.txt')
+    const flag = path.join(dir, 'env.txt')
+    const script = path.join(dir, 'arbiter.mjs')
+    writeFileSync(script, `import { readFileSync, writeFileSync } from 'node:fs'
+const counter = ${JSON.stringify(counter)}
+const flag = ${JSON.stringify(flag)}
+let count = 0
+try { count = Number(readFileSync(counter, 'utf8')) } catch { count = 0 }
+writeFileSync(counter, String(count + 1))
+writeFileSync(flag, process.env.HERMESBOT_VAULT_TOKEN ? 'leak' : 'clean')
+await new Promise((resolve) => setTimeout(resolve, 80))
+console.log('tour : bot 2026-01-05T10:00:00Z pid=1 depuis 1 min')
+`)
+    const previous = process.env.HERMESBOT_VAULT_TOKEN
+    process.env.HERMESBOT_VAULT_TOKEN = 'ab'.repeat(32)
+    try {
+      const argv = [process.execPath, script]
+      const [first, second] = await Promise.all([readBrowserTurns(argv), readBrowserTurns(argv)])
+      expect(first).toEqual(second)
+      expect(first[0].owner).toBe('bot')
+      expect(readFileSync(counter, 'utf8')).toBe('1')
+      expect(readFileSync(flag, 'utf8')).toBe('clean')
+      await readBrowserTurns(argv)
+      expect(readFileSync(counter, 'utf8')).toBe('1')
+      clearBrowserTurnCache()
+      await readBrowserTurns(argv)
+      expect(readFileSync(counter, 'utf8')).toBe('2')
+    } finally {
+      if (previous === undefined) delete process.env.HERMESBOT_VAULT_TOKEN
+      else process.env.HERMESBOT_VAULT_TOKEN = previous
+      clearBrowserTurnCache()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

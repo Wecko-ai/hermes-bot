@@ -7,13 +7,132 @@ import { normalizeOrigin } from './store.mjs'
 import { attributeValue, botAllowed, KeychainStore, parseDump, passwordValue, runSecurity, validBots } from './keychain.mjs'
 import { WebSocketServer } from 'ws'
 import { BrowserVaultRequests } from './requests.mjs'
-import { createBrowserVault } from './service.mjs'
+import { appendAudit, AUDIT_MAX_BYTES } from './audit.mjs'
+import { createBrowserVault, loopbackOrigin } from './service.mjs'
 import { generatePassword, PASSWORD_ALPHABET, PASSWORD_CLASSES } from './password.mjs'
-import { CODE_FIELD, FEDERATED_SIGNIN, FILL_CODE, FILL_LOGIN, FILL_SIGNUP, LOGIN_FIELDS, SIGNUP_FIELDS } from './cdp.mjs'
+import { BrowserVaultCdp, CODE_FIELD, FEDERATED_SIGNIN, FILL_CODE, FILL_LOGIN, FILL_SIGNUP, LOGIN_FIELDS, SIGNUP_FIELDS, TYPE_DOCUMENT } from './cdp.mjs'
 import { accountPageProvider, federatedSignIn, useSsoResult } from './sso.mjs'
 import { fileSettings, memorySettings, parseSettings } from './settings.mjs'
 
 const darwin = process.platform === 'darwin' && existsSync('/usr/bin/security')
+
+/** In-memory `security`: passwords stay on the fake stdin, never in the recorded argv. */
+function memorySecurity() {
+  const items = []
+  const calls = []
+  let failAdd = false
+  let hold = null
+  let releaseHold = null
+  const security = {
+    calls,
+    onEntered: null,
+    failNextAdd() { failAdd = true },
+    armHold() { hold = new Promise((resolve) => { releaseHold = resolve }) },
+    release() { releaseHold?.() },
+    run,
+  }
+
+  function tokenize(line) {
+    const tokens = []
+    let current = ''
+    let quoted = false
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index]
+      if (quoted) {
+        if (char === '\\') { current += line[index + 1] ?? ''; index += 1; continue }
+        if (char === '"') { quoted = false; continue }
+        current += char
+        continue
+      }
+      if (char === '"') { quoted = true; continue }
+      if (char === ' ' || char === '\n') {
+        if (current) tokens.push(current)
+        current = ''
+        continue
+      }
+      current += char
+    }
+    if (current) tokens.push(current)
+    return tokens
+  }
+
+  function flagsOf(tokens) {
+    const flags = {}
+    const valued = new Set(['-a', '-s', '-r', '-P', '-p', '-l', '-c', '-j', '-w', '-T'])
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = tokens[index]
+      if (token === '-U' || token === '-g') { flags[token] = true; continue }
+      if (valued.has(token)) { flags[token] = tokens[index + 1]; index += 1 }
+    }
+    return flags
+  }
+
+  function matches(item, flags, account) {
+    if (item.server !== flags['-s'] || item.protocol !== flags['-r']) return false
+    if (item.port !== Number(flags['-P'] || 0)) return false
+    if (flags['-c'] && item.creator !== flags['-c']) return false
+    if (account && item.account !== account) return false
+    return true
+  }
+
+  function dumpItem(item) {
+    return [
+      'keychain: "/x"',
+      'class: "inet"',
+      'attributes:',
+      `    "acct"<blob>="${item.account}"`,
+      `    "srvr"<blob>="${item.server}"`,
+      `    "ptcl"<uint32>="${item.protocol}"`,
+      `    "port"<uint32>=0x${item.port.toString(16)}`,
+      `    "crtr"<uint32>="${item.creator}"`,
+      `    "icmt"<blob>="${item.comment}"`,
+    ].join('\n')
+  }
+
+  function dispatch(tokens) {
+    const command = tokens[0]
+    const flags = flagsOf(tokens)
+    if (command === 'dump-keychain') return { code: 0, stdout: items.map(dumpItem).join('\n'), stderr: '' }
+    if (command === 'find-internet-password') {
+      const item = items.find((entry) => matches(entry, flags, flags['-a']))
+      if (!item) return { code: 44, stdout: '', stderr: '' }
+      return { code: 0, stdout: '', stderr: `password: "${item.password}"\n` }
+    }
+    if (command === 'delete-internet-password') {
+      const index = items.findIndex((entry) => matches(entry, flags, flags['-a']))
+      if (index < 0) return { code: 44, stdout: '', stderr: '' }
+      items.splice(index, 1)
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    if (command === 'add-internet-password') {
+      if (failAdd) { failAdd = false; return { code: 1, stdout: '', stderr: 'denied' } }
+      const index = items.findIndex((entry) => matches(entry, flags, flags['-a']))
+      // Like macOS: an existing internet password is never replaced, `-U` or not.
+      if (index >= 0) return { code: 1, stdout: '', stderr: 'exists' }
+      const next = {
+        server: flags['-s'], protocol: flags['-r'], port: Number(flags['-P'] || 0),
+        account: flags['-a'], password: flags['-w'], comment: flags['-j'] || '', creator: flags['-c'] || '',
+      }
+      if (index >= 0) items[index] = next
+      else items.push(next)
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    return { code: 1, stdout: '', stderr: 'unknown' }
+  }
+
+  async function run(args, input = '') {
+    calls.push({ args: [...args], input: input || '' })
+    if (args[0] === '-i' && hold) {
+      const gate = hold
+      hold = null
+      security.onEntered?.()
+      await gate
+    }
+    return dispatch(args[0] === '-i' ? tokenize(String(input).trim()) : args)
+  }
+
+  return security
+}
 
 describe('coffre navigateur — trousseau', () => {
   it('normalise protocole, hôte et port', () => {
@@ -58,7 +177,7 @@ describe('coffre navigateur — trousseau', () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-keychain-'))
     const keychain = path.join(directory, 'test.keychain-db')
     const calls = []
-    const run = (args, input) => { calls.push(args); return runSecurity(args, input) }
+    const run = (args, input) => { calls.push({ args, input: input || '' }); return runSecurity(args, input) }
     try {
       for (const args of [['create-keychain', '-p', 'test', keychain], ['unlock-keychain', '-p', 'test', keychain], ['set-keychain-settings', keychain]]) {
         expect((await runSecurity(args)).code).toBe(0)
@@ -76,11 +195,66 @@ describe('coffre navigateur — trousseau', () => {
       expect(await store.list()).toHaveLength(2)
       await store.remove('http://app.exemple.org:8080')
       await expect(store.get('http://app.exemple.org:8080')).rejects.toThrow('origin_not_found')
-      expect(calls.flat().some((value) => value.includes('deadbeef') || value.includes(secret))).toBe(false)
+      await store.save('https://www.exemple.com', 'autre@exemple.com', 'nouveau-secret', ['orion', 'vega'])
+      expect((await store.get('https://www.exemple.com')).password).toBe('nouveau-secret')
+      expect(calls.some((call) => String(call.input).includes(' -U '))).toBe(false)
+      expect(calls.every((call) => call.args.every((value) => !String(value).includes('nouveau-secret') && !String(value).includes(secret) && !String(value).includes('deadbeef')))).toBe(true)
     } finally {
       await runSecurity(['delete-keychain', keychain])
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+
+  it('écrit le nouveau secret avant de retirer l’ancien, et sérialise save et remove', async () => {
+    const security = memorySecurity()
+    const store = new KeychainStore({ keychain: '/tmp/test.keychain-db', run: security.run })
+    await store.save('https://exemple.com', 'ada', 'old-secret', ['orion'])
+    await store.save('https://exemple.com', 'ada', 'new-secret', ['orion'])
+    expect(security.calls.some((call) => String(call.input).includes(' -U '))).toBe(false)
+    expect((await store.get('https://exemple.com')).password).toBe('new-secret')
+    // Same account, the add fails: the previous secret is written back.
+    security.failNextAdd()
+    await expect(store.save('https://exemple.com', 'ada', 'lost-secret', ['orion'])).rejects.toThrow('vault_write_failed')
+    expect((await store.get('https://exemple.com')).password).toBe('new-secret')
+
+    const start = security.calls.length
+    await store.save('https://exemple.com', 'beau', 'other-secret', ['orion'])
+    const slice = security.calls.slice(start)
+    const addAt = slice.findIndex((call) => String(call.input).startsWith('add-internet-password'))
+    const deleteAt = slice.findIndex((call) => call.args[0] === 'delete-internet-password')
+    expect(addAt).toBeGreaterThanOrEqual(0)
+    expect(deleteAt).toBeGreaterThan(addAt)
+    expect(slice[addAt].input.includes(' -U ')).toBe(false)
+    expect(slice[deleteAt].args).toContain('-a')
+    expect(slice[deleteAt].args).toContain('ada')
+    expect((await store.get('https://exemple.com')).identifier).toBe('beau')
+
+    security.failNextAdd()
+    await expect(store.save('https://exemple.com', 'beau', 'nope', ['orion'])).rejects.toThrow('vault_write_failed')
+    // The failed replacement put the previous item back: same login, same secret, one item.
+    expect((await store.get('https://exemple.com')).password).toBe('other-secret')
+    expect(await store.list()).toHaveLength(1)
+
+    await store.save('https://exemple.com', 'beau', 'other-secret', ['orion'], { unconfirmed: true })
+    expect((await store.find('https://exemple.com')).unconfirmed).toBe(true)
+    await store.save('https://exemple.com', 'beau', 'other-secret', ['orion'])
+    expect((await store.find('https://exemple.com')).unconfirmed).toBe(false)
+
+    security.armHold()
+    const entered = new Promise((resolve) => { security.onEntered = resolve })
+    const first = store.save('https://autre.exemple.org', 'ada', 'one', ['orion'])
+    await entered
+    const before = security.calls.length
+    const second = store.save('https://autre.exemple.org', 'ada', 'two', ['orion'])
+    const removed = store.remove('https://autre.exemple.org')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(security.calls).toHaveLength(before)
+    security.release()
+    await first
+    await second
+    await removed
+    expect(await store.find('https://autre.exemple.org')).toBeNull()
+    expect(security.calls.every((call) => call.args.every((value) => !['old-secret', 'new-secret', 'other-secret', 'nope', 'one', 'two'].includes(String(value))))).toBe(true)
   })
 })
 
@@ -114,6 +288,57 @@ describe('coffre navigateur — demandes', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('laisse au moins 30 s après une injection, même si l’échéance est passée', async () => {
+    vi.useFakeTimers()
+    try {
+      const requests = new BrowserVaultRequests()
+      const waiting = requests.create({ kind: 'save', bot: 'orion', origin: 'https://example.com' }, 1000)
+      const request = requests.snapshot()[0]
+      requests.setBusy(request.id, true)
+      await vi.advanceTimersByTimeAsync(5000)
+      requests.setBusy(request.id, false)
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(requests.snapshot()).toHaveLength(1)
+      const expired = expect(waiting).rejects.toThrow('request_timeout')
+      await vi.advanceTimersByTimeAsync(1000)
+      await expired
+      requests.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ne raccourcit pas une échéance encore lointaine', async () => {
+    vi.useFakeTimers()
+    try {
+      const requests = new BrowserVaultRequests()
+      const waiting = requests.create({ kind: 'save', bot: 'orion', origin: 'https://example.com' }, 120_000)
+      const request = requests.snapshot()[0]
+      requests.setBusy(request.id, true)
+      requests.setBusy(request.id, false)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(requests.snapshot()).toHaveLength(1)
+      requests.complete(request.id, { status: 'saved' })
+      await expect(waiting).resolves.toMatchObject({ status: 'saved' })
+      requests.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refuse au-delà de 3 demandes par bot et de 20 au total', () => {
+    const requests = new BrowserVaultRequests()
+    const held = []
+    const hold = (promise) => { held.push(promise); promise.catch(() => undefined) }
+    for (let index = 0; index < 3; index += 1) hold(requests.create({ kind: 'save', bot: 'orion', origin: 'https://example.com' }, 60_000))
+    expect(() => requests.create({ kind: 'save', bot: 'orion', origin: 'https://example.com' }, 60_000)).toThrow('too_many_requests')
+    for (let index = 0; index < 17; index += 1) hold(requests.create({ kind: 'code', bot: `bot${index}`, origin: 'https://example.com' }, 60_000))
+    expect(requests.snapshot()).toHaveLength(20)
+    expect(() => requests.create({ kind: 'save', bot: 'vega', origin: 'https://example.com' }, 60_000)).toThrow('too_many_requests')
+    requests.close()
+    return Promise.allSettled(held)
   })
 })
 
@@ -188,6 +413,11 @@ class FakeInput {
   }
   getAttribute(name) { return this.attributes[name] ?? null }
   getClientRects() { return this.shown ? [{ width: 10, height: 10 }] : [] }
+  getBoundingClientRect() {
+    if (this.rect) return this.rect
+    if (!this.shown) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    return { left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 }
+  }
   getRootNode() { return this.root }
   focus() { this.events.push('focus') }
   dispatchEvent(event) { this.events.push(event.type); return true }
@@ -201,31 +431,52 @@ function fakeRoot(elements, named = {}) {
   return root
 }
 
-const lookup = (expression, document) => new Function('document', 'HTMLInputElement', `return ${expression}`)(document, FakeInput)
+const VIEW = { innerWidth: 800, innerHeight: 600 }
+const computedStyle = (element) => element.computed || { visibility: 'visible', display: 'block', opacity: '1' }
+const lookup = (expression, document) => new Function('document', 'HTMLInputElement', 'getComputedStyle', 'window', `return ${expression}`)(document, FakeInput, computedStyle, VIEW)
 const filler = (declaration) => new Function('HTMLInputElement', 'Event', `return (${declaration})`)(FakeInput, Event)
+const typeDocument = (document, location, expectedOrigin, kind, primary, secret) => {
+  const typed = new Function('document', 'location', 'HTMLInputElement', 'Event', 'getComputedStyle', 'window', `return (${TYPE_DOCUMENT})`)(document, location, FakeInput, Event, computedStyle, VIEW)
+  return typed(expectedOrigin, kind, primary, secret)
+}
 
 describe('coffre navigateur — repérage des champs', () => {
-  it('trouve le code par aria-label, placeholder, label ou aria-labelledby', () => {
+  it('trouve le code par jeton, one-time-code ou libellé explicite', () => {
     const search = new FakeInput({ name: 'q' })
-    const byAria = new FakeInput({ attributes: { 'aria-label': 'Enter code' } })
+    const byAria = new FakeInput({ attributes: { 'aria-label': 'Authentication code' } })
     expect(lookup(CODE_FIELD, fakeRoot([search, byAria]))[0]).toBe(byAria)
-    const byPlaceholder = new FakeInput({ placeholder: 'Code à 6 chiffres' })
+    const byPlaceholder = new FakeInput({ placeholder: 'One-time code' })
     expect(lookup(CODE_FIELD, fakeRoot([search, byPlaceholder]))[0]).toBe(byPlaceholder)
-    const byLabel = new FakeInput({ labels: [{ textContent: 'Verification' }] })
+    const byLabel = new FakeInput({ labels: [{ textContent: 'Verification code' }] })
     expect(lookup(CODE_FIELD, fakeRoot([search, byLabel]))[0]).toBe(byLabel)
+    const bare = new FakeInput({ attributes: { 'aria-label': 'Enter code' } })
+    expect(lookup(CODE_FIELD, fakeRoot([search, bare]))[0]).toBeNull()
+    const verification = new FakeInput({ labels: [{ textContent: 'Verification' }] })
+    expect(lookup(CODE_FIELD, fakeRoot([search, verification]))[0]).toBeNull()
     const byLabelledBy = new FakeInput({ attributes: { 'aria-labelledby': 'titre' } })
     expect(lookup(CODE_FIELD, fakeRoot([search, byLabelledBy], { titre: { textContent: 'Your PIN' } }))[0]).toBe(byLabelledBy)
+    const otp = new FakeInput({ name: 'otp' })
+    expect(lookup(CODE_FIELD, fakeRoot([search, otp]))[0]).toBe(otp)
   })
 
-  it('ignore codes postaux et promos, prend le seul champ court en dernier recours', () => {
+  it('ignore codes postaux, cartes et promos, et le champ court sans indice', () => {
     const postal = new FakeInput({ name: 'postal_code', maxLength: 5 })
+    const postcode = new FakeInput({ name: 'postcode', maxLength: 8 })
     const promo = new FakeInput({ placeholder: 'Promo code' })
-    expect(lookup(CODE_FIELD, fakeRoot([postal, promo]))[0]).toBeNull()
+    const barcode = new FakeInput({ id: 'barcode' })
+    const encode = new FakeInput({ placeholder: 'Encode' })
+    const cvv = new FakeInput({ name: 'cvv', maxLength: 4, inputMode: 'numeric' })
+    const card = new FakeInput({ name: 'card', autocomplete: 'one-time-code' })
+    expect(lookup(CODE_FIELD, fakeRoot([postal, postcode, promo, barcode, encode, cvv, card]))[0]).toBeNull()
     const short = new FakeInput({ type: 'tel', maxLength: 6 })
-    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ name: 'q' }), short]))[0]).toBe(short)
-    const twin = new FakeInput({ type: 'number', maxLength: 8 })
-    expect(lookup(CODE_FIELD, fakeRoot([short, twin]))[0]).toBeNull()
-    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ type: 'tel', maxLength: 6, shown: false })]))[0]).toBeNull()
+    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ name: 'q' }), short]))[0]).toBeNull()
+    const numeric = new FakeInput({ type: 'tel', maxLength: 6, inputMode: 'numeric' })
+    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ name: 'q' }), numeric]))[0]).toBe(numeric)
+    const explicit = new FakeInput({ type: 'text', maxLength: 6, autocomplete: 'one-time-code' })
+    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ name: 'q' }), explicit]))[0]).toBe(explicit)
+    const twin = new FakeInput({ type: 'number', maxLength: 8, inputMode: 'numeric' })
+    expect(lookup(CODE_FIELD, fakeRoot([numeric, twin]))[0]).toBeNull()
+    expect(lookup(CODE_FIELD, fakeRoot([new FakeInput({ type: 'tel', maxLength: 6, inputMode: 'numeric', shown: false })]))[0]).toBeNull()
   })
 
   it('cherche aussi dans les shadow roots ouverts', () => {
@@ -246,6 +497,59 @@ describe('coffre navigateur — repérage des champs', () => {
     expect(lookup(SIGNUP_FIELDS, fakeRoot([firstName, remember, email, password, confirmation]))).toEqual([email, password, confirmation])
     expect(lookup(SIGNUP_FIELDS, fakeRoot([firstName, password, confirmation]))).toEqual([null, password, confirmation])
     expect(lookup(SIGNUP_FIELDS, fakeRoot([firstName]))).toEqual([null])
+  })
+
+  it('préfère autocomplete, refuse about:blob:data:, et ignore un champ invisible', () => {
+    const search = new FakeInput({ name: 'user_search' })
+    const email = new FakeInput({ autocomplete: 'username' })
+    const shadowPassword = new FakeInput({ type: 'password' })
+    const current = new FakeInput({ type: 'password', autocomplete: 'current-password' })
+    const host = { shadowRoot: fakeRoot([shadowPassword]) }
+    const login = fakeRoot([host, search, email, current])
+    const location = { href: 'https://bank.example/login', origin: 'https://bank.example' }
+    const typed = typeDocument(login, location, 'https://bank.example', 'login', 'ada', 'secret')
+    expect(typed.filled).toEqual(['identifier', 'password'])
+    expect(email.value).toBe('ada')
+    expect(current.value).toBe('secret')
+    expect(shadowPassword.value).toBe('')
+    expect(search.value).toBe('')
+    const loneNew = new FakeInput({ type: 'password', autocomplete: 'new-password' })
+    expect(lookup(LOGIN_FIELDS, fakeRoot([loneNew]))[1]).toBeNull()
+
+    const created = new FakeInput({ type: 'password', autocomplete: 'new-password' })
+    const plain = new FakeInput({ type: 'password' })
+    const again = new FakeInput({ type: 'password', autocomplete: 'current-password' })
+    const firstName = new FakeInput({ name: 'firstName' })
+    const signup = fakeRoot([firstName, again, plain, created])
+    const signed = typeDocument(signup, location, 'https://bank.example', 'signup', 'ada', 'secret')
+    expect(signed.filled).toEqual(['password'])
+    expect(created.value).toBe('secret')
+    expect(plain.value).toBe('')
+    expect(again.value).toBe('')
+    const onlyPlain = new FakeInput({ type: 'password' })
+    const currentOnly = new FakeInput({ type: 'password', autocomplete: 'current-password' })
+    const fallback = typeDocument(fakeRoot([onlyPlain, currentOnly]), location, 'https://bank.example', 'signup', 'ada', 'secret')
+    expect(onlyPlain.value).toBe('secret')
+    expect(currentOnly.value).toBe('')
+    expect(fallback.filled).toEqual(['password'])
+
+    const hidden = new FakeInput({ type: 'password', autocomplete: 'current-password', computed: { visibility: 'hidden', display: 'block', opacity: '1' } })
+    const faded = new FakeInput({ type: 'password', computed: { visibility: 'visible', display: 'block', opacity: '0' } })
+    const off = new FakeInput({ type: 'password', rect: { left: 900, top: 10, right: 1000, bottom: 40, width: 100, height: 30 } })
+    const none = new FakeInput({ type: 'password', computed: { visibility: 'visible', display: 'none', opacity: '1' } })
+    const shown = new FakeInput({ type: 'password', autocomplete: 'current-password' })
+    expect(lookup(LOGIN_FIELDS, fakeRoot([hidden, faded, off, none, shown]))[1]).toBe(shown)
+
+    const password = new FakeInput({ type: 'password', autocomplete: 'current-password' })
+    const mail = new FakeInput({ type: 'email', autocomplete: 'email' })
+    for (const href of ['about:blank', 'blob:https://bank.example/uuid', 'data:text/html,hi']) {
+      password.value = ''
+      mail.value = ''
+      const rejected = typeDocument(fakeRoot([mail, password]), { href, origin: 'https://bank.example' }, 'https://bank.example', 'login', 'ada', 'secret')
+      expect(rejected).toEqual({ error: 'origin_mismatch' })
+      expect(password.value).toBe('')
+      expect(mail.value).toBe('')
+    }
   })
 
   it('donne le focus avant la valeur, puis input et change', () => {
@@ -278,6 +582,8 @@ async function fakeChrome(state, events) {
   sockets.on('connection', (socket) => socket.on('message', (raw) => {
     const { id, method, params } = JSON.parse(String(raw))
     const reply = (result) => socket.send(JSON.stringify({ id, result }))
+    if (method === 'Page.getFrameTree') return reply({ frameTree: { frame: { id: 'frame-1' } } })
+    if (method === 'Page.createIsolatedWorld') return reply(state.failIsolated ? {} : { executionContextId: 7 })
     if (method === 'Runtime.evaluate') {
       if (params.expression === 'window.location.origin') return reply({ result: { type: 'string', value: state.origin } })
       if (params.expression.includes('federated sign-in')) {
@@ -287,9 +593,22 @@ async function fakeChrome(state, events) {
       }
       return reply({ result: { type: 'object', objectId: 'champs' } })
     }
-    if (method === 'Runtime.callFunctionOn' && !params.arguments) return reply({ result: { type: 'object', value: { identifier: false, passwords: state.passwords } } })
     if (method === 'Runtime.callFunctionOn') {
-      events.push({ fill: params.arguments.map((argument) => argument.value) })
+      const inWorld = params.executionContextId === 7
+      const checksHref = String(params.functionDeclaration || '').includes('location.href')
+      if (!inWorld || !checksHref) return reply({ exceptionDetails: { text: 'main-world' } })
+      const args = params.arguments || []
+      const href = state.href ?? `${state.origin}/`
+      const bad = /^(about:|blob:|data:)/.test(String(href))
+      if (args.length <= 2) {
+        if (bad && state.hrefMode !== 'type-only') return reply({ result: { type: 'object', value: { error: 'origin_mismatch' } } })
+        return reply({ result: { type: 'object', value: { identifier: false, passwords: state.passwords ?? 0 } } })
+      }
+      if (bad) {
+        state.typed = (state.typed || 0) + 1
+        return reply({ result: { type: 'object', value: { error: 'origin_mismatch' } } })
+      }
+      events.push({ fill: args.slice(2).map((argument) => argument.value) })
       if (state.failFill) return reply({ exceptionDetails: { text: 'boom' } })
       return reply({ result: { type: 'object', value: { filled: ['password', 'confirmation'] } } })
     }
@@ -307,9 +626,10 @@ function memoryStore(events, initial = []) {
     list: async (bot) => [...entries.values()].map(meta).filter((entry) => !bot || botAllowed(entry, bot)),
     find: async (origin) => (entries.has(normalizeOrigin(origin)) ? meta(entries.get(normalizeOrigin(origin))) : null),
     get: async (origin) => entries.get(normalizeOrigin(origin)),
-    save: async (origin, identifier, password, bots) => {
-      events.push({ save: { origin, identifier, password, bots } })
-      const entry = { id: origin, origin: normalizeOrigin(origin), identifier, password, bots }
+    save: async (origin, identifier, password, bots, options = {}) => {
+      const unconfirmed = options?.unconfirmed === true
+      events.push({ save: { origin, identifier, password, bots, ...(unconfirmed ? { unconfirmed: true } : {}) } })
+      const entry = { id: origin, origin: normalizeOrigin(origin), identifier, password, bots, unconfirmed }
       entries.set(entry.origin, entry)
       return meta(entry)
     },
@@ -319,10 +639,11 @@ function memoryStore(events, initial = []) {
 describe('coffre navigateur — création de compte', () => {
   const SITE = 'https://comptes.exemple.org'
 
-  async function setup({ passwords = 2, failFill = false, initial = [], settings, verifyUser = async () => true } = {}) {
+  async function setup({ passwords = 2, failFill = false, initial = [], settings, verifyUser = async () => true, href, hrefMode, failIsolated = false } = {}) {
     const events = []
     const lines = []
-    const chrome = await fakeChrome({ origin: SITE, passwords, failFill }, events)
+    const page = { origin: SITE, passwords, failFill, href, hrefMode, failIsolated }
+    const chrome = await fakeChrome(page, events)
     const probe = http.createServer()
     const port = await listenOn(probe)
     await closeServer(probe)
@@ -350,7 +671,7 @@ describe('coffre navigateur — création de compte', () => {
       throw new Error('no request')
     }
     const close = async () => { await vault.close(); await chrome.close() }
-    return { events, lines, vault, store, call, command, admin, pending, close }
+    return { events, lines, vault, store, call, command, admin, pending, close, page }
   }
 
   it('montre une carte, puis rend cancelled sans rien ranger ni remplir', async () => {
@@ -412,7 +733,8 @@ describe('coffre navigateur — création de compte', () => {
       await vault.respond((await pending()).id, { action: 'signup' })
       const result = await answer
       expect(JSON.parse(result.raw)).toEqual({ status: 'saved', origin: SITE, saved: true, filled: false, error: 'fill_failed' })
-      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill'])
+      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill', 'save'])
+      expect(events[2].save.unconfirmed).toBe(true)
       expect(result.raw).not.toContain(events[0].save.password)
     } finally {
       await close()
@@ -473,13 +795,14 @@ describe('coffre navigateur — création de compte', () => {
     }
   })
 
-  it('réglage actif, rangé mais pas rempli : saved pour un fill plus tard, notification quand même', async () => {
+  it('réglage actif, rangé mais pas rempli : saved, sans dire que le compte est créé', async () => {
     const { events, vault, call, close } = await setup({ failFill: true, settings: memorySettings({ autoSignup: true }) })
     try {
       const result = await call({ identifier: 'inscription@exemple.org' })
       expect(JSON.parse(result.raw)).toEqual({ status: 'saved', origin: SITE, saved: true, filled: false, error: 'fill_failed' })
-      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill'])
-      expect(vault.notices()).toHaveLength(1)
+      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'fill', 'save'])
+      expect(events[2].save.unconfirmed).toBe(true)
+      expect(vault.notices()).toEqual([])
     } finally {
       await close()
     }
@@ -615,6 +938,152 @@ describe('coffre navigateur — création de compte', () => {
       await close()
     }
   })
+
+  it('refuse une quatrième demande du même bot', async () => {
+    const { command, vault, close } = await setup()
+    const waiting = []
+    const hold = (promise) => { waiting.push(promise); promise.catch(() => undefined) }
+    try {
+      for (let index = 0; index < 3; index += 1) hold(command('save', {}))
+      for (let attempt = 0; attempt < 100 && vault.requests.snapshot().length < 3; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(vault.requests.snapshot()).toHaveLength(3)
+      const fourth = await command('save', {})
+      expect(fourth.status).toBe(429)
+      expect(JSON.parse(fourth.raw)).toEqual({ error: 'too_many_requests' })
+    } finally {
+      await close()
+      await Promise.allSettled(waiting)
+    }
+  })
+
+  it('cinq créations par bot et par heure, puis too_many_signups', async () => {
+    const { page, events, call, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        page.origin = `https://site${index}.exemple.org`
+        const result = await call({ identifier: `u${index}@exemple.org` })
+        expect(result.status).toBe(200)
+      }
+      page.origin = 'https://site5.exemple.org'
+      const sixth = await call({ identifier: 'u5@exemple.org' })
+      expect(sixth.status).toBe(429)
+      expect(JSON.parse(sixth.raw)).toEqual({ error: 'too_many_signups' })
+      expect(events.filter((event) => event.save)).toHaveLength(5)
+    } finally {
+      await close()
+    }
+  })
+
+  it('un échec de frappe marque l’entrée, et le même bot peut la remplacer', async () => {
+    const { events, store, vault, call, command, page, close } = await setup({ failFill: true, settings: memorySettings({ autoSignup: true }) })
+    try {
+      const first = await call({ identifier: 'inscription@exemple.org' })
+      expect(JSON.parse(first.raw)).toEqual({ status: 'saved', origin: SITE, saved: true, filled: false, error: 'fill_failed' })
+      expect(events.at(-1).save.unconfirmed).toBe(true)
+      expect((await store.get(SITE)).unconfirmed).toBe(true)
+      expect(vault.notices()).toEqual([])
+      const other = await command('signup', { bot: 'vega', identifier: 'vega@exemple.org' })
+      expect(other.status).toBe(409)
+      expect(JSON.parse(other.raw)).toEqual({ error: 'entry_exists' })
+      page.failFill = false
+      const again = await call({ identifier: 'autre@exemple.org' })
+      expect(again.status).toBe(200)
+      expect(JSON.parse(again.raw).status).toBe('filled')
+      expect(events.some((event) => event.save?.identifier === 'autre@exemple.org' && !event.save.unconfirmed)).toBe(true)
+    } finally {
+      await close()
+    }
+  })
+
+  it('about:blank avec la même origine est origin_mismatch, sans rien ranger', async () => {
+    const { events, call, close } = await setup({ href: 'about:blank', settings: memorySettings({ autoSignup: true }) })
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(result.status).toBe(403)
+      expect(JSON.parse(result.raw)).toEqual({ error: 'origin_mismatch' })
+      expect(events).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('la frappe elle-même refuse un document qui n’est pas http', async () => {
+    const { events, page, vault, call, close } = await setup({ href: 'about:blank', hrefMode: 'type-only', settings: memorySettings({ autoSignup: true }) })
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(JSON.parse(result.raw)).toEqual({ status: 'saved', origin: SITE, saved: true, filled: false, error: 'origin_mismatch' })
+      expect(page.typed).toBe(1)
+      expect(events.map((event) => Object.keys(event)[0])).toEqual(['save', 'save'])
+      expect(events[1].save.unconfirmed).toBe(true)
+      expect(vault.notices()).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('refuse si le monde isolé ne se crée pas', async () => {
+    const { events, call, close } = await setup({ failIsolated: true, settings: memorySettings({ autoSignup: true }) })
+    try {
+      const result = await call({ identifier: 'inscription@exemple.org' })
+      expect(result.status).toBe(503)
+      expect(JSON.parse(result.raw)).toEqual({ error: 'isolated_world_failed' })
+      expect(events).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+
+  it('une demande save sur un site déjà rangé porte replaces, jamais le mot de passe', async () => {
+    const initial = [{ id: SITE, origin: SITE, identifier: 'ada@exemple.org', password: 'ancien-secret', bots: ['vega'] }]
+    const { vault, command, pending, close } = await setup({ initial })
+    try {
+      const answer = command('save', {})
+      const request = await pending()
+      expect(request.replaces).toEqual({ identifier: 'ada@exemple.org', bots: ['vega'] })
+      expect(JSON.stringify(request)).not.toContain('ancien-secret')
+      expect(request.password).toBeUndefined()
+      await vault.respond(request.id, { action: 'cancel' })
+      await answer
+      const fresh = await setup()
+      try {
+        const first = fresh.command('save', {})
+        expect((await fresh.pending()).replaces).toBeUndefined()
+        await fresh.vault.respond((await fresh.pending()).id, { action: 'cancel' })
+        await first
+      } finally {
+        await fresh.close()
+      }
+    } finally {
+      await close()
+    }
+  })
+
+  it('GET ne vérifie pas la session, logout vide le cache', async () => {
+    let checks = 0
+    const { admin, vault, close } = await setup({ verifyUser: async () => { checks += 1; return true } })
+    try {
+      expect((await admin('/admin/v1/requests')).status).toBe(200)
+      expect((await admin('/admin/v1/nope')).status).toBe(400)
+      expect(checks).toBe(0)
+      expect((await admin('/admin/v1/settings', { autoSignup: false })).status).toBe(200)
+      expect(checks).toBe(1)
+      expect((await admin('/admin/v1/settings', { autoSignup: false })).status).toBe(200)
+      expect(checks).toBe(1)
+      const port = vault.server.address().port
+      const logout = await fetch(`http://127.0.0.1:${port}/admin/v1/logout`, { method: 'POST', headers: { Authorization: 'Bearer x' } })
+      expect(logout.status).toBe(200)
+      expect(await logout.json()).toEqual({ ok: true })
+      expect((await admin('/admin/v1/settings', { autoSignup: false })).status).toBe(200)
+      expect(checks).toBe(2)
+      const denied = await fetch(`http://127.0.0.1:${port}/admin/v1/logout`, { method: 'POST', headers: { Authorization: 'Bearer y' } })
+      expect(denied.status).toBe(403)
+      expect(await denied.json()).toEqual({ error: 'admin_forbidden' })
+    } finally {
+      await close()
+    }
+  })
 })
 
 // Page elements for the federated sign-in lookup: tag, text, attributes, sources, shadow roots, frames.
@@ -628,7 +1097,7 @@ class FakeElement {
   getAttribute(name) { return this.attributes[name] ?? null }
 }
 const page = (...elements) => ({ querySelectorAll: () => elements })
-const federated = (document) => new Function('document', `return ${FEDERATED_SIGNIN}`)(document)
+const federated = (document) => new Function('document', 'getComputedStyle', 'window', `return ${FEDERATED_SIGNIN}`)(document, computedStyle, VIEW)
 
 describe('coffre navigateur — connexion fédérée, repérage sur la page', () => {
   it('bouton Google seul : google, sans champ de mot de passe', () => {
@@ -645,10 +1114,11 @@ describe('coffre navigateur — connexion fédérée, repérage sur la page', ()
 
   it('aucun bouton fédéré : rien, même avec un champ de mot de passe caché ou des scripts Google sans connexion', () => {
     const hidden = new FakeInput({ tagName: 'INPUT', type: 'password', shown: false })
+    const faded = new FakeInput({ tagName: 'INPUT', type: 'password', computed: { visibility: 'visible', display: 'block', opacity: '0' } })
     const analytics = new FakeElement('SCRIPT', { src: 'https://www.googletagmanager.com/gtag/js?id=G-1' })
     const signIn = new FakeElement('BUTTON', { textContent: 'Sign in with your email' })
     const help = new FakeElement('A', { textContent: 'Google Workspace help', href: 'https://support.google.com/' })
-    expect(federated(page(hidden, analytics, signIn, help))).toEqual({ providers: [], hasPasswordField: false })
+    expect(federated(page(hidden, faded, analytics, signIn, help))).toEqual({ providers: [], hasPasswordField: false })
   })
 
   it('textes français, Apple et Microsoft, dans l’ordre de la page', () => {
@@ -837,6 +1307,72 @@ describe('coffre navigateur — fichier des réglages', () => {
       expect(fileSettings(file).get()).toEqual({ autoSignup: false })
     } finally {
       rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('coffre navigateur — origine Hermes et journal', () => {
+  it('n’accepte qu’une origine loopback pour la session', () => {
+    expect(loopbackOrigin('http://127.0.0.1:9120')).toBe('http://127.0.0.1:9120')
+    expect(loopbackOrigin('http://localhost:9120')).toBe('http://localhost:9120')
+    expect(loopbackOrigin('http://[::1]:9120')).toBe('http://[::1]:9120')
+    expect(loopbackOrigin('https://evil.example')).toBeNull()
+    expect(loopbackOrigin('http://127.0.0.1.evil.example')).toBeNull()
+    expect(loopbackOrigin('http://0.0.0.0:9120')).toBeNull()
+    expect(loopbackOrigin('file:///tmp/x')).toBeNull()
+    expect(loopbackOrigin('http://user:secret@127.0.0.1:9120')).toBeNull()
+  })
+
+  it('renomme le journal au-delà de 2 Mio et ne garde qu’un ancien', () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-vault-audit-'))
+    const file = path.join(directory, 'browser-vault-audit.jsonl')
+    try {
+      writeFileSync(file, 'x'.repeat(AUDIT_MAX_BYTES))
+      appendAudit(file, '{"action":"list"}')
+      expect(existsSync(`${file}.1`)).toBe(false)
+      expect(readFileSync(file, 'utf8').endsWith('{"action":"list"}\n')).toBe(true)
+      writeFileSync(file, 'y'.repeat(AUDIT_MAX_BYTES + 1))
+      appendAudit(file, '{"action":"list"}')
+      expect(readFileSync(`${file}.1`, 'utf8')).toBe('y'.repeat(AUDIT_MAX_BYTES + 1))
+      expect(readFileSync(file, 'utf8')).toBe('{"action":"list"}\n')
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      writeFileSync(file, 'z'.repeat(AUDIT_MAX_BYTES + 1))
+      appendAudit(file, '{"action":"fill"}')
+      expect(readFileSync(`${file}.1`, 'utf8')).toBe('z'.repeat(AUDIT_MAX_BYTES + 1))
+      expect(existsSync(`${file}.2`)).toBe(false)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('coffre navigateur — socket CDP', () => {
+  it('ignore un debugger hors du port configuré ou hors loopback', async () => {
+    let mode = 'wrong-port'
+    const server = http.createServer((request, response) => {
+      if (request.url !== '/json/list') { response.statusCode = 404; return response.end() }
+      const { port } = server.address()
+      const url = mode === 'remote' ? `ws://169.254.1.1:${port}/devtools/page/onglet`
+        : mode === 'secure' ? `wss://127.0.0.1:${port}/devtools/page/onglet`
+          : `ws://127.0.0.1:9/devtools/page/onglet`
+      const list = mode === 'missing'
+        ? [{ id: 'autre', type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/autre` }]
+        : [{ id: 'onglet', type: 'page', webSocketDebuggerUrl: url }]
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify(list))
+    })
+    const port = await listenOn(server)
+    try {
+      const cdp = new BrowserVaultCdp(`http://127.0.0.1:${port}`)
+      await expect(cdp.activeOrigin('onglet')).rejects.toThrow('cdp_unavailable')
+      mode = 'remote'
+      await expect(cdp.activeOrigin('onglet')).rejects.toThrow('cdp_unavailable')
+      mode = 'secure'
+      await expect(cdp.activeOrigin('onglet')).rejects.toThrow('cdp_unavailable')
+      mode = 'missing'
+      await expect(cdp.activeOrigin('onglet')).rejects.toThrow('target_not_found')
+    } finally {
+      await closeServer(server)
     }
   })
 })

@@ -14,6 +14,21 @@ interface BrowserVaultDialogProps {
   onRespond: (id: string, body: Record<string, unknown>) => Promise<void>
 }
 
+/** A save that overwrites a login already in the vault. The password itself is never on this object. */
+export interface VaultReplace {
+  identifier: string
+  bots: string[]
+}
+
+/** `replaces` is attached by the vault when this save overwrites an existing login. Absent on a first save. */
+export function readVaultReplaces(request: BrowserVaultRequest): VaultReplace | null {
+  const raw = (request as BrowserVaultRequest & { replaces?: { identifier?: unknown; bots?: unknown } }).replaces
+  if (!raw || typeof raw.identifier !== 'string' || !raw.identifier.trim()) return null
+  if (!Array.isArray(raw.bots)) return null
+  const bots = raw.bots.filter((bot): bot is string => typeof bot === 'string' && bot.length > 0)
+  return bots.length ? { identifier: raw.identifier, bots } : null
+}
+
 /** Local CDP vault: secrets go to the 4330 server, never through the Hermes WebSocket. */
 export function BrowserVaultDialog({ request, botName, context, onRespond }: BrowserVaultDialogProps) {
   const { t } = useTranslation()
@@ -79,12 +94,20 @@ export function BrowserVaultDialog({ request, botName, context, onRespond }: Bro
 
   const sso = saving ? ssoHint(request.sso) : null
   const banner = saving ? <SsoBanner hint={sso} site={request.origin} /> : undefined
+  const replaces = saving ? readVaultReplaces(request) : null
+  const saveNote = replaces
+    ? t('browserVault.noteSaveReplace', {
+      bot: botName,
+      identifier: replaces.identifier,
+      bots: replaces.bots.map((bot) => bot === '*' ? t('vault.allBots') : bot).join(', '),
+    })
+    : t('browserVault.noteSave', { bot: botName })
   return (
     <DockedRequestSheet {...sheet} ask={saving ? 'login' : 'code'} banner={banner} label={saving ? t('browserVault.ariaSave') : t('browserVault.ariaCode')} title={saving ? t('browserVault.titleSave', { bot: botName }) : t('browserVault.titleCode', { bot: botName })}>
       <p>{saving ? t('browserVault.bodySave') : t('browserVault.bodyCode')}</p>
       {saving && <label>{t('browserVault.siteIdentifier')}<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} required autoFocus disabled={busy} /></label>}
       <label>{saving ? t('browserVault.sitePassword') : t('browserVault.verificationCode')}<input type={saving ? 'password' : 'text'} value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete={saving ? 'new-password' : 'one-time-code'} inputMode={saving ? undefined : 'numeric'} autoCapitalize="none" spellCheck={false} required autoFocus={!saving} disabled={busy} /></label>
-      <p className="request-note"><ShieldCheck size={13} />{saving ? t('browserVault.noteSave', { bot: botName }) : t('browserVault.noteCode')}</p>
+      <p className="request-note"><ShieldCheck size={13} />{saving ? saveNote : t('browserVault.noteCode')}</p>
       {saving && <SsoChoice providers={ssoChoices(sso, request.origin)} disabled={busy} onChoose={(provider) => void answerSso(provider)} />}
       {errorLine}
       <div className="request-actions">

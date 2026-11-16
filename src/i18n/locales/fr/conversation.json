@@ -15,9 +15,6 @@
     "modeGroup": "Mode de travail",
     "deliveryGroup": "Envoi pendant le travail",
     "notAdded": "Non ajouté : {{files}}.",
-    "hintWait": "Brouillon gardé jusqu’à la fin du tour · File ou Prio pour l’envoyer maintenant",
-    "hintQueue": "Part quand {{name}} a fini",
-    "hintPriority": "{{name}} s’interrompt, lit, puis reprend",
     "usageToggle": "Afficher le contexte et le débit",
     "chooseModel": "Choisir le modèle"
   },
@@ -87,6 +84,8 @@
     "subject": "Objet",
     "from": "De",
     "replyTo": "En réponse à",
+    "inReplyTo": "In-Reply-To",
+    "references": "References",
     "to": "À",
     "cc": "Cc",
     "ccPlaceholder": "nom@exemple.com",

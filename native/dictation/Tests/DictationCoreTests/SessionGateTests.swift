@@ -32,6 +32,35 @@ final class SessionGateTests: XCTestCase {
         XCTAssertFalse(gate.open())
     }
 
+    func testCancelBeforeStartDoesNotOpen() {
+        var gate = SessionGate()
+        XCTAssertEqual(gate.begin(cancelled: true), .exitClean)
+        XCTAssertEqual(gate.phase, .waiting)
+    }
+
+    func testClosedGateAsksForACleanExit() {
+        var gate = SessionGate()
+        XCTAssertTrue(gate.end())
+        XCTAssertEqual(gate.begin(cancelled: false), .exitClean)
+        XCTAssertTrue(gate.isOver)
+    }
+
+    func testBeginOpensWhenStillWaiting() {
+        var gate = SessionGate()
+        XCTAssertEqual(gate.begin(cancelled: false), .open)
+        XCTAssertEqual(gate.phase, .listening)
+        XCTAssertEqual(gate.begin(cancelled: false), .exitClean)
+    }
+
+    func testEarlyCancelStaysSet() {
+        let flag = EarlyCancel()
+        XCTAssertFalse(flag.isSet)
+        flag.mark()
+        XCTAssertTrue(flag.isSet)
+        flag.mark()
+        XCTAssertTrue(flag.isSet)
+    }
+
     func testErrorWhileListeningEndsOnce() {
         var gate = SessionGate()
         XCTAssertTrue(gate.open())

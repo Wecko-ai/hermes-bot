@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { nextRovingIndex } from '../lib/a11y-focus'
 import { Activity, Clock3, FileText, Images, Info, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { Bot, ChatMessage, Routine, SessionUsage } from '../types'
@@ -42,6 +43,8 @@ interface DetailsPanelProps {
   tabRequest: DetailsTabRequest | null
   loading: boolean
   running: boolean
+  /** Open chat session. A new session with the same bot reloads usage. */
+  sessionId?: string
   usage: SessionUsage | null
   loadUsageDetails: () => Promise<UsageDetails>
   onOpenDocument: (profile: string, media: MediaRef) => void
@@ -53,7 +56,7 @@ interface DetailsPanelProps {
   onClose: () => void
 }
 
-export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose }: DetailsPanelProps) {
+export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose }: DetailsPanelProps) {
   const { t } = useTranslation()
   const workText = avatarPhase(bot) === 'working' ? workLine(work, bot.workTitle) : ''
   const [tab, setTab] = useState<Tab>(() => tabRequest?.tab ?? 'routines')
@@ -71,6 +74,15 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   const closeViewer = useCallback(() => setViewer(null), [])
   const moveViewer = useCallback((index: number) => setViewer((current) => current && { ...current, index }), [])
+  const onTabListKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    const next = nextRovingIndex(tabs.length, tabs.indexOf(event.target as HTMLButtonElement), event.key)
+    if (next === null) return
+    event.preventDefault()
+    if (tabs[next] === event.target) return
+    tabs[next].focus()
+    tabs[next].click()
+  }
   const openImage = (item: MediaRef, version: string) => {
     const images = media.filter((entry) => entry.ref.kind === 'image').map((entry) => entry.ref)
     setViewer({ images, index: Math.max(0, images.indexOf(item)), profile: bot.slug, version })
@@ -78,13 +90,13 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
   return (
     <aside className={`details-panel ${activeDocument ? 'has-document' : ''}`} aria-label={t('details.ariaLabel', { name: bot.name })}>
       <div className="details-topbar">
-        <div className="rail-tabs" role="tablist" aria-label={t('details.railTabs')}>
+        <div className="rail-tabs" role="tablist" aria-orientation="horizontal" aria-label={t('details.railTabs')} onKeyDown={onTabListKey}>
           <div className={`rail-tab ${activeDocument ? '' : 'is-active'}`}>
-            <button role="tab" aria-selected={!activeDocument} onClick={() => onSelectRailTab(BOT_RAIL_TAB)}>{t('details.botTab')}</button>
+            <button role="tab" tabIndex={activeDocument ? -1 : 0} aria-selected={!activeDocument} onClick={() => onSelectRailTab(BOT_RAIL_TAB)}>{t('details.botTab')}</button>
           </div>
           {documents.map((document) => (
             <div className={`rail-tab ${document.id === railTab ? 'is-active' : ''}`} key={document.id}>
-              <button role="tab" aria-selected={document.id === railTab} title={document.path} onClick={() => onSelectRailTab(document.id)}><FileText size={12} /><span>{document.name}</span></button>
+              <button role="tab" tabIndex={document.id === railTab ? 0 : -1} aria-selected={document.id === railTab} title={document.path} onClick={() => onSelectRailTab(document.id)}><FileText size={12} /><span>{document.name}</span></button>
               <button className="rail-tab-close" aria-label={t('details.closeDocument', { name: document.name })} onClick={() => onCloseDocument(document.id)}><X size={11} /></button>
             </div>
           ))}
@@ -106,13 +118,13 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
             {(work?.task || work?.note) && work?.step && <p>{work.step}</p>}
           </section>
         )}
-        <div className="details-tabs" role="tablist" aria-label={t('details.infoTabs')}>
-          <button role="tab" aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={(event) => { setTab('routines'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.routines')}</button>
-          <button role="tab" aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={(event) => { setTab('activity'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
-          <button role="tab" aria-selected={tab === 'subagents'} className={tab === 'subagents' ? 'is-active' : ''} onClick={(event) => { setTab('subagents'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.subagents')}{subagents.length > 0 && <span className={runningSubagents > 0 ? 'is-running' : ''}>{runningSubagents || subagents.length}</span>}</button>
-          <button role="tab" aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={(event) => { setTab('media'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.media')}</button>
-          <button role="tab" aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={(event) => { setTab('usage'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.usage')}</button>
-          <button role="tab" aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={(event) => { setTab('about'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.about')}</button>
+        <div className="details-tabs" role="tablist" aria-orientation="horizontal" aria-label={t('details.infoTabs')} onKeyDown={onTabListKey}>
+          <button role="tab" tabIndex={tab === 'routines' ? 0 : -1} aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={(event) => { setTab('routines'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.routines')}</button>
+          <button role="tab" tabIndex={tab === 'activity' ? 0 : -1} aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={(event) => { setTab('activity'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
+          <button role="tab" tabIndex={tab === 'subagents' ? 0 : -1} aria-selected={tab === 'subagents'} className={tab === 'subagents' ? 'is-active' : ''} onClick={(event) => { setTab('subagents'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.subagents')}{subagents.length > 0 && <span className={runningSubagents > 0 ? 'is-running' : ''}>{runningSubagents || subagents.length}</span>}</button>
+          <button role="tab" tabIndex={tab === 'media' ? 0 : -1} aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={(event) => { setTab('media'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.media')}</button>
+          <button role="tab" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={(event) => { setTab('usage'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.usage')}</button>
+          <button role="tab" tabIndex={tab === 'about' ? 0 : -1} aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={(event) => { setTab('about'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.about')}</button>
         </div>
 
         {tab === 'routines' && <section className="details-section">
@@ -154,7 +166,7 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
           </div>
         </section>}
 
-        {tab === 'usage' && <UsageTab slug={bot.slug} running={running} live={usage} load={loadUsageDetails} />}
+        {tab === 'usage' && <UsageTab slug={bot.slug} sessionId={sessionId ?? bot.sessionId} running={running} live={usage} load={loadUsageDetails} />}
 
         {tab === 'about' && <section className="details-section about-section">
           <div className="details-section-heading"><span>{t('details.tabs.about')}</span><Info size={14} /></div>

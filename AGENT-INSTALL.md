@@ -125,6 +125,15 @@ Otherwise, read `auth_required` and `auth_providers` in the answer of the second
 
 ## 5. Build and install the app
 
+Optional, before packing:
+
+```bash
+cd "$HOME/hermes-bot"
+npm run check
+```
+
+If Google Chrome is installed, also run `npm run test:e2e` (simulated gateway). Without Chrome, skip E2E and say so in the report.
+
 ```bash
 cd "$HOME/hermes-bot"
 npm run pack

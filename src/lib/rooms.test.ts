@@ -5,7 +5,9 @@ import {
   createRoom,
   listRooms,
   mergeRoomEvents,
+  planRoomSend,
   readRoom,
+  ROOM_LOG_STALLED,
   roomMembers,
   roomPreview,
   roomSendNotAdmitted,
@@ -134,6 +136,26 @@ describe('roomPreview', () => {
   it('is empty when the timeline has no visible message', () => {
     expect(roomPreview([event(1, 'room.stopped')])).toBe('')
     expect(roomPreview([event(1, 'message.member', { text: ' ' })],)).toBe('')
+  })
+
+  it('reuses a room preview while the length and last seq stay the same', () => {
+    const roomId = 'preview-memo'
+    const first = [
+      event(1, 'message.member', { text: 'older' }, { room_id: roomId }),
+      event(2, 'message.member', { text: 'shown' }, { room_id: roomId }),
+    ]
+    expect(roomPreview(first)).toBe('shown')
+    const sameTail = [
+      event(1, 'message.member', { text: 'changed' }, { room_id: roomId }),
+      event(2, 'message.member', { text: 'different' }, { room_id: roomId }),
+    ]
+    expect(roomPreview(sameTail)).toBe('shown')
+    const other = [
+      event(1, 'message.member', { text: 'a' }, { room_id: 'preview-other' }),
+      event(2, 'message.member', { text: 'other room' }, { room_id: 'preview-other' }),
+    ]
+    expect(roomPreview(other)).toBe('other room')
+    expect(roomPreview([...sameTail, event(3, 'message.member', { text: 'fresh' }, { room_id: roomId })])).toBe('fresh')
   })
 })
 
@@ -283,6 +305,17 @@ describe('room gateway requests', () => {
     })
   })
 
+  it('readRoom stops after one log page when the cursor does not advance', async () => {
+    const stateRoom = room('room-1', { latest_seq: 9 })
+    const request = vi.fn(async (method: string) => method === 'groups.state'
+      ? { room: stateRoom }
+      : { events: [], cursor: 0, has_more: true })
+    const snapshot = await readRoom(clientWith(request), 'room-1', 0, 7)
+    expect(snapshot.error).toBe(ROOM_LOG_STALLED)
+    expect(request.mock.calls.filter(([method]) => method === 'groups.log')).toHaveLength(1)
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
   it('sendRoomMessage sends the exact payload and accepts only its matching ACK', async () => {
     const request = vi.fn().mockResolvedValue({ accepted: true, client_event_id: 'event-1' })
 
@@ -303,6 +336,22 @@ describe('room gateway requests', () => {
   ])('sendRoomMessage rejects an unconfirmed ACK: %j', async (ack) => {
     const request = vi.fn().mockResolvedValue(ack)
     await expect(sendRoomMessage(clientWith(request), 'room-1', 'event-1', 'Hello')).rejects.toThrow('unconfirmed_room_send')
+  })
+
+  it('replaces a pending send when the text changed and that attempt is not in flight', () => {
+    const pending = { eventId: 'old-event', threadId: 'old-thread', text: 'first' }
+    const mint = () => ({ eventId: 'new-event', threadId: 'new-thread' })
+    expect(planRoomSend('second', pending, false, mint)).toEqual({
+      status: 'send',
+      pending: { eventId: 'new-event', threadId: 'new-thread', text: 'second' },
+    })
+    expect(planRoomSend('first', pending, false, mint)).toEqual({ status: 'send', pending })
+  })
+
+  it('returns a typed result when a different text is sent while the previous attempt is in flight', () => {
+    const pending = { eventId: 'old-event', threadId: 'old-thread', text: 'first' }
+    expect(planRoomSend('second', pending, true, () => ({ eventId: 'nope', threadId: 'nope' }))).toEqual({ status: 'previous-still-sending' })
+    expect(planRoomSend('first', pending, true)).toEqual({ status: 'already-sending' })
   })
 
   it('roomSendNotAdmitted recognizes only the explicit pre-commit refusal', () => {

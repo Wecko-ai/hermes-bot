@@ -10,6 +10,7 @@ import { DELIVERY_MODES, deliveryPlaceholder, loadDraft, saveDraft, type Deliver
 import { dictationLanguageCode, getSettings, useSettings } from '../lib/settings'
 import { i18n } from '../i18n'
 import { DictationController, type DictationSnapshot } from '../lib/dictation'
+import { isImeComposition } from '../lib/keyboard'
 import { createDictationEngine } from '../lib/dictation-engines'
 import { BotAvatar } from './BotAvatar'
 import { DictationPill } from './DictationPill'
@@ -363,7 +364,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             addFiles(files)
           }}
           onKeyDown={(event) => {
-            if (menuOpen && !event.nativeEvent.isComposing) {
+            if (menuOpen && !isImeComposition(event)) {
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                 event.preventDefault()
                 const step = event.key === 'ArrowDown' ? 1 : -1
@@ -382,7 +383,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
               }
             }
             const sends = sendKey === 'enter' ? !event.shiftKey : event.metaKey
-            if (event.key === 'Enter' && sends && !event.nativeEvent.isComposing) {
+            if (event.key === 'Enter' && sends && !isImeComposition(event)) {
               event.preventDefault()
               void submit()
             }
@@ -416,7 +417,6 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             ))}
           </div>
         )}
-        {busy && <span className="composer-hint-keys" aria-live="polite">{delivery === 'wait' ? t('composer.hintWait') : delivery === 'queue' ? t('composer.hintQueue', { name: bot.name }) : t('composer.hintPriority', { name: bot.name })}</span>}
         {!minimal && <div className="composer-status">
           {showUsage && <span className="usage-readout">{formatUsage(usage)}</span>}
           <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label={t('composer.usageToggle')} aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={15} /></button>

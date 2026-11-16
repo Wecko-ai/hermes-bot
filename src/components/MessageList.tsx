@@ -14,9 +14,11 @@ import { findQuestions, parseAnswersPrompt } from '../lib/questions'
 import { findTweets, type TweetMatch } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { normalizeHref } from '../lib/links'
-import { findRanges } from '../lib/find'
+import { completedMessageStamp, findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
-import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE } from '../lib/mail'
+import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
+import { replyAnnouncement } from '../lib/local-chat-turn'
+import { nextStick } from '../lib/scroll-stick'
 import { stepIds } from '../lib/turns'
 import { mayBecomeSilent } from '../lib/hermes'
 import { messageDay, shortTime } from '../lib/time'
@@ -29,6 +31,8 @@ interface MediaContextValue {
   version: string
   streaming: boolean
   botCards: boolean
+  /** Approved-mail fences become a receipt only when this is `user`. */
+  role?: ChatMessage['role']
   openImage: (media: MediaRef) => void
   openDocument?: (media: MediaRef) => void
 }
@@ -77,7 +81,7 @@ function MarkdownParagraph({ node, children }: ComponentProps<'p'> & ExtraProps)
 function MarkdownImage({ src, alt }: ComponentProps<'img'> & ExtraProps) {
   const { t } = useTranslation()
   const url = typeof src === 'string' ? src : ''
-  if (url.startsWith('data:image/') || url.startsWith('blob:')) return <img src={url} alt={alt || ''} />
+  // `data:` and `blob:` never arrive: the markdown url transform empties them before this runs.
   return <a href={url} target="_blank" rel="noreferrer noopener">{alt || t('messages.imageFallback')}</a>
 }
 
@@ -110,9 +114,12 @@ function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & Extra
   if (tweet) return <TweetCard tweet={tweet} />
   const code = node?.children[0]
   const language = code?.type === 'element' && code.tagName === 'code' && Array.isArray(code.properties?.className) ? String(code.properties.className[0]) : ''
-  if (context?.botCards !== false && code?.type === 'element' && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`)) {
+  const approvedFence = language === `language-${MAIL_APPROVED_FENCE}`
+  const mailFence = language === `language-${MAIL_FENCE}` || approvedFence
+  // An approved fence is a receipt only in the user's message. A note between bots keeps every fence as code.
+  if (context?.botCards !== false && code?.type === 'element' && mailFence && !(approvedFence && context?.role !== 'user')) {
     const source = code.children.map((child) => (child.type === 'text' ? child.value : '')).join('')
-    return <MailBlock source={source} approvedBlock={language === `language-${MAIL_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} />
+    return <MailBlock source={source} approvedBlock={approvedFence} streaming={Boolean(context?.streaming)} role={context?.role} />
   }
   const text = code ? hastText(code as HastNode).replace(/\n$/, '') : ''
   return (
@@ -135,6 +142,10 @@ interface MarkdownProps {
   localMedia?: boolean
   /** Shows below the text the images, videos, sounds and PDFs the bot cites by path. */
   citedFiles?: boolean
+  /** Approved-mail fences become a sent receipt only for a user message. */
+  role?: ChatMessage['role']
+  /** Mail cards, tweets and the other interactive blocks. Defaults to `localMedia`. */
+  botCards?: boolean
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
 }
@@ -166,9 +177,10 @@ function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpe
   )
 }
 
-export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
+  const cards = botCards ?? localMedia
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
-  const tweets = useMemo(() => localMedia && !streaming ? findTweets(source) : [], [source, streaming, localMedia])
+  const tweets = useMemo(() => cards && !streaming ? findTweets(source) : [], [source, streaming, cards])
   // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
   const mentionIndexValue = useContext(MentionContext)?.index
@@ -182,14 +194,15 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
     profile,
     version,
     streaming,
-    botCards: localMedia,
+    botCards: cards,
+    role,
     openImage: (item) => {
       // All the readable images of the message, in order: the viewer moves from one slide to the next.
       const images = sink.media.filter((entry) => entry === item || (entry.kind === 'image' && isServablePath(entry.path) && !mediaFailed(profile, entry)))
       onOpenImages(images, Math.max(0, images.indexOf(item)), version)
     },
     openDocument: onOpenDocument,
-  }), [sink, profile, version, streaming, localMedia, onOpenImages, onOpenDocument])
+  }), [sink, profile, version, streaming, cards, role, onOpenImages, onOpenDocument])
   // While streaming, a path can be cut off: the files show once the message is complete.
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (
@@ -237,9 +250,9 @@ function mentionedSlugOf(name: string, index?: Map<string, string | null>) {
 const AGENT_VERB_KEYS: Record<AgentMessage['kind'], string> = { message: 'agentNotes.message', reply: 'agentNotes.reply', 'no-reply': 'agentNotes.noReply' }
 
 /** “Orion messaged Iris”: the verb opens the message, each name opens its bot. */
-function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessageProps) {
+export function AgentNote({ message, profile, onOpenImages, onOpenDocument, initiallyOpen = false }: MessageProps & { initiallyOpen?: boolean }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(initiallyOpen)
   const agent = message.agent as AgentMessage
   return (
     <div className={`agent-note is-${agent.kind} ${open ? 'is-open' : ''}`}>
@@ -254,7 +267,7 @@ function AgentNote({ message, profile, onOpenImages, onOpenDocument }: MessagePr
       {open && (
         <div className="agent-note-body message-content">
           {agent.text
-            ? <Markdown content={agent.text} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
+            ? <Markdown content={agent.text} profile={profile} version={message.id} citedFiles botCards={false} role="assistant" onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
             : <p className="agent-note-empty">{t('agentNotes.empty')}</p>}
         </div>
       )}
@@ -274,6 +287,8 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
   if (message.role === 'system' || message.role === 'tool') {
     return <div className="system-message">{message.content}</div>
   }
+  // The model instruction on an approved mail stays in the stored text and out of the bubble.
+  const shown = message.role === 'user' ? withoutMailInstruction(message.content) : message.content
   // "Questions ouvertes" at the end of a reply: answered from fields, not by retyping them.
   const questions = message.role === 'assistant' && !message.streaming ? findQuestions(message.content, askable) : null
   // Answers sent from a questions card: a tight question / answer list, not the raw numbered text.
@@ -296,7 +311,9 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
               <QuestionsCard id={message.id} block={questions} />
               {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
             </>
-          : <Markdown content={message.content} profile={profile} version={message.id} streaming={message.streaming} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+          : message.streaming
+          ? <div className="stream-plain" style={{ whiteSpace: 'pre-wrap' }} aria-hidden="true">{message.content}</div>
+          : <Markdown content={shown} profile={profile} version={message.id} role={message.role} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
         {message.images?.length ? <CitedFiles files={message.images.map(mediaRef)} profile={profile} version={message.id} sent onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} /> : null}
         {message.streaming && <span className="stream-caret" />}
       </div>
@@ -310,9 +327,6 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
     </article>
   )
 })
-
-// Keys that scroll the thread: they count as a user gesture.
-const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '])
 
 interface MessageListProps {
   bot: Bot
@@ -329,7 +343,7 @@ interface MessageListProps {
   /** The local chat has no tools and no steps: its reply is streamed in its bubble as it is written. */
   streamReply?: boolean
   loading: boolean
-  onSuggestion: (text: string) => void
+  onSuggestion: (text: string) => Promise<boolean | void> | boolean | void
   onOpenDocument: (profile: string, media: MediaRef) => void
   onOpenBot: (slug: string) => void
   /** Find in the conversation: matches are highlighted, `position` is the current one, `jump` changes on each Enter. */
@@ -347,8 +361,14 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const columnRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
-  const intentAtRef = useRef(0)
+  // Latest wheel delta. A wheel-up stays negative until the user scrolls downward, so a
+  // near-bottom scroll event cannot pin the thread again on its own.
+  const wheelDeltaRef = useRef(0)
+  const scrollTopRef = useRef(0)
   const [showJump, setShowJump] = useState(false)
+  const [announcement, setAnnouncement] = useState('')
+  const wasStreamingRef = useRef(false)
+  const announcedIdRef = useRef('')
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   // One message per turn: the bot's steps (text written before a tool call) fold into the working line,
   // and its reply is not streamed, it appears whole when the turn ends.
@@ -382,17 +402,19 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const moveViewer = useCallback((index: number) => setViewer((current) => current && { ...current, index }), [])
 
   const followBottom = () => endRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
+  const applyStick = (deltaY: number) => {
+    const element = scrollRef.current
+    if (!element) return
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    const next = nextStick(stickToBottomRef.current, deltaY, distance)
+    stickToBottomRef.current = next
+    setShowJump((current) => (current === !next ? current : !next))
+  }
   const scrollToBottom = (smooth = false) => {
     stickToBottomRef.current = true
+    wheelDeltaRef.current = 0
     setShowJump(false)
     endRef.current?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'instant' })
-  }
-  // We follow the user’s intent, not the geometry: a programmatic scroll or a loading image
-  // never detaches the thread; a wheel turn upward detaches it right away, before the scroll even happens.
-  const noteIntent = () => { intentAtRef.current = Date.now() }
-  const unstick = () => {
-    stickToBottomRef.current = false
-    setShowJump(true)
   }
   useEffect(() => {
     setViewer(null)
@@ -406,6 +428,8 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const query = search?.query ?? ''
   const position = search?.position ?? -1
   const jump = search?.jump ?? 0
+  // Finished messages only. The streaming bubble is excluded, so a token does not walk the thread.
+  const completedStamp = completedMessageStamp(items)
   useEffect(() => {
     const root = scrollRef.current
     const ranges = root && query.trim() ? findRanges(root, query) : []
@@ -425,7 +449,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     if (jump === lastJumpRef.current) return
     lastJumpRef.current = jump
     if (!root || !current) return
-    // Detach from the bottom first, or the thread would pull the view back; the scroll event re-attaches it if the match is at the end.
+    // Detach from the bottom first. A later downward scroll onto the edge pins again; being near it does not.
     stickToBottomRef.current = false
     setShowJump(true)
     const box = current.getBoundingClientRect()
@@ -436,7 +460,21 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
       window.clearTimeout(flashRef.current)
       flashRef.current = window.setTimeout(() => message?.classList.remove('search-flash'), 1400)
     }
-  }, [query, position, jump, items, streaming, loading])
+  }, [query, position, jump, completedStamp, loading])
+  // Local chat: announce the finished reply once. Token updates never replace this text.
+  useEffect(() => {
+    if (!streamReply) return
+    if (streaming) {
+      wasStreamingRef.current = true
+      announcedIdRef.current = streamKey
+      return
+    }
+    if (!wasStreamingRef.current) return
+    wasStreamingRef.current = false
+    const finished = items.find((message) => message.id === announcedIdRef.current && message.role === 'assistant' && !message.streaming)
+    const speech = replyAnnouncement(false, finished?.content ?? '')
+    if (speech) setAnnouncement(speech)
+  }, [streamReply, streaming, streamKey])
   useEffect(() => () => {
     if (highlightOwner === owner && supportsHighlights()) {
       CSS.highlights.delete('search-hit')
@@ -459,25 +497,23 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
 
   return (
     <div className="messages-viewport">
+      {streamReply && <div className="visually-hidden" aria-live="polite">{announcement}</div>}
       <div
         className="messages-scroll"
         ref={scrollRef}
         onWheel={(event) => {
-          noteIntent()
-          if (event.deltaY < 0) unstick()
+          wheelDeltaRef.current = event.deltaY
+          applyStick(event.deltaY)
         }}
-        onTouchStart={noteIntent}
-        onTouchMove={noteIntent}
-        onKeyDown={(event) => { if (SCROLL_KEYS.has(event.key)) noteIntent() }}
-        // A click on the container itself is a click on its scrollbar.
-        onPointerDown={(event) => { if (event.target === event.currentTarget) noteIntent() }}
         onScroll={() => {
           const element = scrollRef.current
           if (!element) return
-          if (element.scrollHeight - element.scrollTop - element.clientHeight < 80) {
-            stickToBottomRef.current = true
-            setShowJump(false)
-          } else if (Date.now() - intentAtRef.current < 1000) unstick()
+          const moved = element.scrollTop - scrollTopRef.current
+          scrollTopRef.current = element.scrollTop
+          // A wheel-up wins until the user actually scrolls down. Near the bottom is not enough.
+          const deltaY = wheelDeltaRef.current < 0 && moved <= 0 ? wheelDeltaRef.current : moved
+          if (moved > 0) wheelDeltaRef.current = 0
+          applyStick(deltaY)
         }}
       >
       <MailContext.Provider value={mailContext}>

@@ -1,23 +1,87 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificationForStatus, resetTurns, sendTestNotification, shouldNotify, turnForUser, turnReply, watchWhileHidden } from './notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, resetTurns, sendTestNotification, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden } from './notifications'
 
 describe('notifications', () => {
   it('ne notifie pas un tour entre bots ni un tour fini en silence', () => {
     resetTurns()
-    expect(turnForUser('orion')).toBe(true)
-    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Message from 🤖 Nova (@nova): relis le plan' } })
+    // No user row yet: the finish cannot be classified, so it does not notify.
+    expect(turnForUser('orion')).toBe(false)
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Message from 🤖 Nova (@nova): relis le plan')
     noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Plan relu, OK.' } })
     expect(turnForUser('orion')).toBe(false)
-    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Fais-moi le point.' } })
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Fais-moi le point.')
     noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Voici le point.' } })
     expect(turnForUser('orion')).toBe(true)
-    noteTurnEvent('orion', { type: 'message.start', payload: { text: '[IMPORTANT: Background process proc_1 completed normally (exit code 0).' } })
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Un rapport.')
     noteTurnEvent('orion', { type: 'message.complete', payload: { text: '[SILENT]' } })
     expect(turnForUser('orion')).toBe(false)
     // A reply missing from the frame is unknown, not silent.
-    noteTurnEvent('orion', { type: 'message.start', payload: { text: 'Et maintenant ?' } })
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Et maintenant ?')
     noteTurnEvent('orion', { type: 'message.complete', payload: {} })
     expect(turnForUser('orion')).toBe(true)
+  })
+
+  it('ignore un message.start vide et le drapeau du tour précédent', () => {
+    resetTurns()
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Message from 🤖 Nova (@nova): réveille-toi')
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Je suis là.' } })
+    expect(turnForUser('orion')).toBe(false)
+    // The next turn starts with an empty message.start. The old fromBot flag must not survive.
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    expect(turnForUser('orion')).toBe(false)
+    noteTurnInput('orion', 'Quel est le point ?')
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: 'Le voici.' } })
+    expect(turnForUser('orion')).toBe(true)
+    // Status path: no message.start, a new user row replaces the previous flag.
+    noteTurnInput('orion', 'Message from 🤖 Nova (@nova): encore')
+    expect(turnForUser('orion')).toBe(false)
+    forgetTurn('orion')
+    expect(turnForUser('orion')).toBe(false)
+    noteTurnInput('orion', 'Écris-moi le résumé.')
+    expect(turnForUser('orion')).toBe(true)
+    // The input could not be read: do not notify, and do not keep the previous answer.
+    noteTurnInput('orion', null)
+    expect(turnForUser('orion')).toBe(false)
+  })
+
+  it('lit la ligne utilisateur de l’historique, pas un message.start vide', () => {
+    const rows = [
+      { role: 'user', content: 'Ancien message.' },
+      { role: 'assistant', content: 'Ancienne réponse.' },
+      { type: 'message.start', payload: {} },
+      { role: 'user', text: 'Message from 🤖 Nova (@nova): relis le plan' },
+      { type: 'message.complete', payload: { text: 'Plan relu.' } },
+    ]
+    expect(turnEndsFromRows(rows)).toEqual({
+      input: 'Message from 🤖 Nova (@nova): relis le plan',
+      reply: 'Plan relu.',
+    })
+    expect(turnEndsFromRows([{ type: 'message.start', payload: {} }, { role: 'user', content: 'À moi.' }])).toEqual({
+      input: 'À moi.',
+      reply: null,
+    })
+    expect(turnEndsFromRows([])).toEqual({ input: null, reply: null })
+    expect(turnEndsFromRows([{ role: 'user', content: [{ type: 'text', text: 'Message from 🤖 Nova (@nova): relis le plan' }] }])).toEqual({
+      input: 'Message from 🤖 Nova (@nova): relis le plan',
+      reply: null,
+    })
+  })
+
+  it('reprend le texte du tampon quand la complétion est vide', () => {
+    resetTurns()
+    noteTurnEvent('orion', { type: 'message.start', payload: {} })
+    noteTurnInput('orion', 'Écris-moi le résumé.')
+    noteTurnEvent('orion', { type: 'message.complete', payload: { text: '' } })
+    expect(turnForUser('orion')).toBe(false)
+    noteTurnSilence('orion', 'Voici le résumé.')
+    expect(turnForUser('orion')).toBe(true)
+    noteTurnSilence('orion', '[SILENT]')
+    expect(turnForUser('orion')).toBe(false)
   })
 
   it('notifie la fin d’un tour et une question, pas le reste', () => {

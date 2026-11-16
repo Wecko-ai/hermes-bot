@@ -23,27 +23,119 @@ export function notificationForRequest(method: string): NotificationKind | null 
   return null
 }
 
-/** How the latest turn of each bot began and ended. Memory only. */
-const turns = new Map<string, { fromBot: boolean; silent: boolean }>()
+/** How the latest turn of each bot began and ended. Memory only. `known` is false until this turn's user row is read. */
+const turns = new Map<string, { fromBot: boolean; silent: boolean; known: boolean }>()
 
 /**
- * Follows a bot's turns from its events (`message.start` carries the text that started the turn,
- * `message.complete` the reply). Bots talking to each other are not talking to the user.
+ * Follows a bot's turns from its events. `message.start` on the current gateway carries no prompt text,
+ * so it only opens a new turn: the previous turn's flags are dropped. `message.complete` records silence.
+ * Who started the turn comes from `noteTurnInput`.
  */
 export function noteTurnEvent(slug: string, event: { type?: string; payload?: Record<string, unknown> }) {
   const text = typeof event.payload?.text === 'string' ? event.payload.text : undefined
-  if (event.type === 'message.start') turns.set(slug, { fromBot: text !== undefined && parseIncomingAgentMessage(text, slug) !== null, silent: false })
+  if (event.type === 'message.start') turns.set(slug, { fromBot: false, silent: false, known: false })
   // No text in the frame: the reply is unknown, never taken for silence.
-  else if (event.type === 'message.complete') turns.set(slug, { fromBot: turns.get(slug)?.fromBot ?? false, silent: text !== undefined && (!text.trim() || isSilentMessage(text)) })
+  else if (event.type === 'message.complete') {
+    const current = turns.get(slug)
+    turns.set(slug, {
+      fromBot: current?.known ? current.fromBot : false,
+      known: current?.known ?? false,
+      silent: text !== undefined && (!text.trim() || isSilentMessage(text)),
+    })
+  }
+}
+
+/**
+ * Silence from the text actually shown. A completion frame can omit the reply and leave it in the
+ * streaming buffer; that text replaces the frame's empty string before a finished-turn notification.
+ */
+export function noteTurnSilence(slug: string, text: string) {
+  const current = turns.get(slug)
+  if (!current) return
+  turns.set(slug, { ...current, silent: !text.trim() || isSilentMessage(text) })
+}
+
+/**
+ * The user row that started this turn (history or `session.events.since`). `null` means it could not be
+ * read: the previous turn's flag is not reused. `reply` sets silence when the completion text is known.
+ */
+export function noteTurnInput(slug: string, input: string | null, reply?: string | null) {
+  const current = turns.get(slug)
+  const silent = reply == null ? Boolean(current?.silent) : !reply.trim() || isSilentMessage(reply)
+  turns.set(slug, {
+    fromBot: input !== null && parseIncomingAgentMessage(input, slug) !== null,
+    silent,
+    known: input !== null,
+  })
+}
+
+/** Drops the previous turn so a later finish cannot inherit its flags. */
+export function forgetTurn(slug: string) {
+  turns.delete(slug)
+}
+
+function rowRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function textOf(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value.map((part) => {
+    if (typeof part === 'string') return part
+    const item = rowRecord(part)
+    if (typeof item.text === 'string') return item.text
+    if (typeof item.content === 'string') return item.content
+    return ''
+  }).filter(Boolean).join('\n')
+}
+
+function messageText(message: Record<string, unknown>) {
+  for (const candidate of [message.text, message.content, message.display_text]) {
+    const text = textOf(candidate)
+    if (text.trim()) return text
+  }
+  return ''
+}
+
+/**
+ * Latest turn input and reply from history rows or session events.
+ * An empty `message.start` payload does not count as the input.
+ */
+export function turnEndsFromRows(rows: unknown[]): { input: string | null; reply: string | null } {
+  let reply: string | null = null
+  let input: string | null = null
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rowRecord(rows[index])
+    const nested = rowRecord(row.message)
+    const message = Object.keys(nested).length ? { ...row, ...nested } : row
+    const type = typeof row.type === 'string' ? row.type : ''
+    const payload = rowRecord(row.payload)
+    const payloadText = typeof payload.text === 'string' ? payload.text : ''
+    if (type === 'message.complete' && reply === null) reply = payloadText
+    const role = typeof message.role === 'string' ? message.role : ''
+    const content = messageText(message)
+    if (reply === null && role === 'assistant') reply = content
+    if (type === 'message.start' && payloadText.trim()) {
+      input = payloadText
+      break
+    }
+    if (role === 'user' && content.trim()) {
+      input = content
+      break
+    }
+  }
+  return { input, reply }
 }
 
 /**
  * Whether the bot's finished turn was for the user: not started by another bot's message, and not ended in
- * silence. A turn whose start was not seen counts as the user's, as before.
+ * silence. Unknown input does not notify — a previous turn's flag is never reused.
  */
 export function turnForUser(slug: string) {
   const turn = turns.get(slug)
-  return !turn || (!turn.fromBot && !turn.silent)
+  if (!turn?.known) return false
+  return !turn.fromBot && !turn.silent
 }
 
 /** Full reset (tests). */

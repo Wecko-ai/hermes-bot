@@ -63,7 +63,8 @@ func parseOptions(_ arguments: [String]) -> Options? {
         case "--on-device": options.onDevice = true
         case "--trace": options.trace = true
         case "--locale":
-            guard let value = rest.popFirst(), value.range(of: "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$", options: .regularExpression) != nil else { return nil }
+            // Same tag `electron/dictation.cjs` accepts (`LocaleTag` / `LOCALE`).
+            guard let value = rest.popFirst(), LocaleTag.isValid(value) else { return nil }
             options.locale = value
         case "--listen-for-ms":
             guard let value = rest.popFirst().flatMap(Int.init) else { return nil }
@@ -107,19 +108,67 @@ func probeLine(locale: String) -> [String: Any] {
     ]
 }
 
-/// Asks what is still undecided, microphone first, then speech recognition. Never asks again after a refusal:
-/// the system would not show its prompt a second time anyway.
-func authorize(locale: String) {
-    let done = DispatchSemaphore(value: 0)
-    if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-        AVCaptureDevice.requestAccess(for: .audio) { _ in done.signal() }
-        done.wait()
+/// Node kills `authorize` after 3 minutes (`AUTHORIZE_TIMEOUT_MS` in electron/dictation.cjs).
+/// Leave sooner, with the same timeout code the listening watchdog prints.
+let authorizeDeadline: TimeInterval = 150
+
+/// Asks what is still undecided, microphone first, then speech recognition, without blocking the main
+/// thread. The prompts need the main run loop (`dispatchMain`); a semaphore wait on this thread never
+/// gets their answer. Never asks again after a refusal: the system would not show its prompt a second time.
+func authorize(locale: String) -> Never {
+    let session = AuthorizeSession(locale: locale)
+    session.start()
+    dispatchMain()
+}
+
+/// One permission prompt. `@unchecked Sendable` so the system callbacks can hop back to the main queue;
+/// `finished` is the only shared flag and the lock covers it. The probe itself runs on the main queue.
+private final class AuthorizeSession: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private let locale: String
+
+    init(locale: String) { self.locale = locale }
+
+    func start() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + authorizeDeadline) { [self] in
+            self.finish(timeout: true)
+        }
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { [self] _ in
+                DispatchQueue.main.async { self.askSpeech() }
+            }
+        } else {
+            askSpeech()
+        }
     }
-    if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
-        SFSpeechRecognizer.requestAuthorization { _ in done.signal() }
-        done.wait()
+
+    private func askSpeech() {
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { [self] _ in
+                DispatchQueue.main.async { self.finish(timeout: false) }
+            }
+        } else {
+            finish(timeout: false)
+        }
     }
-    emit(probeLine(locale: locale))
+
+    private func finish(timeout: Bool) {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            return
+        }
+        finished = true
+        lock.unlock()
+        if timeout {
+            log("authorize: no answer after \(Int(authorizeDeadline)) s")
+            emit(["type": "error", "code": "error_speech_timeout"])
+            exit(1)
+        }
+        emit(probeLine(locale: locale))
+        exit(0)
+    }
 }
 
 // MARK: - Errors
@@ -150,10 +199,32 @@ func level(of buffer: AVAudioPCMBuffer) -> Double {
     return min(max((decibels + 55) / 40, 0), 1)
 }
 
+/// Carries a recognizer callback onto the main queue. The result and the error are not `Sendable`;
+/// this box is, and it is only read after the hop.
+private final class RecognitionEvent: @unchecked Sendable {
+    let result: SFSpeechRecognitionResult?
+    let error: Error?
+    init(result: SFSpeechRecognitionResult?, error: Error?) {
+        self.result = result
+        self.error = error
+    }
+}
+
+/// The audio tap has to append on the audio thread. The request is not `Sendable`; the tap holds this box
+/// and nowhere else appends while the tap is installed (`endAudio` removes the tap first).
+private final class AudioAppend: @unchecked Sendable {
+    let request: SFSpeechAudioBufferRecognitionRequest
+    init(_ request: SFSpeechAudioBufferRecognitionRequest) { self.request = request }
+    func append(_ buffer: AVAudioPCMBuffer) { request.append(buffer) }
+}
+
 /// One dictation session. Everything runs on the main queue; the recognizer's callbacks hop onto it.
-final class Session {
+/// `@unchecked Sendable`: the fields stay on the main queue. The audio tap and the stdin thread only
+/// hop back here, or touch `EarlyCancel` (itself locked).
+final class Session: @unchecked Sendable {
     let options: Options
     let recognizer: SFSpeechRecognizer
+    let earlyCancel: EarlyCancel
     let engine = AVAudioEngine()
     var request: SFSpeechRecognitionRequest?
     var task: SFSpeechRecognitionTask?
@@ -173,14 +244,25 @@ final class Session {
     /// After the microphone closes, how long the final result may take before the last partial stands for it.
     static let finalWaitSeconds = 1.5
 
-    init(options: Options, recognizer: SFSpeechRecognizer) {
+    init(options: Options, recognizer: SFSpeechRecognizer, earlyCancel: EarlyCancel) {
         self.options = options
         self.recognizer = recognizer
+        self.earlyCancel = earlyCancel
     }
 
     func start() {
-        // A stop or a cancel read before this ran has already ended the session: the microphone stays closed.
-        guard gate.open() else { return }
+        // Cancel can be marked on the stdin thread before this block runs. Leaving here without
+        // exiting used to sit in `dispatchMain` until the watchdog (`error_speech_timeout`).
+        switch gate.begin(cancelled: earlyCancel.isSet) {
+        case .exitClean:
+            // `cancel` prints `done` and exits while the gate is still waiting. If the gate is
+            // already over, it returns, and the exit below is what leaves.
+            cancel()
+            emit(["type": "done"])
+            exit(0)
+        case .open:
+            break
+        }
         if let path = options.file {
             startFile(URL(fileURLWithPath: path))
         } else {
@@ -205,9 +287,7 @@ final class Session {
         configure(request)
         self.request = request
         emit(["type": "listening"])
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async { self?.handle(result: result, error: error) }
-        }
+        observe(request)
     }
 
     func startMicrophone() {
@@ -218,8 +298,9 @@ final class Session {
         let request = SFSpeechAudioBufferRecognitionRequest()
         configure(request)
         self.request = request
+        let appender = AudioAppend(request)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
+            appender.append(buffer)
             let value = level(of: buffer)
             DispatchQueue.main.async { self?.report(level: value) }
         }
@@ -234,8 +315,13 @@ final class Session {
         startedAt = Date()
         lastChangeAt = startedAt
         emit(["type": "listening"])
+        observe(request)
+    }
+
+    func observe(_ request: SFSpeechRecognitionRequest) {
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async { self?.handle(result: result, error: error) }
+            let event = RecognitionEvent(result: result, error: error)
+            DispatchQueue.main.async { self?.handle(result: event.result, error: event.error) }
         }
     }
 
@@ -372,15 +458,22 @@ func listen(_ options: Options) -> Never {
         emit(["type": "error", "code": "error_network"])
         exit(1)
     }
-    let session = Session(options: options, recognizer: recognizer)
+    let earlyCancel = EarlyCancel()
+    let session = Session(options: options, recognizer: recognizer, earlyCancel: earlyCancel)
 
     // "stop" closes the microphone, "cancel" or the end of stdin ends at once.
+    // The flag is set on this thread before the hop. `start` (queued below) then sees a cancel
+    // that was read while its own block was still ahead on the main queue.
     Thread.detachNewThread {
         while let line = readLine() {
             let command = line.trimmingCharacters(in: .whitespaces)
             if command == "stop" { DispatchQueue.main.async { session.endAudio() } }
-            if command == "cancel" { DispatchQueue.main.async { session.cancel() } }
+            if command == "cancel" {
+                earlyCancel.mark()
+                DispatchQueue.main.async { session.cancel() }
+            }
         }
+        earlyCancel.mark()
         DispatchQueue.main.async { session.cancel() }
     }
     signal(SIGTERM, SIG_IGN)
@@ -389,7 +482,10 @@ func listen(_ options: Options) -> Never {
     terminate.setEventHandler { session.endAudio() }
     terminate.resume()
     let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-    interrupt.setEventHandler { session.cancel() }
+    interrupt.setEventHandler {
+        earlyCancel.mark()
+        session.cancel()
+    }
     interrupt.resume()
 
     DispatchQueue.main.async { session.start() }

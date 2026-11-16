@@ -15,9 +15,16 @@ export interface UsageDetails {
 
 interface UsageTabProps {
   slug: string
+  /** Open chat session. A new session reloads even when the bot and the running flag stay the same. */
+  sessionId?: string
   running: boolean
   live: SessionUsage | null
   load: () => Promise<UsageDetails>
+}
+
+/** Effect key: the session id is part of it, so a new chat does not keep the previous details. */
+export function usageWatchKey(slug: string, running: boolean, sessionId?: string) {
+  return `${slug}\n${running ? 1 : 0}\n${sessionId ?? ''}`
 }
 
 const exact = (value: number) => value.toLocaleString(locale())
@@ -79,17 +86,18 @@ function DailyChart({ history }: { history: UsageHistory }) {
 }
 
 /** Counters read from Hermes without any model call: opening the tab costs nothing. */
-export function UsageTab({ slug, running, live, load }: UsageTabProps) {
+export function UsageTab({ slug, sessionId, running, live, load }: UsageTabProps) {
   const { t } = useTranslation()
   const [details, setDetails] = useState<UsageDetails | null>(null)
   const [loading, setLoading] = useState(true)
-  // When the bot changes, then at the start and end of each turn.
+  const watch = usageWatchKey(slug, running, sessionId)
+  // When the bot or its session changes, then at the start and end of each turn.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     load().then((next) => { if (!cancelled) setDetails(next) }).catch(() => { if (!cancelled) setDetails(null) }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [slug, running])
+  }, [watch])
   const usage = mergeUsage(details?.usage ?? null, live)
   const context = details?.context
   const history = details?.history
@@ -122,7 +130,7 @@ export function UsageTab({ slug, running, live, load }: UsageTabProps) {
           {usage.apiCalls !== undefined && <Stat label={t('usage.apiCalls')} value={exact(usage.apiCalls)} />}
           {usage.compressions !== undefined && <Stat label={t('usage.compressions')} value={exact(usage.compressions)} />}
           {usage.cacheHitPercent !== undefined && <Stat label={t('usage.cacheHit')} value={`${Math.round(usage.cacheHitPercent)} %`} />}
-          {usage.averageTps > 0 && <Stat label={t('usage.throughput')} value={`${Math.round(usage.averageTps)} tok/s`} />}
+          {usage.averageTps > 0 && <Stat label={t('usage.throughput')} value={t('usage.perSecond', { value: Math.round(usage.averageTps) })} />}
           {usage.averageLatency !== undefined && <Stat label={t('usage.latency')} value={`${usage.averageLatency.toLocaleString(locale())} s`} />}
           {usage.activeSubagents !== undefined && <Stat label={t('usage.subagents')} value={exact(usage.activeSubagents)} />}
           {usage.costUsd !== undefined && <Stat label={t('usage.cost')} value={money(usage.costUsd)} />}

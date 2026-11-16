@@ -85,6 +85,26 @@ describe('room store', () => {
     expect(state.rooms).toEqual([updatedRoom])
   })
 
+  it('applySnapshot keeps the same state when the room, driver and log tail are unchanged', () => {
+    const initial = room('room-1', { updated_at: 4, latest_seq: 2 })
+    const driver = { running: false, working: false, blocked: false, counts: { idle: 1 }, pending_actions: [] as Record<string, unknown>[] }
+    const events = [event(1), event(2)]
+    const { applySnapshot } = useRoomStore.getState()
+    applySnapshot(initial.room_id, snapshot(initial, events, { driver, cursor: 2 }))
+    const before = useRoomStore.getState()
+    applySnapshot(initial.room_id, snapshot({ ...initial }, events.map((item) => ({ ...item })), {
+      driver: { running: false, working: false, blocked: false, counts: { idle: 1 }, pending_actions: [] },
+      cursor: 2,
+    }))
+    expect(useRoomStore.getState()).toBe(before)
+    applySnapshot(initial.room_id, snapshot(initial, events, {
+      driver: { ...driver, working: true },
+      cursor: 2,
+    }))
+    expect(useRoomStore.getState()).not.toBe(before)
+    expect(useRoomStore.getState().cache['room-1'].driver?.working).toBe(true)
+  })
+
   it('applySnapshot replaces the log on an epoch change or an explicit reset', () => {
     const initialRoom = room()
     const { applySnapshot } = useRoomStore.getState()

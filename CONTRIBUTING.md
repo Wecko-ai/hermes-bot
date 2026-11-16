@@ -14,9 +14,12 @@ Open `http://127.0.0.1:4330/?demo=1` to work on the interface without Hermes. To
 ## Before you open a pull request
 
 ```bash
-npm run check      # typecheck and unit tests
-npm run test:e2e   # end-to-end run against a simulated gateway (needs Google Chrome)
+npm run check:ci   # same gates as GitHub Actions: check, Vite build, and E2E (needs Google Chrome)
 ```
+
+Or step by step: `npm run check`, `npx vite build`, and `npm run test:e2e` against the simulated gateway.
+
+Set `E2E_PORT`, `E2E_GATEWAY_PORT`, `E2E_CDP_PORT`, and `E2E_VAULT_PORT` if the default test ports are already in use.
 
 - Keep changes focused, and describe how you verified them.
 - Tests never call a real model: the end-to-end suite uses a fake gateway (`tests/e2e.mjs`). Please keep it that way.

@@ -8,6 +8,8 @@
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 
+// Language (2–3 lower-case letters) plus up to three subtags. Same pattern as
+// `LocaleTag.pattern` in native/dictation (the helper rejects anything else).
 const LOCALE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/
 const ERROR_CODE = /^error_[a-z_]{1,40}$/
 const MAX_LINE = 64 * 1024
@@ -125,7 +127,8 @@ function lineReader(onLine) {
  */
 function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl = spawn, exists = (file) => fs.existsSync(file) }) {
   let session = null
-  let preparing = null
+  // One in-flight prepare per language. A second call for another language must not receive this one's probe.
+  const preparing = new Map()
   let sessionCount = 0
   // Sessions whose helper said the microphone is open and has not said it closed (nor exited, nor was killed).
   // The sign follows the helper, never a request: a stop asked is not a microphone closed.
@@ -143,6 +146,10 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
   const available = () => Boolean(helperPath) && exists(helperPath)
 
   /** Runs a short helper command and returns its first parsed probe line. */
+  // Probe and authorize helpers in flight. Only `dispose` (the app quits) kills them: a blur must not
+  // kill `authorize`, whose system prompt takes the focus itself.
+  const probes = new Set()
+
   function runProbe(command, localeId, timeoutMs) {
     return new Promise((resolve) => {
       let child
@@ -153,11 +160,12 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
         return
       }
       let answer = null
+      probes.add(child)
       const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', lineReader((line) => { answer ??= parseProbe(line) }))
-      child.on('error', () => { clearTimeout(timer); resolve(null) })
-      child.on('close', () => { clearTimeout(timer); resolve(answer) })
+      child.on('error', () => { clearTimeout(timer); probes.delete(child); resolve(null) })
+      child.on('close', () => { clearTimeout(timer); probes.delete(child); resolve(answer) })
     })
   }
 
@@ -165,15 +173,20 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
   function prepare(localeId) {
     const locale = validLocale(localeId)
     if (!locale || !available()) return Promise.resolve({ ...UNAVAILABLE })
-    preparing ??= (async () => {
+    const existing = preparing.get(locale)
+    if (existing) return existing
+    const pending = (async () => {
       let state = await runProbe('probe', locale, PROBE_TIMEOUT_MS)
       if (!state) return { ...UNAVAILABLE }
       // Undecided: the system asks now. A prompt left unanswered past the timeout counts as refused for now;
       // the next `prepare` asks again.
       if (state.access === 'undetermined') state = (await runProbe('authorize', locale, AUTHORIZE_TIMEOUT_MS)) ?? state
       return { ...state, access: state.access === 'undetermined' ? 'denied' : state.access }
-    })().finally(() => { preparing = null })
-    return preparing
+    })().finally(() => {
+      if (preparing.get(locale) === pending) preparing.delete(locale)
+    })
+    preparing.set(locale, pending)
+    return pending
   }
 
   function end(current) {
@@ -304,7 +317,16 @@ function createDictation({ helperPath, send, onMicrophone = () => {}, spawnImpl 
     current.child.once('close', () => clearTimeout(timer))
   }
 
-  return { prepare, start, stop, cancel, dispose: cancel, get active() { return Boolean(session) } }
+  /** The app quits: the listening session and any probe or authorize helper still running. */
+  function dispose() {
+    cancel()
+    for (const child of probes) {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+    }
+    probes.clear()
+  }
+
+  return { prepare, start, stop, cancel, dispose, get active() { return Boolean(session) } }
 }
 
 module.exports = { createDictation, listenArguments, parseEvent, parseProbe, validLocale, lineReader, UNAVAILABLE }

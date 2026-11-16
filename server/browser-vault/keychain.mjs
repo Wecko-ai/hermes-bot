@@ -3,7 +3,8 @@
  *
  * One credential = one "Internet password": server, protocol and port of the origin, account =
  * login, creator `HBot`, label "HermesBot · <origin>", comment `{"bots":[…]}` (allowed bots,
- * `*` for all). Visible and editable in Keychain Access.
+ * `*` for all). A sign-up that was stored but not typed adds `"unconfirmed":true` to that comment.
+ * Visible and editable in Keychain Access.
  *
  * The password goes through the standard input of `security -i`, never through its arguments (readable
  * in `ps`). It is only read when filling. The session keychain is only readable from the user's
@@ -108,13 +109,21 @@ function itemOrigin(attributes) {
   }
 }
 
-function itemBots(comment) {
+function itemRecord(comment) {
   try {
     const value = JSON.parse(comment || '{}')
-    return Array.isArray(value.bots) ? value.bots.filter((bot) => bot === '*' || (typeof bot === 'string' && BOT_NAME.test(bot))) : []
+    const bots = Array.isArray(value.bots) ? value.bots.filter((bot) => bot === '*' || (typeof bot === 'string' && BOT_NAME.test(bot))) : []
+    return { bots, unconfirmed: value.unconfirmed === true }
   } catch {
-    return []
+    return { bots: [], unconfirmed: false }
   }
+}
+
+function validSecret(secret) {
+  if (typeof secret !== 'string' || !secret || secret.length > 4096 || CONTROL.test(secret)) {
+    throw new BrowserVaultError('invalid_credentials', 400)
+  }
+  return secret
 }
 
 const keychainDate = (value) => {
@@ -147,6 +156,19 @@ export class KeychainStore {
   constructor({ keychain = defaultKeychain(), run = runSecurity } = {}) {
     this.keychain = keychain
     this.run = run
+    // One save or remove at a time per origin, so two writes cannot drop the item between them.
+    this.locks = new Map()
+  }
+
+  async withOriginLock(origin, task) {
+    const run = (this.locks.get(origin) || Promise.resolve()).then(task, task)
+    const tail = run.then(() => undefined, () => undefined)
+    this.locks.set(origin, tail)
+    try {
+      return await run
+    } finally {
+      if (this.locks.get(origin) === tail) this.locks.delete(origin)
+    }
   }
 
   get available() {
@@ -165,14 +187,18 @@ export class KeychainStore {
   /** Metadata only: never a password. `bot` restricts to the credentials it can use. */
   async list(bot) {
     return (await this.items())
-      .map(({ attributes, origin }) => ({
-        id: origin,
-        origin,
-        identifier: attributes.acct || '',
-        bots: itemBots(attributes.icmt),
-        createdAt: keychainDate(attributes.cdat),
-        updatedAt: keychainDate(attributes.mdat),
-      }))
+      .map(({ attributes, origin }) => {
+        const record = itemRecord(attributes.icmt)
+        return {
+          id: origin,
+          origin,
+          identifier: attributes.acct || '',
+          bots: record.bots,
+          unconfirmed: record.unconfirmed,
+          createdAt: keychainDate(attributes.cdat),
+          updatedAt: keychainDate(attributes.mdat),
+        }
+      })
       .filter((entry) => !bot || botAllowed(entry, bot))
       .sort((a, b) => a.origin.localeCompare(b.origin))
   }
@@ -182,21 +208,31 @@ export class KeychainStore {
     return (await this.list()).find((entry) => entry.origin === origin) || null
   }
 
+  async findAccount(originValue, identifier) {
+    const { origin } = originParts(originValue)
+    return (await this.list()).find((entry) => entry.origin === origin && entry.identifier === identifier) || null
+  }
+
+  /** Password of one account, or null when `security` cannot read it. */
+  async readSecret(originValue, identifier) {
+    const { server, protocol, port } = originParts(originValue)
+    const result = await this.run(['find-internet-password', '-s', server, '-r', protocol, '-P', String(port), '-c', CREATOR, '-a', identifier, '-g', this.keychain])
+    if (result.code !== 0) return null
+    return passwordValue(result.stderr)
+  }
+
   /** Login and password of an origin, for filling only. */
   async get(originValue) {
     const entry = await this.find(originValue)
     if (!entry) throw new BrowserVaultError('origin_not_found', 404)
-    const { server, protocol, port } = originParts(entry.origin)
-    const args = ['find-internet-password', '-s', server, '-r', protocol, '-P', String(port), '-c', CREATOR, '-a', entry.identifier]
-    const result = await this.run([...args, '-g', this.keychain])
-    const password = result.code === 0 ? passwordValue(result.stderr) : null
+    const password = await this.readSecret(entry.origin, entry.identifier)
     if (password === null) throw new BrowserVaultError('vault_unavailable', 503)
     return { ...entry, password }
   }
 
+  /** Removes every item of this origin. Used by `remove`, which already holds the origin lock. */
   async deleteOrigin(origin) {
     const { server, protocol, port } = originParts(origin)
-    // A changed login leaves the old item behind: we remove all those of this origin.
     for (let attempt = 0; attempt < 16; attempt += 1) {
       const args = ['delete-internet-password', '-s', server, '-r', protocol, '-P', String(port), '-c', CREATOR]
       const result = await this.run([...args, this.keychain])
@@ -204,17 +240,19 @@ export class KeychainStore {
     }
   }
 
-  /** Creates or replaces the credential of an origin. Without `password`, keeps the current one (login or bots change). */
-  async save(originValue, identifier, password, bots) {
-    const { origin, server, protocol, port } = originParts(originValue)
-    const allowed = validBots(bots)
-    validIdentifier(identifier)
-    let secret = password
-    if (secret === undefined || secret === null) secret = (await this.get(origin)).password
-    if (typeof secret !== 'string' || !secret || secret.length > 4096 || CONTROL.test(secret)) {
-      throw new BrowserVaultError('invalid_credentials', 400)
-    }
-    await this.deleteOrigin(origin)
+  async deleteAccount(origin, identifier) {
+    const { server, protocol, port } = originParts(origin)
+    const result = await this.run(['delete-internet-password', '-s', server, '-r', protocol, '-P', String(port), '-c', CREATOR, '-a', identifier, this.keychain])
+    return result.code === 0
+  }
+
+  /**
+   * Writes one new internet password item. `security add-internet-password -U` does not replace an
+   * existing internet password (it answers "already exists", checked on macOS 27), so a same-account
+   * replacement is a delete, an add and a read-back, with the previous secret restored on failure.
+   */
+  async writeItem({ origin, server, protocol, port, identifier, secret, bots, unconfirmed }) {
+    const comment = JSON.stringify(unconfirmed ? { bots, unconfirmed: true } : { bots })
     const command = [
       'add-internet-password',
       '-a', quote(identifier),
@@ -223,30 +261,88 @@ export class KeychainStore {
       '-P', String(port),
       '-l', quote(`${LABEL_PREFIX}${origin}`),
       '-c', CREATOR,
-      '-j', quote(JSON.stringify({ bots: allowed })),
+      '-j', quote(comment),
       // `security` alone reads the item without an authorization window: the service has no screen.
       '-T', SECURITY,
       '-w', quote(secret),
       quote(this.keychain),
     ].join(' ')
-    const result = await this.run(['-i'], `${command}\n`)
-    // `security -i` returns 0 even if the command fails: we check by reading back.
-    const saved = await this.find(origin)
-    if (result.code !== 0 || !saved || saved.identifier !== identifier) throw new BrowserVaultError('vault_write_failed', 503)
+    return this.run(['-i'], `${command}\n`)
+  }
+
+  /**
+   * Creates or replaces the credential of an origin. A changed account: add the new item, verify it,
+   * then delete the old account. The same account (the keychain allows one item per account): the
+   * previous secret is read first, the item is deleted, the new one added and read back; if that fails,
+   * the previous item is written back. Without `password`, keeps the current one.
+   * `options.unconfirmed` marks a sign-up that was stored but not typed.
+   */
+  async save(originValue, identifier, password, bots, options = {}) {
+    const parts = originParts(originValue)
+    const allowed = validBots(bots)
+    const account = validIdentifier(identifier)
+    if (password !== undefined && password !== null) validSecret(password)
+    const unconfirmed = options?.unconfirmed === true
+    return this.withOriginLock(parts.origin, () => this.saveUnlocked(parts, account, password, allowed, unconfirmed))
+  }
+
+  async saveUnlocked(parts, identifier, password, bots, unconfirmed) {
+    const { origin } = parts
+    const existing = await this.find(origin)
+    let secret = password
+    if (secret === undefined || secret === null) {
+      if (!existing) throw new BrowserVaultError('origin_not_found', 404)
+      secret = await this.readSecret(origin, existing.identifier)
+      if (secret === null) throw new BrowserVaultError('vault_unavailable', 503)
+    }
+    validSecret(secret)
+    const sameAccount = existing?.identifier === identifier
+    let previous = null
+    if (sameAccount) {
+      // Never delete what cannot be put back.
+      const previousSecret = await this.readSecret(origin, identifier)
+      if (previousSecret === null) throw new BrowserVaultError('vault_unavailable', 503)
+      previous = { secret: previousSecret, bots: existing.bots, unconfirmed: existing.unconfirmed === true }
+      if (!(await this.deleteAccount(origin, identifier))) throw new BrowserVaultError('vault_write_failed', 503)
+    }
+    await this.writeItem({ ...parts, identifier, secret, bots, unconfirmed })
+    // `security -i` returns 0 even when the command failed, and a non-zero code can mean only the
+    // access list was refused after the secret was stored. The read-back is what decides.
+    const written = await this.readSecret(origin, identifier)
+    const savedNow = written === secret ? await this.findAccount(origin, identifier) : null
+    const recorded = savedNow
+      && savedNow.unconfirmed === unconfirmed
+      && savedNow.bots.length === bots.length
+      && savedNow.bots.every((bot, index) => bot === bots[index])
+    if (!recorded) {
+      if (previous) {
+        await this.deleteAccount(origin, identifier)
+        await this.writeItem({ ...parts, identifier, secret: previous.secret, bots: previous.bots, unconfirmed: previous.unconfirmed })
+      }
+      throw new BrowserVaultError('vault_write_failed', 503)
+    }
+    if (existing && existing.identifier !== identifier) {
+      const removed = await this.deleteAccount(origin, existing.identifier)
+      if (!removed || await this.findAccount(origin, existing.identifier)) throw new BrowserVaultError('vault_write_failed', 503)
+    }
+    const saved = await this.findAccount(origin, identifier)
+    if (!saved) throw new BrowserVaultError('vault_write_failed', 503)
     return saved
   }
 
   async setBots(originValue, bots) {
     const entry = await this.find(originValue)
     if (!entry) throw new BrowserVaultError('origin_not_found', 404)
-    return this.save(entry.origin, entry.identifier, undefined, bots)
+    return this.save(entry.origin, entry.identifier, undefined, bots, { unconfirmed: entry.unconfirmed === true })
   }
 
   async remove(originValue) {
     const { origin } = originParts(originValue)
-    if (!(await this.find(origin))) throw new BrowserVaultError('origin_not_found', 404)
-    await this.deleteOrigin(origin)
-    if (await this.find(origin)) throw new BrowserVaultError('vault_write_failed', 503)
+    return this.withOriginLock(origin, async () => {
+      if (!(await this.find(origin))) throw new BrowserVaultError('origin_not_found', 404)
+      await this.deleteOrigin(origin)
+      if (await this.find(origin)) throw new BrowserVaultError('vault_write_failed', 503)
+    })
   }
 
   async markUsed() {

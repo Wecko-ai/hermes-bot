@@ -202,7 +202,14 @@
     "submit": "Open my bots",
     "security": "Local connection to 127.0.0.1. Your password only goes to your Hermes gateway.",
     "securityKeychain": "It stays encrypted in this Mac’s Keychain.",
+    "brand": "HERMESBOT",
     "localHelp": "Your Hermes on this Mac needs no password. In a browser, open HermesBot with the sign-in link its server printed in the terminal. The desktop app signs in by itself, from the account that runs Hermes.",
+    "localReasons": {
+      "unsafe_home": "its home directory is not the usual one",
+      "gateway_not_running": "the gateway is not running",
+      "gateway_elsewhere": "the gateway that answered is not this Mac’s",
+      "no_token": "no session token was found"
+    },
     "localBlocked": "Hermes answers without a password, but HermesBot could not confirm that it is your own gateway on this Mac ({{reason}}). Hermes must run under this account, with its home in the usual place or named by HERMES_HOME.",
     "localRetry": "Try again",
     "localSecurity": "Local connection to 127.0.0.1. Nothing to type: the session is opened by HermesBot’s own server."

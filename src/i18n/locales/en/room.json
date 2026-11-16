@@ -49,6 +49,8 @@
     "loadFailed": "Rooms could not be loaded.",
     "createFailed": "The room could not be created.",
     "sendFailed": "The message was not confirmed. Retry it with the same identifier.",
+    "previousStillSending": "The previous message is still sending.",
+    "logStalled": "The room log stopped before the latest event.",
     "notAdmitted": "Hermes did not post the message. Edit it or try again.",
     "stopFailed": "The room could not be stopped.",
     "roomCreated": "Room created. No bot runs until you send a message."

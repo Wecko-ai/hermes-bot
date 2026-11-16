@@ -49,6 +49,8 @@
     "loadFailed": "Impossible de charger les salons.",
     "createFailed": "Impossible de créer le salon.",
     "sendFailed": "Le message n’a pas été confirmé. Réessaie avec le même identifiant.",
+    "previousStillSending": "Le message précédent est encore en cours d’envoi.",
+    "logStalled": "Le journal du salon s’est arrêté avant le dernier événement.",
     "notAdmitted": "Hermes n’a pas publié le message. Modifie-le ou réessaie.",
     "stopFailed": "Impossible d’arrêter le salon.",
     "roomCreated": "Salon créé. Aucun bot ne se lance avant ton premier message."

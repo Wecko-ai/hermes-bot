@@ -15,9 +15,6 @@
     "modeGroup": "Work mode",
     "deliveryGroup": "Sending while working",
     "notAdded": "Not added: {{files}}.",
-    "hintWait": "Draft kept until the turn ends · Queue or Prio to send it now",
-    "hintQueue": "Sends when {{name}} is done",
-    "hintPriority": "{{name}} stops, reads, then resumes",
     "usageToggle": "Show context and throughput",
     "chooseModel": "Choose the model"
   },
@@ -87,6 +84,8 @@
     "subject": "Subject",
     "from": "From",
     "replyTo": "In reply to",
+    "inReplyTo": "In-Reply-To",
+    "references": "References",
     "to": "To",
     "cc": "Cc",
     "ccPlaceholder": "name@example.com",

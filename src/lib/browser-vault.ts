@@ -10,6 +10,8 @@ export interface BrowserVaultRequest {
   identifier?: string
   /** Login only: the page offers "Continue with Google" (Apple, Microsoft), or is that provider's own page. */
   sso?: SsoHint
+  /** Save only: the site already has a login; approving replaces its password and adds this bot (never a password). */
+  replaces?: { identifier: string; bots: string[] }
   busy: boolean
   createdAt: string
 }

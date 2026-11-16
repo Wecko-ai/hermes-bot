@@ -46,12 +46,21 @@ function engine({ helperPresent = true } = {}) {
   return { dictation, children, calls, events, microphone }
 }
 
+// Keep identical to LocaleTagTests.swift (native/dictation). Non-strings are checked only here.
+const localeAccepts = [
+  'en', 'fr', 'yue', 'fr-FR', 'en-US', 'yue-CN', 'zh-Hans', 'zh-Hans-CN', 'zh-Hant-HK',
+  'en-US-posix', 'en-US-posix-variant', 'sr-Latn-RS', 'es-419',
+]
+const localeRejects = [
+  '', 'FR', 'fr_FR', 'fr-FR;rm -rf', '--locale', 'fr-FR\n', 'en-US-posix-variant-extra',
+  'a', 'abcd', 'en-', 'en-U', 'en-123456789', 'Fr-FR', 'en US', 'en\n', 'i-en', 'en-US-x-private',
+]
+
 describe('dictation arguments', () => {
   it('accepts a language tag, nothing else', () => {
-    expect(validLocale('fr-FR')).toBe('fr-FR')
-    expect(validLocale('en-US')).toBe('en-US')
-    expect(validLocale('yue-CN')).toBe('yue-CN')
-    for (const bad of ['', 'FR', 'fr_FR', 'fr-FR;rm -rf', '--locale', 'fr-FR\n', 42, undefined]) expect(validLocale(bad), String(bad)).toBeNull()
+    for (const tag of localeAccepts) expect(validLocale(tag), tag).toBe(tag)
+    for (const bad of localeRejects) expect(validLocale(bad), JSON.stringify(bad)).toBeNull()
+    for (const bad of [42, undefined]) expect(validLocale(bad), String(bad)).toBeNull()
   })
 
   it('builds the argv array, numbers clamped', () => {
@@ -127,6 +136,44 @@ describe('dictation engine', () => {
     children[1].exit()
     expect(await answer).toEqual({ access: 'granted', microphone: true, exists: true, onDevice: true, available: true })
     expect(calls[0].options.env).toEqual({ PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' })
+  })
+
+  it('keeps an in-flight prepare per language', async () => {
+    const { dictation, children, calls } = engine()
+    const french = dictation.prepare('fr-FR')
+    const english = dictation.prepare('en-US')
+    const frenchAgain = dictation.prepare('fr-FR')
+    expect(calls.map((call) => call.args)).toEqual([
+      ['probe', '--locale', 'fr-FR'],
+      ['probe', '--locale', 'en-US'],
+    ])
+    const granted = { access: 'granted', microphone: true, exists: true, onDevice: true, available: true }
+    const denied = { access: 'denied', microphone: false, exists: false, onDevice: false, available: false }
+    children[0].say(granted)
+    children[0].exit()
+    children[1].say(denied)
+    children[1].exit()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await french).toEqual(granted)
+    expect(await frenchAgain).toEqual(granted)
+    expect(await english).toEqual(denied)
+    const after = dictation.prepare('fr-FR')
+    expect(calls).toHaveLength(3)
+    expect(calls[2].args).toEqual(['probe', '--locale', 'fr-FR'])
+    children[2].say(granted)
+    children[2].exit()
+    expect(await after).toEqual(granted)
+  })
+
+  it('kills a probe still running when the app quits, not on a plain cancel', async () => {
+    const { dictation, children } = engine()
+    const answer = dictation.prepare('fr-FR')
+    dictation.cancel()
+    expect(children[0].killed).toEqual([])
+    dictation.dispose()
+    expect(children[0].killed).toEqual(['SIGKILL'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect((await answer).available).toBe(false)
   })
 
   it('treats a prompt left unanswered as refused for now', async () => {

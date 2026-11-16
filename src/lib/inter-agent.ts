@@ -67,9 +67,83 @@ export function agentMessagesFromToolCalls(toolCalls: unknown, from: string): Ag
   })
 }
 
-const DELIVERY_COMMAND = /bot_mode_dm\.py\b[^\n]*--run-delivery/
 const DELIVERY_TARGET = /\s-p\s+'?([A-Za-z0-9][\w.-]*)'?\s*$/m
 const OUTCOME_HANDLE = /^\s*@?([^\s:@]+?)(?:@\S+)?\s+(?:answered|finished|never)\b/
+const DELIVERY_SCRIPT = 'bot_mode_dm.py'
+
+function basename(token: string) {
+  const slash = Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\'))
+  return slash >= 0 ? token.slice(slash + 1) : token
+}
+
+function isPython(token: string) {
+  return /^python\d*(?:\.\d+)*$/i.test(basename(token))
+}
+
+/** Shell words of one command line. An unquoted `#` starts a comment and is not an argument. */
+function shellWords(input: string): string[] {
+  const words: string[] = []
+  let current = ''
+  let quote: "'" | '"' | '' = ''
+  let started = false
+  const push = () => {
+    if (!started) return
+    words.push(current)
+    current = ''
+    started = false
+  }
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]
+    if (quote) {
+      if (char === quote) quote = ''
+      else if (quote === '"' && char === '\\' && index + 1 < input.length) current += input[++index]
+      else current += char
+      started = true
+      continue
+    }
+    if (char === '\\' && index + 1 < input.length) {
+      current += input[++index]
+      started = true
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      started = true
+      continue
+    }
+    if (char === '#' && !started) break
+    if (char === ' ' || char === '\t') {
+      push()
+      continue
+    }
+    current += char
+    started = true
+  }
+  push()
+  return words
+}
+
+/**
+ * True only when the process-completion `Command:` line actually runs `bot_mode_dm.py --run-delivery`.
+ * The script must be argv0 (after an optional `env` / `python3`), and `--run-delivery` its own argument.
+ * A mention inside `echo`, a comment, or `grep` does not count.
+ */
+function runsDeliveryScript(content: string) {
+  const match = /^[ \t]*Command:[ \t]*(.*)$/m.exec(content)
+  if (!match) return false
+  const argv = shellWords(match[1].replace(/\r$/, ''))
+  let index = 0
+  if (basename(argv[index] || '') === 'env') {
+    index += 1
+    while (index < argv.length && argv[index].startsWith('-')) index += 1
+  }
+  if (isPython(argv[index] || '')) {
+    index += 1
+    while (index < argv.length && argv[index].startsWith('-') && !argv[index].startsWith('--')) index += 1
+  }
+  if (basename(argv[index] || '') !== DELIVERY_SCRIPT) return false
+  return argv.slice(index + 1).includes('--run-delivery')
+}
 
 /** JSON output of the delivery process, even when cut off by the gateway. */
 function deliveryOutput(content: string): { fields: Json; raw: string } {
@@ -89,7 +163,7 @@ function deliveryOutput(content: string): { fields: Json; raw: string } {
 
 /** End of a delivery on the sender `to`’s side: the contacted bot’s reply, or the reason for its silence. */
 export function parseAgentReply(content: string, to: string): AgentMessage | null {
-  if (!DELIVERY_COMMAND.test(content)) return null
+  if (!runsDeliveryScript(content)) return null
   const { fields, raw } = deliveryOutput(content)
   const outcome = asString(fields.outcome).trim()
   const from = OUTCOME_HANDLE.exec(outcome)?.[1] || DELIVERY_TARGET.exec(content)?.[1] || ''

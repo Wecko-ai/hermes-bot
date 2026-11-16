@@ -84,6 +84,9 @@ export interface RoomCapabilities {
   seatable_profiles?: string[] | null
 }
 
+/** A log page said more events exist but did not move the cursor. The caller can show this. */
+export const ROOM_LOG_STALLED = 'room_log_stalled'
+
 export interface RoomSnapshot {
   room: Room
   driver: RoomDriverStatus | null
@@ -94,6 +97,8 @@ export interface RoomSnapshot {
   epoch: number
   /** The local cursor or authority was stale: replace the cached log instead of appending. */
   reset: boolean
+  /** Set when a page claimed more events without a greater cursor (`ROOM_LOG_STALLED`). */
+  error?: string
 }
 
 export type RoomNotice = 'settled' | 'bounded' | 'failed' | 'cancelled' | 'deferred' | 'stopped' | 'continued'
@@ -156,12 +161,25 @@ export function roomTimeline(events: RoomEvent[]): RoomTimelineItem[] {
   return items
 }
 
+// One preview per room, reused while the log's length and last seq stay put.
+const roomPreviewCache = new Map<string, { length: number; seq: number; text: string }>()
+
 export function roomPreview(events: RoomEvent[]) {
+  const last = events[events.length - 1]
+  const roomId = last?.room_id ?? ''
+  const seq = last?.seq ?? 0
+  const hit = roomId ? roomPreviewCache.get(roomId) : undefined
+  if (hit && hit.length === events.length && hit.seq === seq) return hit.text
   const items = roomTimeline(events)
+  let text = ''
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (items[index].kind !== 'notice') return items[index].text
+    if (items[index].kind !== 'notice') {
+      text = items[index].text
+      break
+    }
   }
-  return ''
+  if (roomId) roomPreviewCache.set(roomId, { length: events.length, seq, text })
+  return text
 }
 
 export function mergeRoomEvents(current: RoomEvent[], incoming: RoomEvent[], reset = false) {
@@ -238,11 +256,58 @@ export async function readRoom(client: HermesClient, roomId: string, sinceSeq = 
       include_disbanded: false,
     })
     events.push(...(Array.isArray(result.events) ? result.events : []))
-    cursor = number(result.cursor, cursor)
+    const nextCursor = number(result.cursor, cursor)
     latestSeq = number(result.latest_seq, latestSeq)
-    if (!result.has_more) break
+    if (!result.has_more) {
+      cursor = nextCursor
+      break
+    }
+    // An empty page that still says `has_more` would request the same cursor forever.
+    if (!(nextCursor > cursor)) {
+      return {
+        room: state.room,
+        driver: state.driver_status ?? null,
+        context: state.context ?? null,
+        events,
+        cursor,
+        latestSeq,
+        epoch,
+        reset,
+        error: ROOM_LOG_STALLED,
+      }
+    }
+    cursor = nextCursor
   }
   return { room: state.room, driver: state.driver_status ?? null, context: state.context ?? null, events, cursor, latestSeq, epoch, reset }
+}
+
+export interface RoomPendingSend {
+  eventId: string
+  threadId: string
+  text: string
+}
+
+/** What `groups.send` should do with a composer text and the room's pending attempt. */
+export type RoomSendPlan =
+  | { status: 'send'; pending: RoomPendingSend }
+  | { status: 'previous-still-sending' }
+  | { status: 'already-sending' }
+
+/**
+ * A failed attempt that is no longer on the wire can be replaced with new text and a new event id.
+ * A different text while that attempt is still in flight is not a silent refusal.
+ */
+export function planRoomSend(
+  content: string,
+  existing: RoomPendingSend | undefined,
+  inFlight: boolean,
+  mint: () => { eventId: string; threadId: string } = () => ({ eventId: crypto.randomUUID(), threadId: crypto.randomUUID() }),
+): RoomSendPlan {
+  if (inFlight && existing && existing.text !== content) return { status: 'previous-still-sending' }
+  if (inFlight) return { status: 'already-sending' }
+  if (existing && existing.text === content) return { status: 'send', pending: existing }
+  const ids = mint()
+  return { status: 'send', pending: { eventId: ids.eventId, threadId: ids.threadId, text: content } }
 }
 
 export async function sendRoomMessage(client: HermesClient, roomId: string, eventId: string, content: string, threadId = eventId) {

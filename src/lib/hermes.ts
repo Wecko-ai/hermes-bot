@@ -48,15 +48,66 @@ export class HermesRpcError extends Error {
 }
 
 const asObject = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {})
-const SILENT_MESSAGES = new Set(['SILENT', '[SILENT]', 'NOREPLY', '[NOREPLY]', 'NO_REPLY', '[NO_REPLY]', 'NO RESPONSE', '[NO RESPONSE]'])
-const SILENT_MARKER_LINE = /^[ \t]*\[(?:SILENT|NOREPLY|NO_REPLY|NO RESPONSE)\][ \t]*$/gim
-export const isSilentMessage = (content: string) => SILENT_MESSAGES.has(content.trim().toUpperCase())
-/** A report ending in `[SILENT]` keeps its report; only the marker leaves the visible thread. */
-export const withoutSilentMarkers = (content: string) => content.replace(SILENT_MARKER_LINE, '').trim()
-/** While streaming: true as long as the text can still turn into `NOREPLY`, `[SILENT]`… */
+// Same verdict as the gateway's `is_intentional_silence_response`: trim, drop edge
+// punctuation (so `*NO_REPLY*` counts), case-fold, collapse whitespace. `NOREPLY`
+// and the bracketed forms already used here stay, next to the gateway's `NO REPLY`.
+const SILENCE_MARKERS = new Set([
+  'SILENT', '[SILENT]', 'NO_REPLY', 'NO REPLY', 'NOREPLY', '[NOREPLY]', '[NO_REPLY]',
+  'NO RESPONSE', '[NO RESPONSE]', '[静默]', '静默', '[沉默]', '沉默',
+])
+const SILENCE_MARKER_CAP = 64
+
+function silenceFold(text: string) {
+  return text.toUpperCase().split(/\s+/).filter(Boolean).join(' ')
+}
+
+function isEdgePunctuation(char: string) {
+  return char !== '[' && char !== ']' && /\p{P}/u.test(char)
+}
+
+function stripEdgePunctuation(text: string) {
+  let start = 0
+  let end = text.length
+  while (start < end && isEdgePunctuation(text[start])) start += 1
+  while (end > start && isEdgePunctuation(text[end - 1])) end -= 1
+  return text.slice(start, end).trim()
+}
+
+/** Canonical forms of a short marker-sized string. Empty when it cannot be a marker. */
+function silenceCandidates(text: string): string[] {
+  const stripped = text.trim()
+  if (!stripped || stripped.length > SILENCE_MARKER_CAP) return []
+  const depunctuated = stripEdgePunctuation(stripped)
+  const forms = depunctuated === stripped ? [stripped] : [stripped, depunctuated]
+  return forms.map(silenceFold)
+}
+
+export const isSilentMessage = (content: string) => silenceCandidates(content).some((form) => SILENCE_MARKERS.has(form))
+
+/**
+ * Drops a trailing line that is only a silence marker (`Done\\n\\nNO_REPLY` → `Done`).
+ * A bare marker stays, so the caller can file the whole reply as silence.
+ */
+export function withoutSilentMarkers(content: string) {
+  let text = content
+  while (true) {
+    const end = text.replace(/\s+$/, '')
+    const split = end.lastIndexOf('\n')
+    if (split < 0) break
+    const head = end.slice(0, split)
+    const tail = end.slice(split + 1)
+    if (!head.trim() || !isSilentMessage(tail)) break
+    text = head
+  }
+  return text.trim()
+}
+
+/** While streaming: true while the text can still become a silence marker. */
 export const mayBecomeSilent = (content: string) => {
-  const text = content.trim().toUpperCase()
-  return [...SILENT_MESSAGES].some((silent) => silent.startsWith(text))
+  if (!content.trim()) return true
+  const forms = silenceCandidates(content)
+  if (!forms.length) return false
+  return forms.some((form) => [...SILENCE_MARKERS].some((marker) => marker.startsWith(form)))
 }
 
 // What the gateway deposits on the user’s behalf: process end, routine report,
@@ -163,8 +214,6 @@ export interface ServerRequest {
 }
 
 const ANSWERED_HERE = new Set(['approval', 'vault.save_login', 'vault.unlock_prompt', 'vault.code'])
-/** Reserved for a window that displays the session: the 4404 refusal lets another window answer. */
-const WINDOW_OWNED = new Set(['preview.act', 'preview.read', 'terminal.read', 'theme.apply', 'window.read', 'tour'])
 
 export class HermesClient {
   private serverRequestListeners = new Set<(request: ServerRequest) => void>()
@@ -216,7 +265,8 @@ export class HermesClient {
           if (event.type === 'gateway.ready') {
             clearTimeout(timer)
             // Without this announcement, the gateway fails vault and approval requests instead of sending them.
-            socket.send(JSON.stringify({ jsonrpc: '2.0', id: `hermesbot-${++this.sequence}`, method: 'client.capabilities', params: { server_requests: true } }))
+            // The id is stored in `pending` like any other call, so the result is not a stray frame.
+            this.announceCapabilities(socket)
             this.connectionListeners.forEach((listener) => listener(true))
             resolve()
           }
@@ -259,18 +309,24 @@ export class HermesClient {
     return () => this.serverRequestListeners.delete(listener)
   }
 
-  /** Also receives the still-open requests that a session resume hands back. */
+  /**
+   * Also receives the still-open requests that a session resume hands back.
+   * Methods this app does not answer are ignored. Any frame, including an error,
+   * would settle the request for every other client.
+   */
   receiveServerRequest(request: ServerRequest) {
-    if (ANSWERED_HERE.has(request.method)) {
-      this.serverRequestListeners.forEach((listener) => listener(request))
-      return
-    }
-    // An unanswered request would block the bot until its timeout: refuse it right away.
-    this.sendFrame({
-      jsonrpc: '2.0',
-      id: request.id,
-      error: WINDOW_OWNED.has(request.method) ? { code: 4404, message: 'session_not_shown' } : { code: -32601, message: `unsupported: ${request.method}` },
-    })
+    if (!ANSWERED_HERE.has(request.method)) return
+    this.serverRequestListeners.forEach((listener) => listener(request))
+  }
+
+  /** `client.capabilities` is a normal pending call: its id is never left unmatched. */
+  private announceCapabilities(socket: WebSocket) {
+    const id = `hermesbot-${++this.sequence}`
+    const timer = setTimeout(() => {
+      this.pending.delete(id)
+    }, 45_000)
+    this.pending.set(id, { resolve: () => undefined, reject: () => undefined, timer })
+    socket.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'client.capabilities', params: { server_requests: true } }))
   }
 
   respond(id: string, result: Json) {

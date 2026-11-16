@@ -2,6 +2,7 @@ import { useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, MessageCircleQuestion } from 'lucide-react'
 import { MailContext } from './MailCard'
+import { approvalAccepted } from '../lib/approval'
 import { answersPrompt, hasAnswer, type OpenQuestions } from '../lib/questions'
 
 // Answers being written are kept on this Mac (localStorage), so a restart loses nothing.
@@ -33,18 +34,26 @@ export function QuestionsCard({ id, block }: { id: string; block: OpenQuestions 
     return saved?.length === block.questions.length ? saved : empty()
   })
   const [sent, setSent] = useState(() => Boolean(readMap(SENT_KEY)[key]))
+  const [busy, setBusy] = useState(false)
 
   const change = (index: number, value: string) => {
     const next = answers.map((answer, position) => (position === index ? value : answer))
     setAnswers(next)
     writeEntry(DRAFTS_KEY, key, hasAnswer(next) ? next : null)
   }
-  const send = () => {
-    if (!context || !hasAnswer(answers)) return
-    context.onApprove(answersPrompt(t('questions.intro'), block.questions, answers))
-    writeEntry(SENT_KEY, key, answers)
-    writeEntry(DRAFTS_KEY, key, null)
-    setSent(true)
+  const send = async () => {
+    if (!context || !hasAnswer(answers) || context.running || busy) return
+    setBusy(true)
+    try {
+      const accepted = await approvalAccepted(context.onApprove(answersPrompt(t('questions.intro'), block.questions, answers)))
+      // A refused send keeps the form and the draft. The “sent” mark would survive a reload.
+      if (!accepted) return
+      writeEntry(SENT_KEY, key, answers)
+      writeEntry(DRAFTS_KEY, key, null)
+      setSent(true)
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (sent) {
@@ -85,7 +94,7 @@ export function QuestionsCard({ id, block }: { id: string; block: OpenQuestions 
         <button
           type="button"
           className="is-primary"
-          disabled={!context || context.running || !hasAnswer(answers)}
+          disabled={!context || context.running || busy || !hasAnswer(answers)}
           title={context?.running ? t('mail.botBusy') : t('questions.shortcut')}
           onClick={send}
         >{t('questions.send')}</button>

@@ -48,6 +48,25 @@ describe('roster', () => {
     expect(status('a')).toBe('working')
   })
 
+  it('the done timer does not idle a bot that is working again', () => {
+    const { setBots, markDone, updateBot } = useRosterStore.getState()
+    setBots([bot('a', { status: 'working' })])
+    markDone('a')
+    expect(status('a')).toBe('done')
+    updateBot('a', { status: 'working' })
+    vi.advanceTimersByTime(DONE_VISIBLE_MS)
+    expect(status('a')).toBe('working')
+  })
+
+  it('a roster update that sets working clears the pending done timer', () => {
+    const { setBots, markDone } = useRosterStore.getState()
+    setBots([bot('a', { status: 'working' })])
+    markDone('a')
+    setBots([bot('a', { status: 'working' })])
+    vi.advanceTimersByTime(DONE_VISIBLE_MS)
+    expect(status('a')).toBe('working')
+  })
+
   it('un nouveau tour annule la minuterie « Terminé » en attente', () => {
     const { setBots, markDone, clearDoneTimer, updateBot } = useRosterStore.getState()
     setBots([bot('a')])

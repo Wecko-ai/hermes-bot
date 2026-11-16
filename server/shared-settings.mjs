@@ -23,3 +23,28 @@ export function parseSharedSettings(text) {
     return {}
   }
 }
+
+async function discard(upstream) {
+  await upstream?.body?.cancel?.().catch(() => {})
+}
+
+/** Every return path drops the upstream body, including a 404 and a successful write. */
+export async function relaySharedSettingsGet(upstream) {
+  try {
+    if (upstream.status === 404) return { status: 200, body: { exists: false, settings: {} } }
+    if (!upstream.ok) return { status: upstream.status, body: { error: 'shared_settings_unreadable' } }
+    const body = await upstream.json().catch(() => ({}))
+    return { status: 200, body: { exists: true, settings: parseSharedSettings(body.text) } }
+  } finally {
+    await discard(upstream)
+  }
+}
+
+export async function relaySharedSettingsPut(upstream, settings) {
+  try {
+    if (!upstream.ok) return { status: upstream.status, body: { error: 'shared_settings_unwritable' } }
+    return { status: 200, body: { ok: true, settings } }
+  } finally {
+    await discard(upstream)
+  }
+}

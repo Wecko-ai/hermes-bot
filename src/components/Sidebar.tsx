@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { Room } from '../lib/rooms'
-import type { RoomSupport } from '../store/rooms'
 import { BotContextMenu } from './BotContextMenu'
 import { DeleteBotDialog, RenameBotDialog } from './BotDialogs'
 import { avatarColor, statusLabel } from './BotAvatar'
@@ -15,7 +14,10 @@ import { updateSettings, useSettings } from '../lib/settings'
 import { compareSections, useAppConfig } from '../lib/app-config'
 import { backgroundSummary } from '../lib/background'
 import { botActionError, type BotAction } from '../lib/bot-actions'
+import { contextMenuPoint, isContextMenuKey } from '../lib/a11y-focus'
 import { LOCAL_CHAT_SLUG } from '../lib/local-chat'
+import { roomRowAvatarStatus } from '../lib/room-row'
+import { useRoomStore, type RoomSupport } from '../store/rooms'
 import { botSections, LOCAL_SECTION_NAME, rosterGroups, UNASSIGNED_SECTION_NAME } from '../lib/roster-groups'
 import { locale } from '../i18n'
 
@@ -55,6 +57,7 @@ interface SidebarProps {
 export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
+  const roomCache = useRoomStore((state) => state.cache)
   const { ui } = useAppConfig()
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -102,12 +105,11 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
   // A bot that left the roster (deleted, here or elsewhere) takes its menu and dialog with it.
   useEffect(() => { if (menu && !menuBot) setMenu(null) }, [menu, menuBot])
   useEffect(() => { if (dialog && !dialogBot) setDialog(null) }, [dialog, dialogBot])
-  const openMenu = (event: MouseEvent<HTMLElement>, bot: Bot) => {
+  const openMenu = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>, bot: Bot, keyboard = false) => {
     event.preventDefault()
-    // From the keyboard (context menu key, ⇧F10) the point is not on the row: the menu opens under it.
     const row = event.currentTarget.getBoundingClientRect()
-    const onRow = event.clientX >= row.left && event.clientX <= row.right && event.clientY >= row.top && event.clientY <= row.bottom
-    setMenu({ slug: bot.slug, at: onRow ? { x: event.clientX, y: event.clientY } : { x: row.left + 28, y: row.bottom - 6 } })
+    const pointer = event.nativeEvent instanceof MouseEvent ? event.nativeEvent : null
+    setMenu({ slug: bot.slug, at: contextMenuPoint(row, pointer?.clientX ?? 0, pointer?.clientY ?? 0, keyboard) })
   }
   const menuSlug = useRef('')
   menuSlug.current = menu?.slug ?? ''
@@ -199,7 +201,11 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
             </div>
             {!collapsed.has('__rooms') && visibleRooms.map((room) => {
               const working = Boolean(roomWorking[room.room_id])
-              const memberBots = room.members.slice(0, 2).map((member) => bots.find((bot) => bot.slug === (member.profile || member.member_id))).filter((bot): bot is Bot => Boolean(bot))
+              const activity = roomCache[room.room_id]?.driver?.member_activity
+              const memberBots = room.members.slice(0, 2).flatMap((member) => {
+                const bot = bots.find((item) => item.slug === (member.profile || member.member_id))
+                return bot ? [{ member, bot }] : []
+              })
               return (
                 <button
                   className={`room-row ${working ? 'is-working' : ''} ${selectedRoomId === room.room_id ? 'is-selected' : ''}`}
@@ -209,7 +215,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                   aria-current={selectedRoomId === room.room_id ? 'page' : undefined}
                 >
                   <span className="room-row-avatars" aria-hidden="true">
-                    {memberBots.length ? memberBots.map((bot) => <LiveAvatar key={bot.slug} bot={{ ...bot, status: working ? 'working' : 'idle' }} size={29} />) : <span className="room-row-icon"><UsersRound size={19} /></span>}
+                    {memberBots.length ? memberBots.map(({ member, bot }) => <LiveAvatar key={bot.slug} bot={{ ...bot, status: roomRowAvatarStatus(member.member_id, activity) }} size={29} />) : <span className="room-row-icon"><UsersRound size={19} /></span>}
                   </span>
                   <span className="bot-row-copy">
                     <span className="bot-row-line">
@@ -249,6 +255,9 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                     onClick={() => onSelect(bot)}
                     // The local chat is not a Hermes profile: nothing to pin, move, rename or delete.
                     onContextMenu={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => openMenu(event, bot)}
+                    onKeyDown={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => { if (isContextMenuKey(event.key, event.shiftKey)) openMenu(event, bot, true) }}
+                    aria-haspopup={bot.slug === LOCAL_CHAT_SLUG ? undefined : 'menu'}
+                    aria-expanded={bot.slug === LOCAL_CHAT_SLUG ? undefined : menu?.slug === bot.slug}
                     aria-current={selected === bot.slug ? 'page' : undefined}
                     title={standby || undefined}
                   >

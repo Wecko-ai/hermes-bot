@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { Bot } from '../types'
 import { BotAvatar } from './BotAvatar'
 import { locale } from '../i18n'
+import { isImeComposition } from '../lib/keyboard'
 
 interface CommandPaletteProps {
   bots: Bot[]
@@ -35,6 +36,7 @@ export function CommandPalette({ bots, onSelect, onClose }: CommandPaletteProps)
             aria-label={t('palette.findBot')}
             onChange={(event) => { setQuery(event.target.value); setIndex(0) }}
             onKeyDown={(event) => {
+              if (event.key === 'Enter' && isImeComposition(event)) return
               if (event.key === 'Escape') onClose()
               else if (event.key === 'Enter' && results[active]) onSelect(results[active])
               else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && results.length) setIndex((active + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length)

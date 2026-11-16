@@ -41,6 +41,8 @@ export interface RequestsState {
 
   addServerRequest: (request: ServerRequest) => void
   removeServerRequest: (id: string) => void
+  /** Drops gateway cards only. A reconnect uses this before the resume snapshot. */
+  clearServerRequests: () => void
 
   setBrowserVaultRequests: (requests: BrowserVaultRequest[]) => void
   removeBrowserVaultRequest: (id: string) => void
@@ -62,6 +64,7 @@ export const useRequestsStore = create<RequestsState>()((set) => ({
 
   addServerRequest: (request) => set((state) => ({ serverRequests: addServerRequest(state.serverRequests, request) })),
   removeServerRequest: (id) => set((state) => ({ serverRequests: state.serverRequests.filter((item) => item.id !== id) })),
+  clearServerRequests: () => set((state) => (state.serverRequests.length === 0 ? state : { serverRequests: [] })),
 
   setBrowserVaultRequests: (browserVaultRequests) => set({ browserVaultRequests }),
   removeBrowserVaultRequest: (id) => set((state) => ({ browserVaultRequests: state.browserVaultRequests.filter((item) => item.id !== id) })),

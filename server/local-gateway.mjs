@@ -22,6 +22,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import { childEnv } from './child-env.mjs'
 
 const TOKEN_HEADER = 'x-hermes-session-token'
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/
@@ -34,6 +35,10 @@ const MAX_CONTROL_ANSWER = 512 * 1024
 const PEER_TRIES = 6
 const PEER_WAIT_MS = 60
 const IDLE_CLOSE_MS = 120_000
+// One passwordless request runs lsof several times. A gallery must not start dozens at once.
+const VERIFICATION_LIMIT = 3
+// Covers every lsof in the peer loop (each one is killed at 4s) plus the short waits between them.
+const PEER_BUDGET_MS = PEER_TRIES * 4_000 + PEER_TRIES * PEER_WAIT_MS + 1_000
 
 const refused = (reason) => ({ ok: false, reason })
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -128,35 +133,99 @@ function controlQuery(socketPath, request, timeout = 2_000) {
 }
 
 /** The TCP sockets of one process on the gateway address, as lsof names them (`-Fn`). Empty on any failure. */
-function lsofSockets(pid, port) {
+function lsofSockets(pid, port, run = execFile) {
   return new Promise((resolve) => {
-    execFile('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), `-iTCP@${GATEWAY_HOST}:${port}`, '-Fn'],
-      { timeout: 4_000 }, (error, stdout) => resolve(error ? '' : stdout))
+    run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), `-iTCP@${GATEWAY_HOST}:${port}`, '-Fn'],
+      // The vault token must not ride along in the environment of this child.
+      { timeout: 4_000, env: childEnv() }, (error, stdout) => resolve(error ? '' : stdout))
   })
 }
+
+const deadSockets = new WeakSet()
 
 function connect(port, timeout = 4_000) {
   return new Promise((resolve) => {
     const socket = net.connect({ host: GATEWAY_HOST, port })
-    socket.setTimeout(timeout, () => { socket.destroy(); resolve(null) })
-    socket.once('connect', () => { socket.setTimeout(0); resolve(socket) })
-    socket.once('error', () => resolve(null))
+    let settled = false
+    const giveUp = () => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(null)
+    }
+    const onEarlyError = () => giveUp()
+    socket.setTimeout(timeout, giveUp)
+    socket.on('error', onEarlyError)
+    socket.once('connect', () => {
+      if (settled) return
+      settled = true
+      socket.setTimeout(0)
+      // The pre-connect listener only existed to fail the connect. A later error means the
+      // peer dropped the socket; it must not be swallowed as a successful connect.
+      socket.removeListener('error', onEarlyError)
+      socket.on('error', () => { deadSockets.add(socket) })
+      resolve(socket)
+    })
   })
+}
+
+function limitConcurrency(limit) {
+  let active = 0
+  const waiting = []
+  return function run(task) {
+    return new Promise((resolve, reject) => {
+      const start = () => {
+        active += 1
+        Promise.resolve().then(task).then(resolve, reject).finally(() => {
+          active -= 1
+          const next = waiting.shift()
+          if (next) next()
+        })
+      }
+      if (active < limit) start()
+      else waiting.push(start)
+    })
+  }
 }
 
 /** One HTTP request on an already open, already checked connection. Answers like `fetch` does. */
 function requestOn(socket, port, route, { method = 'GET', headers, body, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (!socket || socket.destroyed) {
+      reject(new Error('aborted'))
+      return
+    }
+    // Destroying the socket must not become an unhandled 'error' on the process.
+    socket.on('error', () => {})
     const request = http.request({
       host: GATEWAY_HOST, port, path: route, method, agent: false,
       headers: { ...Object.fromEntries(new Headers(headers)), host: `${GATEWAY_HOST}:${port}`, connection: 'close' },
       createConnection: () => socket,
     })
-    const abort = () => request.destroy(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
-    if (signal?.aborted) return abort()
-    signal?.addEventListener('abort', abort, { once: true })
-    request.once('error', reject)
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      if (!socket.destroyed) socket.destroy()
+      reject(error instanceof Error ? error : new Error('aborted'))
+    }
+    const abort = () => {
+      const error = signal?.reason instanceof Error ? signal.reason : new Error('aborted')
+      if (!request.destroyed) request.destroy(error)
+      else fail(error)
+      if (!socket.destroyed) socket.destroy()
+    }
+    // The error listener has to be in place before the abort check: an already-aborted
+    // signal destroys the request, and that emits 'error' on a later turn.
+    request.once('error', fail)
+    if (signal?.aborted) abort()
+    else if (signal) signal.addEventListener('abort', abort, { once: true })
     request.once('response', (incoming) => {
+      if (settled) {
+        incoming.destroy()
+        return
+      }
+      settled = true
       const answer = new Headers()
       for (const [name, value] of Object.entries(incoming.headers)) {
         for (const item of Array.isArray(value) ? value : [value]) answer.append(name, item)
@@ -165,11 +234,21 @@ function requestOn(socket, port, route, { method = 'GET', headers, body, signal 
       if (empty) incoming.resume()
       // One request per connection: closed once the answer is read or dropped. A caller that never
       // reads the body must not keep it open either, hence the idle limit (a stream being read is not idle).
-      incoming.once('close', () => socket.destroy())
-      socket.setTimeout(IDLE_CLOSE_MS, () => socket.destroy())
+      incoming.once('close', () => { if (!socket.destroyed) socket.destroy() })
+      incoming.on('error', () => { if (!socket.destroyed) socket.destroy() })
+      socket.setTimeout(IDLE_CLOSE_MS, () => { if (!socket.destroyed) socket.destroy() })
+      if (signal) {
+        signal.removeEventListener('abort', abort)
+        const stopBody = () => {
+          if (!request.destroyed) request.destroy()
+          if (!socket.destroyed) socket.destroy()
+        }
+        if (signal.aborted) stopBody()
+        else signal.addEventListener('abort', stopBody, { once: true })
+      }
       resolve(new Response(empty ? null : Readable.toWeb(incoming), { status: incoming.statusCode, headers: answer }))
     })
-    request.end(body)
+    if (!signal?.aborted) request.end(body)
   })
 }
 
@@ -182,8 +261,9 @@ function requestOn(socket, port, route, { method = 'GET', headers, body, signal 
 export function createLocalGateway({ gatewayOrigin, hermesHome, uid = process.getuid?.(), deps = {} }) {
   const fetchImpl = deps.fetch || fetch
   const query = deps.controlQuery || controlQuery
-  const sockets = deps.lsofSockets || lsofSockets
+  const sockets = deps.lsofSockets || ((pid, gatewayPort) => lsofSockets(pid, gatewayPort, deps.execFile || execFile))
   const port = loopbackPort(gatewayOrigin)
+  const limitVerification = limitConcurrency(VERIFICATION_LIMIT)
   let statusUntil = 0
 
   /** Whether the gateway says it needs no sign-in. Nothing secret is sent to ask, so the answer is kept a moment. */
@@ -226,23 +306,46 @@ export function createLocalGateway({ gatewayOrigin, hermesHome, uid = process.ge
   }
 
   /** A connection whose other end is the gateway's own process, and the token for it. Throws otherwise. */
-  async function checkedConnection() {
+  function checkedConnection() {
     const unavailable = (reason) => Object.assign(new Error('local_gateway_unavailable'), { status: 401, reason })
-    const found = await verify()
-    if (!found.ok) throw unavailable(found.reason)
-    const socket = await connect(port)
-    if (!socket) throw unavailable('gateway_down')
-    // Nothing leaves before the gateway's own process is seen at the other end of this connection.
-    let peer = false
-    for (let attempt = 0; attempt < PEER_TRIES && !peer; attempt += 1) {
-      if (attempt) await delay(PEER_WAIT_MS)
-      peer = holdsPeer(await sockets(found.pid, port), port, socket.localPort)
-    }
-    if (!peer) {
-      socket.destroy()
-      throw unavailable('gateway_elsewhere')
-    }
-    return { socket, token: found.token }
+    // The slot limits how many lsof runs overlap. It does not remember the token or the socket.
+    return limitVerification(async () => {
+      const found = await verify()
+      if (!found.ok) throw unavailable(found.reason)
+      const socket = await connect(port)
+      if (!socket) throw unavailable('gateway_down')
+      const budget = setTimeout(() => {
+        deadSockets.add(socket)
+        socket.destroy()
+      }, PEER_BUDGET_MS)
+      budget.unref?.()
+      try {
+        // Nothing leaves before the gateway's own process is seen at the other end of this connection.
+        let peer = false
+        for (let attempt = 0; attempt < PEER_TRIES && !peer; attempt += 1) {
+          if (deadSockets.has(socket) || socket.destroyed) break
+          if (attempt) await delay(PEER_WAIT_MS)
+          if (deadSockets.has(socket) || socket.destroyed) break
+          peer = holdsPeer(await sockets(found.pid, port), port, socket.localPort)
+        }
+        if (deadSockets.has(socket) || socket.destroyed) {
+          if (!socket.destroyed) socket.destroy()
+          throw unavailable('gateway_down')
+        }
+        if (!peer) {
+          socket.destroy()
+          throw unavailable('gateway_elsewhere')
+        }
+        // The listener added by connect() stays: an error before the caller attaches its own
+        // must not become an unhandled 'error' on the process.
+        return { socket, token: found.token }
+      } catch (error) {
+        if (!socket.destroyed) socket.destroy()
+        throw error
+      } finally {
+        clearTimeout(budget)
+      }
+    })
   }
 
   return {

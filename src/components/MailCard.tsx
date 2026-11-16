@@ -1,13 +1,16 @@
 import { createContext, useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Mail } from 'lucide-react'
+import { approvalAccepted } from '../lib/approval'
 import { approvedMailPrompt, canSendMail, parseMailBlock, type MailDraft } from '../lib/mail'
+import type { ChatMessage } from '../types'
 
 interface MailContextValue {
   profile: string
   running: boolean
   approved: Set<string>
-  onApprove: (prompt: string) => void
+  /** Resolves to false when the send was refused. Anything else records the approval. */
+  onApprove: (prompt: string) => Promise<boolean | void> | boolean | void
 }
 
 export const MailContext = createContext<MailContextValue | null>(null)
@@ -43,8 +46,9 @@ function MailCard({ draft, context }: { draft: MailDraft; context: MailContextVa
   const send = async () => {
     setBusy(true)
     try {
-      context.onApprove(await approvedMailPrompt(value))
-      edits.delete(key)
+      const accepted = await approvalAccepted(context.onApprove(await approvedMailPrompt(value)))
+      // A refused send keeps the edited subject and body for the next time the card mounts.
+      if (accepted) edits.delete(key)
     } finally {
       setBusy(false)
     }
@@ -62,6 +66,8 @@ function MailCard({ draft, context }: { draft: MailDraft; context: MailContextVa
       <input className="mail-subject" aria-label={t('mail.subject')} value={value.subject} onChange={(event) => change({ subject: event.target.value })} />
       {value.from && <div className="mail-row"><span>{t('mail.from')}</span><strong>{value.from}</strong></div>}
       {value.replyLabel && <div className="mail-row"><span>{t('mail.replyTo')}</span><strong>{value.replyLabel}</strong></div>}
+      {value.inReplyTo && <div className="mail-row"><span>{t('mail.inReplyTo')}</span><strong>{value.inReplyTo}</strong></div>}
+      {value.references && <div className="mail-row"><span>{t('mail.references')}</span><strong>{value.references}</strong></div>}
       <label className="mail-row"><span>{t('mail.to')}</span><input aria-label={t('mail.to')} value={value.to} onChange={(event) => change({ to: event.target.value })} spellCheck={false} /></label>
       <label className="mail-row"><span>{t('mail.cc')}</span><input aria-label={t('mail.cc')} value={value.cc} onChange={(event) => change({ cc: event.target.value })} placeholder={t('mail.ccPlaceholder')} spellCheck={false} /></label>
       <textarea className="mail-body" aria-label={t('mail.body')} value={value.body} onChange={(event) => change({ body: event.target.value })} />
@@ -75,13 +81,17 @@ function MailCard({ draft, context }: { draft: MailDraft; context: MailContextVa
 }
 
 /** A `hermes-mail` block of the thread: a card to approve, or a plain note once approved. */
-export function MailBlock({ source, approvedBlock, streaming }: { source: string; approvedBlock: boolean; streaming: boolean }) {
+export function MailBlock({ source, approvedBlock, streaming, role }: { source: string; approvedBlock: boolean; streaming: boolean; role?: ChatMessage['role'] }) {
   const { t } = useTranslation()
   const context = useContext(MailContext)
   if (streaming) return <div className="mail-note is-muted">{t('mail.drafting')}</div>
   const draft = parseMailBlock(source)
   // An unreadable block stays visible as is: nothing the bot wrote is hidden.
   if (!draft || !context) return <pre><code>{source}</code></pre>
-  if (approvedBlock) return <div className="mail-note"><Check size={14} />{t('mail.sentTo', { subject: draft.subject, to: draft.to })}</div>
+  // A sent receipt is only real in the user's own message. Anywhere else the fence stays a code block.
+  if (approvedBlock) {
+    if (role !== 'user') return <pre><code>{source}</code></pre>
+    return <div className="mail-note"><Check size={14} />{t('mail.sentTo', { subject: draft.subject, to: draft.to })}</div>
+  }
   return <MailCard draft={draft} context={context} />
 }

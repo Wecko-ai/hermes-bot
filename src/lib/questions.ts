@@ -15,11 +15,11 @@ const CONTINUATION = /^\s{2,}(\S.*)$/
 /** The last "open questions" section of a reply, or null when there is none. */
 export function splitOpenQuestions(content: string): OpenQuestions | null {
   const lines = content.replace(/\r\n/g, '\n').split('\n')
-  let fence = false
+  const fence: Fence = { marker: '', length: 0 }
   let found: OpenQuestions | null = null
   for (let index = 0; index < lines.length; index += 1) {
-    if (/^\s{0,3}(```|~~~)/.test(lines[index])) fence = !fence
-    if (fence) continue
+    if (consumeFence(fence, lines[index]) || fence.marker) continue
+    if (isIndentedCode(lines[index])) continue
     const heading = HEADING.exec(lines[index])
     if (!heading) continue
     const questions: string[] = []
@@ -52,7 +52,36 @@ export function splitOpenQuestions(content: string): OpenQuestions | null {
 }
 
 const OTHER_BLOCK = /^\s{0,3}(?:#{1,6}\s|>|\||([-*_])(?:\s*\1){2,}\s*$)/
-const FENCE = /^\s{0,3}(```|~~~)/
+const INDENTED_CODE = /^(?: {4}|\t)/
+
+interface Fence { marker: string; length: number }
+
+/** A CommonMark fence: up to three spaces, then at least three backticks or tildes. */
+function readFence(line: string): { marker: string; length: number; info: string } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+  if (!match) return null
+  return { marker: match[2][0], length: match[2].length, info: match[3] }
+}
+
+/** Updates `fence` when `line` opens or closes one. A `~~~` line does not close a backtick fence. */
+function consumeFence(fence: Fence, line: string): boolean {
+  const found = readFence(line)
+  if (!found) return false
+  if (!fence.marker) {
+    fence.marker = found.marker
+    fence.length = found.length
+    return true
+  }
+  if (found.marker === fence.marker && found.length >= fence.length && !found.info.trim()) {
+    fence.marker = ''
+    fence.length = 0
+  }
+  return true
+}
+
+function isIndentedCode(line: string) {
+  return INDENTED_CODE.test(line)
+}
 
 /** Whether a line asks something: a question mark outside URLs and inline code. */
 const asks = (text: string) => /\?/.test(text.replace(/`[^`]*`/g, '').replace(/https?:\/\/\S+/g, ''))
@@ -87,12 +116,23 @@ export function splitLooseQuestions(content: string): OpenQuestions | null {
     if (run && run.items.length >= 2 && run.items.every(asks)) found = run
     run = null
   }
-  let fence = false
+  const fence: Fence = { marker: '', length: 0 }
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
-    if (FENCE.test(line)) { close(); fence = !fence; continue }
-    if (fence) continue
+    if (consumeFence(fence, line)) { close(); continue }
+    if (fence.marker) continue
     if (!line.trim()) continue
+    if (isIndentedCode(line)) {
+      const more = CONTINUATION.exec(line)
+      const current = run as Run | null
+      if (more && current?.mode === 'list' && current.items.length) {
+        current.items[current.items.length - 1] += ` ${more[1].trim()}`
+        current.end = index + 1
+        continue
+      }
+      close()
+      continue
+    }
     if (OTHER_BLOCK.test(line)) { close(); continue }
     const item = ITEM.exec(line)
     if (item) {
@@ -122,7 +162,7 @@ export function splitLooseQuestions(content: string): OpenQuestions | null {
   if (above >= 0 && !(fenceBefore(lines, above))) {
     const raw = lines[above].trim()
     const text = raw.replace(/^#{1,6}\s+/, '').replace(/\*\*|__/g, '').replace(/\s*:\s*$/, '').trim()
-    if (text && text.length <= 80 && !asks(raw) && !/[.…]$/.test(text) && !ITEM.test(lines[above]) && !OTHER_BLOCK.test(lines[above].replace(/^\s{0,3}#{1,6}\s/, 'x ')) && !FENCE.test(lines[above])) {
+    if (text && text.length <= 80 && !asks(raw) && !/[.…]$/.test(text) && !ITEM.test(lines[above]) && !OTHER_BLOCK.test(lines[above].replace(/^\s{0,3}#{1,6}\s/, 'x ')) && !readFence(lines[above]) && !isIndentedCode(lines[above])) {
       heading = text
       start = above
     }
@@ -137,9 +177,9 @@ export function splitLooseQuestions(content: string): OpenQuestions | null {
 
 /** Whether a line sits inside a code fence. */
 function fenceBefore(lines: string[], target: number): boolean {
-  let inside = false
-  for (let index = 0; index <= target; index += 1) if (FENCE.test(lines[index])) inside = !inside
-  return inside
+  const fence: Fence = { marker: '', length: 0 }
+  for (let index = 0; index <= target; index += 1) consumeFence(fence, lines[index])
+  return Boolean(fence.marker)
 }
 
 /** The card for a reply: the "open questions" section, else, when allowed, the looser rule. */

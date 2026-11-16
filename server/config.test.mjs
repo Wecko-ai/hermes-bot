@@ -86,6 +86,37 @@ describe('configuration locale', () => {
     expect(config.browserTurn).toEqual({ command: ['/tmp/fixture.cjs', 'statut'], user: '', remoteCommand: null })
   })
 
+  it('keeps a gateway or Ollama origin on this machine unless remote access is opted in', () => {
+    const remote = {
+      gatewayOrigin: 'https://example.invalid',
+      ollamaOrigin: 'http://203.0.113.5:11434',
+    }
+    const { root, home } = fixture({ userConfig: remote })
+    const blocked = loadConfig({ env: { HERMES_ORIGIN: 'http://203.0.113.5:9120' }, platform: 'darwin', home, root })
+    expect(blocked.gatewayOrigin).toBe('http://127.0.0.1:9120')
+    expect(blocked.ollamaOrigin).toBe('http://127.0.0.1:11434')
+
+    const loopbackFixture = fixture({ userConfig: { gatewayOrigin: 'http://[::1]:9120', ollamaOrigin: 'http://localhost:11434', browserOrigin: 'https://example.invalid' } })
+    const loopback = loadConfig({ env: {}, platform: 'darwin', home: loopbackFixture.home, root: loopbackFixture.root })
+    expect(loopback.gatewayOrigin).toBe('http://[::1]:9120')
+    expect(loopback.ollamaOrigin).toBe('http://localhost:11434')
+    expect(loopback.browserOrigin).toBe('https://example.invalid')
+
+    const allowedFixture = fixture({ userConfig: { allowRemoteGateway: true } })
+    const allowed = loadConfig({
+      env: { HERMES_ORIGIN: 'http://203.0.113.5:9120', OLLAMA_ORIGIN: 'https://ollama.example' },
+      platform: 'darwin',
+      home: allowedFixture.home,
+      root: allowedFixture.root,
+    })
+    expect(allowed.gatewayOrigin).toBe('http://203.0.113.5:9120')
+    expect(allowed.ollamaOrigin).toBe('https://ollama.example')
+
+    const notABooleanFixture = fixture({ userConfig: { allowRemoteGateway: 'true', gatewayOrigin: 'http://203.0.113.5:9120' } })
+    const notABoolean = loadConfig({ env: {}, platform: 'darwin', home: notABooleanFixture.home, root: notABooleanFixture.root })
+    expect(notABoolean.gatewayOrigin).toBe('http://127.0.0.1:9120')
+  })
+
   it('range les données selon le système', () => {
     expect(dataDirectory({}, 'darwin', '/h')).toBe('/h/Library/Application Support/HermesBot')
     expect(dataDirectory({}, 'linux', '/h')).toBe('/h/.config/HermesBot')

@@ -32,10 +32,20 @@ def parse_approved(text: str) -> tuple[dict[str, str], str]:
     return headers, body.rstrip()
 
 
+# Same canonical form as mailDigest in the app: these fields, then the body.
+DIGEST_FIELDS = ("from", "draft-id", "to", "cc", "subject", "in-reply-to", "references")
+THREAD_HEADERS = ("In-Reply-To", "References")
+
+
 def digest(headers: dict[str, str], body: str) -> str:
-    fields = [headers.get(name, "") for name in ("from", "draft-id", "to", "cc", "subject")]
+    fields = [headers.get(name, "") for name in DIGEST_FIELDS]
     canonical = "\n".join([*fields, body])
     return hashlib.sha256(unicodedata.normalize("NFC", canonical).encode("utf-8")).hexdigest()
+
+
+def header_text(message: EmailMessage, name: str) -> str:
+    values = message.get_all(name, [])
+    return " ".join(str(value).strip() for value in values if str(value).strip()).strip()
 
 
 def main() -> None:
@@ -63,8 +73,9 @@ def main() -> None:
     if headers.get("draft-id") and not args.draft:
         fail("this mail carries a Draft-Id: --draft is required")
 
-    # Allowlist: only the displayed and approved fields go out, plus the thread headers.
-    # A Bcc, Reply-To or Resent-* slipped into the draft therefore never gets through.
+    # Allowlist: only the displayed and approved fields go out. Thread headers come from
+    # the approved block. The draft is read to check the sender and that its thread headers
+    # still match. A Bcc, Reply-To or Resent-* slipped into the draft never gets through.
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = sender
     message["To"] = headers["to"]
@@ -73,13 +84,17 @@ def main() -> None:
     message["Subject"] = headers.get("subject", "")
     message["Date"] = formatdate(usegmt=True)
     message["Message-ID"] = make_msgid(domain=address.rpartition("@")[2])
+    draft = None
     if args.draft:
         draft = BytesParser(policy=policy.SMTP).parsebytes(args.draft.read_bytes())
         if parseaddr(str(draft["From"] or ""))[1].lower() != address.lower():
             fail("the draft does not come from the approved sender")
-        for name in ("In-Reply-To", "References"):
-            if draft[name]:
-                message[name] = str(draft[name])
+    for name in THREAD_HEADERS:
+        approved = headers.get(name.lower(), "").strip()
+        if draft is not None and header_text(draft, name) != approved:
+            fail(f"the draft {name} does not match the approved mail")
+        if approved:
+            message[name] = approved
     message.set_content(body + "\n", charset="utf-8")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

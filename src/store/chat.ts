@@ -14,13 +14,60 @@ export function latestMessageTime(messages: ChatMessage[]) {
   return messages.reduce((latest, message) => Math.max(latest, message.createdAt ? Date.parse(message.createdAt) : 0), 0)
 }
 
+/** Cached and open transcripts keep this tail. The server remains the full history. */
+export const CHAT_CACHE_LIMIT = 500
+
+export function trimCachedMessages(messages: ChatMessage[]) {
+  return messages.length > CHAT_CACHE_LIMIT ? messages.slice(-CHAT_CACHE_LIMIT) : messages
+}
+
+function normalizedText(text: string) {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function rowsMatch(cached: ChatMessage, server: ChatMessage) {
+  if (cached.id && server.id && cached.id === server.id) return true
+  return cached.role === server.role && normalizedText(cached.content) === normalizedText(server.content)
+}
+
 /**
- * Messages to keep after a server re-read: never a server copy older than the cache.
- * `preserveLive`: a turn is being followed live, the cache wins whatever the server says.
+ * Messages to keep after a server re-read.
+ * The server transcript comes first, so tool rows and steps are never dropped.
+ * A cached row matches a server row by id when both have one, otherwise by role
+ * and normalized text. Cached rows with no match that sit after the last matched
+ * cached row are appended: they are the live tail not persisted yet.
+ * Clocks are not compared. `preserveLive` keeps the cached object for a row that
+ * shares an id, so a turn on screen is not swapped for a different server body.
  */
 export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server: ChatMessage[], preserveLive: boolean) {
-  const newerCache = Boolean(cached) && latestMessageTime(cached!.messages) > latestMessageTime(server)
-  return (preserveLive || newerCache) && cached ? cached.messages : server
+  if (!cached) return server
+  const cacheRows = cached.messages
+  const used = new Set<number>()
+  const matchAt = cacheRows.map((row) => {
+    const serverIndex = server.findIndex((candidate, index) => !used.has(index) && rowsMatch(row, candidate))
+    if (serverIndex >= 0) used.add(serverIndex)
+    return serverIndex
+  })
+  let lastMatched = -1
+  matchAt.forEach((serverIndex, index) => {
+    if (serverIndex >= 0) lastMatched = index
+  })
+  const keepCacheBody = new Map<number, ChatMessage>()
+  cacheRows.forEach((row, index) => {
+    const serverIndex = matchAt[index]
+    if (serverIndex < 0) return
+    const serverRow = server[serverIndex]
+    const sameId = Boolean(row.id && serverRow.id === row.id)
+    const textDiffers = normalizedText(row.content) !== normalizedText(serverRow.content)
+    if (sameId && (textDiffers || preserveLive)) keepCacheBody.set(serverIndex, row)
+  })
+  const tail: ChatMessage[] = []
+  cacheRows.forEach((row, index) => {
+    if (index > lastMatched && matchAt[index] < 0) tail.push(row)
+  })
+  if (!tail.length && keepCacheBody.size === 0) return server
+  const merged = keepCacheBody.size === 0 ? server : server.map((row, index) => keepCacheBody.get(index) ?? row)
+  return tail.length ? [...merged, ...tail] : merged
 }
 
 /** Notes not yet in the list (by identifier). */
@@ -105,7 +152,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setActiveChat: (activeChat) => set({ activeChat }),
   setChatModel: (value) => set((state) => ({ chatModel: resolveUpdater(value, state.chatModel) })),
-  setMessages: (value) => set((state) => ({ messages: resolveUpdater(value, state.messages) })),
+  setMessages: (value) => set((state) => ({ messages: trimCachedMessages(resolveUpdater(value, state.messages)) })),
   setRoutines: (routines) => set({ routines }),
   setRoutinesLoading: (routinesLoading) => set({ routinesLoading }),
   setChatLoading: (chatLoading) => set({ chatLoading }),
@@ -116,7 +163,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   setUsage: (value) => set((state) => ({ usage: resolveUpdater(value, state.usage) })),
 
   getCached: (profile) => get().cache.get(profile),
-  setCached: (profile, entry) => { get().cache.set(profile, entry) },
+  setCached: (profile, entry) => {
+    const messages = trimCachedMessages(entry.messages)
+    get().cache.set(profile, messages === entry.messages ? entry : { ...entry, messages })
+  },
   updateCachedChat: (profile, changes) => {
     const { cache } = get()
     const cached = cache.get(profile)
@@ -125,12 +175,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   appendCachedMessage: (profile, message) => {
     const { cache } = get()
     const cached = cache.get(profile)
-    if (cached) cache.set(profile, { ...cached, messages: [...cached.messages, message] })
+    if (cached) cache.set(profile, { ...cached, messages: trimCachedMessages([...cached.messages, message]) })
   },
   appendCachedNotes: (profile, notes) => {
     const { cache } = get()
     const cached = cache.get(profile)
-    if (cached) cache.set(profile, { ...cached, messages: [...cached.messages, ...freshNotes(cached.messages, notes)] })
+    if (cached) cache.set(profile, { ...cached, messages: trimCachedMessages([...cached.messages, ...freshNotes(cached.messages, notes)]) })
   },
   markCachedFailed: (profile, messageId) => {
     const { cache } = get()
@@ -189,12 +239,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   },
   applySyncedChat: (profile, synced, { preserveLive, resumed }) => {
-    get().cache.set(profile, synced)
+    const messages = trimCachedMessages(synced.messages)
+    const stored = messages === synced.messages ? synced : { ...synced, messages }
+    get().cache.set(profile, stored)
     set({
       activeChat: synced.chat,
       chatModel: synced.chat.model || '',
       running: synced.chat.running,
-      ...(preserveLive ? {} : { messages: synced.messages }),
+      ...(preserveLive ? {} : { messages }),
       ...(!synced.chat.running && resumed ? { streaming: '', streamKey: '', activity: '' } : {}),
     })
   },

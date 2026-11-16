@@ -13,6 +13,28 @@ const TARGET_ID = /^[A-Za-z0-9_-]{1,128}$/
 // Accounts created without a card, kept for the app's notice: the last 20, for one day at most.
 const NOTICE_LIMIT = 20
 const NOTICE_TTL = 24 * 60 * 60 * 1000
+const MAX_SIGNUPS_PER_HOUR = 5
+const SIGNUP_WINDOW_MS = 60 * 60 * 1000
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
+/** Loopback origin for the Hermes session check, or null. Anything else fails closed. */
+export function loopbackOrigin(value) {
+  try {
+    const url = new URL(String(value || ''))
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null
+    if (!LOOPBACK_HOSTS.has(url.hostname)) return null
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
+function sameBotUnconfirmed(existing, bot) {
+  return existing?.unconfirmed === true
+    && Array.isArray(existing.bots)
+    && existing.bots.length === 1
+    && existing.bots[0] === bot
+}
 
 function sendJson(response, status, body) {
   const data = JSON.stringify(body)
@@ -117,6 +139,20 @@ export function createBrowserVault(options = {}) {
     return value
   }
 
+  // Account creations per bot, so a loop cannot write the keychain without bound.
+  const signupTimes = new Map()
+  function recentSignups(bot) {
+    const now = Date.now()
+    const recent = (signupTimes.get(bot) || []).filter((at) => now - at < SIGNUP_WINDOW_MS)
+    signupTimes.set(bot, recent)
+    return recent
+  }
+  function takeSignupSlot(bot) {
+    const recent = recentSignups(bot)
+    if (recent.length >= MAX_SIGNUPS_PER_HOUR) throw new BrowserVaultError('too_many_signups', 429)
+    recent.push(Date.now())
+  }
+
   async function command(action, body) {
     const bot = validateBot(body.bot)
     if (action === 'list') {
@@ -133,8 +169,7 @@ export function createBrowserVault(options = {}) {
     // `save` only: the page's "Continue with Google" (Apple, Microsoft), a hint for the card. Never blocks.
     let sso = null
     try {
-      // A scheduled task (the CLI sees Hermes's `HERMES_CRON_SESSION`): nobody is there to approve or
-      // to be told, with or without the user's setting. Declarative, like the bot name.
+      // The CLI refuses cron locally. Here the server only honors the client-supplied flag.
       if (action === 'signup' && body.unattended === true) throw new BrowserVaultError('unattended_session', 403)
       if ((action === 'save' || action === 'signup') && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
       if (action === 'save') ({ origin, sso } = await cdpFor(bot).inspectLogin(targetId))
@@ -151,15 +186,17 @@ export function createBrowserVault(options = {}) {
       }
 
       if (action === 'signup') {
-        // One credential per site in the keychain: a new account must never replace a stored one.
-        if (await store.find(origin)) throw new BrowserVaultError('entry_exists', 409)
+        // One credential per site. The same bot may replace an item that was stored but not typed.
+        const existing = await store.find(origin)
+        if (existing && !sameBotUnconfirmed(existing, bot)) throw new BrowserVaultError('entry_exists', 409)
+        if (recentSignups(bot).length >= MAX_SIGNUPS_PER_HOUR) throw new BrowserVaultError('too_many_signups', 429)
         if (settings.get().autoSignup === true) {
           // "Create accounts without asking" (Settings, Vault): the same steps as an accepted card,
           // without the card. Only sign-ups: `save` and `code` always wait for the user.
           audit(action, bot, origin, 'auto_approved', identifier)
           const result = await acceptSignup({ bot, origin, targetId, identifier })
           audit('signed_up', bot, origin, result.status, identifier)
-          addNotice(bot, origin, identifier)
+          if (result.status === 'filled') addNotice(bot, origin, identifier)
           return result
         }
         const result = await requests.create({ kind: 'signup', bot, origin, targetId, identifier }, saveTimeout)
@@ -168,7 +205,14 @@ export function createBrowserVault(options = {}) {
       }
 
       const kind = action === 'save' ? 'save' : 'code'
-      const result = await requests.create({ kind, bot, origin, targetId, ...(sso ? { sso } : {}) }, kind === 'save' ? saveTimeout : codeTimeout)
+      let replaces
+      if (kind === 'save') {
+        const existing = await store.find(origin)
+        if (existing && typeof existing.identifier === 'string' && existing.identifier) {
+          replaces = { identifier: existing.identifier, bots: Array.isArray(existing.bots) ? [...existing.bots] : [] }
+        }
+      }
+      const result = await requests.create({ kind, bot, origin, targetId, ...(sso ? { sso } : {}), ...(replaces ? { replaces } : {}) }, kind === 'save' ? saveTimeout : codeTimeout)
       audit(action, bot, origin, result.status)
       return result
     } catch (error) {
@@ -202,10 +246,14 @@ export function createBrowserVault(options = {}) {
   }
 
   async function signupNow(request) {
+    const existing = await store.find(request.origin)
+    if (existing && !sameBotUnconfirmed(existing, request.bot)) throw new BrowserVaultError('entry_exists', 409)
+    takeSignupSlot(request.bot)
     const password = generatePassword()
     let saved = false
     const saveFirst = async () => {
-      if (await store.find(request.origin)) throw new BrowserVaultError('entry_exists', 409)
+      const current = await store.find(request.origin)
+      if (current && !sameBotUnconfirmed(current, request.bot)) throw new BrowserVaultError('entry_exists', 409)
       await store.save(request.origin, request.identifier, password, [request.bot])
       saved = true
     }
@@ -214,7 +262,10 @@ export function createBrowserVault(options = {}) {
       return { status: 'filled', origin: request.origin, saved: true, fields }
     } catch (error) {
       if (!saved) throw error
-      // Stored but not typed: the bot can run `fill` once the form is back.
+      // Stored but not typed: the same bot's next signup may replace this item. The bot can also `fill`.
+      try {
+        await store.save(request.origin, request.identifier, password, [request.bot], { unconfirmed: true })
+      } catch { /* the item stays; a later signup then reports entry_exists */ }
       return { status: 'saved', origin: request.origin, saved: true, filled: false, error: vaultError(error).code }
     }
   }
@@ -272,9 +323,21 @@ export function createBrowserVault(options = {}) {
   async function admin(method, pathname, request) {
     const given = Buffer.from(String(request.headers.authorization || ''))
     if (given.length !== adminToken.length || !timingSafeEqual(given, adminToken)) throw new BrowserVaultError('admin_forbidden', 403)
-    if (method === 'GET' && pathname === '/admin/v1/requests') return { requests: requests.snapshot(), notices: currentNotices() }
-    if (method === 'GET' && pathname === '/admin/v1/entries') return { entries: await store.list() }
-    if (method === 'GET' && pathname === '/admin/v1/settings') return { settings: settings.get() }
+    // GETs are bearer-only. They never read or check the Hermes cookie.
+    if (method === 'GET') {
+      if (pathname === '/admin/v1/requests') return { requests: requests.snapshot(), notices: currentNotices() }
+      if (pathname === '/admin/v1/entries') return { entries: await store.list() }
+      if (pathname === '/admin/v1/settings') return { settings: settings.get() }
+      throw new BrowserVaultError('invalid_request', 400)
+    }
+    // Clears the session-validation cache. Bearer only: no Hermes cookie. The app calls this on logout.
+    if (method === 'POST' && pathname === '/admin/v1/logout') {
+      verified.clear()
+      try {
+        for await (const chunk of request) { void chunk }
+      } catch { /* the cache is already clear */ }
+      return { ok: true }
+    }
     if (method !== 'POST' || request.headers['content-type'] !== 'application/json') throw new BrowserVaultError('invalid_request', 400)
     await requireUser(request)
     const body = await readJson(request)

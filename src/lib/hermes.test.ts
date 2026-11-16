@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesRpcError, isGatewayMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, type ActiveChat, type HermesClient } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
 import { BOT_KICKOFF_TEXT } from './bot-kickoff'
 
 const chat: ActiveChat = {
@@ -400,5 +400,110 @@ describe('vérification de la route avant un changement de modèle', () => {
 
     expect(request).toHaveBeenCalledTimes(2)
     expect(issues).toEqual({ openrouter: 'No key.' })
+  })
+})
+
+describe('silence markers', () => {
+  it('follows the gateway: case, edge punctuation, collapsed space, and a trailing line', () => {
+    for (const marker of ['NO_REPLY', 'NO REPLY', 'NOREPLY', '[SILENT]', '[silent]', '*NO_REPLY*', '  no   reply  ']) {
+      expect(isSilentMessage(marker)).toBe(true)
+    }
+    expect(isSilentMessage('Keep NO_REPLY in the sentence.')).toBe(false)
+    expect(withoutSilentMarkers('Done\n\nNO_REPLY')).toBe('Done')
+    expect(withoutSilentMarkers('Still here\n\n[silent]')).toBe('Still here')
+    expect(withoutSilentMarkers('Still here\n\n*NO_REPLY*')).toBe('Still here')
+    expect(withoutSilentMarkers('NO REPLY')).toBe('NO REPLY')
+  })
+
+  it('drops a trailing marker from a resumed transcript and keeps a bare marker technical', async () => {
+    const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, messages: [
+      { row_id: 1, role: 'assistant', content: 'Done\n\nNO_REPLY', timestamp: 1_000 },
+      { row_id: 2, role: 'assistant', content: 'NO REPLY', timestamp: 2_000 },
+      { row_id: 3, role: 'assistant', content: '*NO_REPLY*', timestamp: 3_000 },
+      { row_id: 4, role: 'assistant', content: 'Still here\n\n[silent]', timestamp: 4_000 },
+    ] } : {})
+    const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'orion', 'chat-orion')
+    expect(messages.map((message) => [message.content, Boolean(message.technical)])).toEqual([
+      ['Done', false],
+      ['NO REPLY', true],
+      ['*NO_REPLY*', true],
+      ['Still here', false],
+    ])
+  })
+})
+
+describe('server requests are not answered for other clients', () => {
+  class FakeSocket {
+    static CONNECTING = 0
+    static OPEN = 1
+    static CLOSING = 2
+    static CLOSED = 3
+    readyState = FakeSocket.OPEN
+    sent: string[] = []
+    onmessage: ((event: { data: string }) => void) | null = null
+    onerror: (() => void) | null = null
+    onclose: (() => void) | null = null
+    constructor(public url: string, public protocols?: string) { latest = this }
+    send(data: string) { this.sent.push(String(data)) }
+    close() { this.readyState = FakeSocket.CLOSED; this.onclose?.() }
+  }
+  let latest: FakeSocket
+  let client: HermesClient
+
+  beforeEach(() => {
+    latest = undefined as unknown as FakeSocket
+    vi.stubGlobal('WebSocket', FakeSocket)
+    vi.stubGlobal('location', { protocol: 'http:', host: '127.0.0.1:4330' })
+    client = new HermesClient()
+  })
+  afterEach(() => {
+    client.close()
+    vi.unstubAllGlobals()
+  })
+
+  async function ready() {
+    const connecting = client.connect()
+    latest.onmessage?.({ data: JSON.stringify({ method: 'event', params: { type: 'gateway.ready' } }) })
+    await connecting
+    return latest
+  }
+
+  it('registers client.capabilities and sends no frame for an unknown or window-owned method', async () => {
+    const socket = await ready()
+    const announced = JSON.parse(socket.sent[0])
+    expect(announced).toMatchObject({ method: 'client.capabilities', params: { server_requests: true } })
+    const pending = (client as unknown as { pending: Map<string, unknown> }).pending
+    expect(pending.has(announced.id)).toBe(true)
+    socket.onmessage?.({ data: JSON.stringify({ id: announced.id, result: { declines_not_shown: true } }) })
+    expect(pending.has(announced.id)).toBe(false)
+
+    const seen: ServerRequest[] = []
+    client.onServerRequest((request) => seen.push(request))
+    client.receiveServerRequest({ id: 'sudo-1', method: 'sudo', params: {} })
+    client.receiveServerRequest({ id: 'win-1', method: 'preview.read', params: {} })
+    client.receiveServerRequest({ id: 'ok-1', method: 'approval', params: { command: 'ls' } })
+    expect(seen.map((request) => request.method)).toEqual(['approval'])
+    expect(socket.sent).toHaveLength(1)
+    expect(socket.sent.some((frame) => JSON.parse(frame).error)).toBe(false)
+  })
+
+  it('open requests for unknown and window-owned methods produce no outbound frame', async () => {
+    const socket = await ready()
+    const seen: string[] = []
+    client.onServerRequest((request) => seen.push(request.method))
+    client.request = (async (method: string) => method === 'session.resume' ? {
+      revision: 1,
+      messages: [],
+      open_requests: [
+        { id: 'sudo-1', method: 'sudo', params: {} },
+        { id: 'win-1', method: 'window.read', params: {} },
+        { id: 'ok-1', method: 'approval', params: {} },
+      ],
+    } : {}) as HermesClient['request']
+    const before = socket.sent.length
+    await openChat(client, 'orion', 'chat-orion')
+    expect(socket.sent).toHaveLength(before)
+    expect(seen).toEqual(['approval'])
+    expect(socket.sent.some((frame) => JSON.parse(frame).error || JSON.parse(frame).id === 'sudo-1' || JSON.parse(frame).id === 'win-1')).toBe(false)
   })
 })

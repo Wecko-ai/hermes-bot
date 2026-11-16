@@ -38,6 +38,39 @@ describe('questions ouvertes', () => {
     expect(splitOpenQuestions('J’ai des questions ouvertes sur ce point.\n1. a')).toBeNull()
   })
 
+  it('keeps questions inside a backtick fence when a tilde line does not close it', () => {
+    const mixed = [
+      'See this:',
+      '```',
+      '~~~',
+      '## Questions',
+      '1. Inside the fence?',
+      '2. Still inside?',
+      '```',
+      'After the fence.',
+    ].join('\n')
+    expect(splitOpenQuestions(mixed)).toBeNull()
+    expect(splitLooseQuestions(mixed)).toBeNull()
+    const after = [
+      '```',
+      '~~~',
+      '1. Not a form?',
+      '2. Neither?',
+      '```',
+      '## Questions',
+      '1. Real one?',
+      '2. Real two?',
+    ].join('\n')
+    expect(splitOpenQuestions(after)?.questions).toEqual(['Real one?', 'Real two?'])
+  })
+
+  it('skips indented code in both rules', () => {
+    expect(splitOpenQuestions('    ## Questions\n    1. A\n    2. B')).toBeNull()
+    expect(splitLooseQuestions('    1. A ?\n    2. B ?')).toBeNull()
+    expect(splitLooseQuestions('\tIs this a question?\n\tAnd this one?')).toBeNull()
+    expect(splitLooseQuestions('1. Première\n    suite ?\n2. Seconde ?')?.questions).toEqual(['Première suite ?', 'Seconde ?'])
+  })
+
   it('compose la réponse avec les seules questions remplies', () => {
     const text = answersPrompt('Mes réponses :', ['Q1 ?', 'Q2 ?', 'Q3 ?'], ['Oui', ' ', 'Non\n\nMais plus tard'])
     expect(text).toBe('Mes réponses :\n\n1. Q1 ?\n   Oui\n\n3. Q3 ?\n   Non\n\n   Mais plus tard')

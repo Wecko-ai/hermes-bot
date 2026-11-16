@@ -9,6 +9,10 @@ export interface MailDraft {
   cc: string
   subject: string
   replyLabel: string
+  /** `In-Reply-To` of the message being answered. Part of the digest and of the approved block. */
+  inReplyTo: string
+  /** `References` of the thread. Part of the digest and of the approved block. */
+  references: string
   body: string
 }
 
@@ -17,6 +21,7 @@ export const MAIL_APPROVED_FENCE = 'hermes-mail-approved'
 
 const HEADERS = new Map<string, keyof MailDraft>([
   ['id', 'id'], ['draft-id', 'draftId'], ['from', 'from'], ['to', 'to'], ['cc', 'cc'], ['subject', 'subject'], ['reply-label', 'replyLabel'],
+  ['in-reply-to', 'inReplyTo'], ['references', 'references'],
 ])
 
 const oneLine = (value: string) => value.replace(/[\r\n]+/g, ' ').trim()
@@ -27,7 +32,7 @@ export function parseMailBlock(source: string): MailDraft | null {
   const text = source.replace(/\r\n/g, '\n').replace(/^\n+/, '').replace(/\n+$/, '')
   const split = text.indexOf('\n\n')
   const head = split < 0 ? text : text.slice(0, split)
-  const draft: MailDraft = { id: '', draftId: '', from: '', to: '', cc: '', subject: '', replyLabel: '', body: split < 0 ? '' : text.slice(split + 2) }
+  const draft: MailDraft = { id: '', draftId: '', from: '', to: '', cc: '', subject: '', replyLabel: '', inReplyTo: '', references: '', body: split < 0 ? '' : text.slice(split + 2) }
   for (const line of head.split('\n')) {
     const match = /^([A-Za-z-]+):[ \t]*(.*)$/.exec(line)
     const key = match && HEADERS.get(match[1].toLowerCase())
@@ -41,11 +46,40 @@ const addresses = (value: string) => value.split(',').map((item) => item.trim())
 export const validAddresses = (value: string) => addresses(value).every((item) => ADDRESS.test(item))
 export const canSendMail = (draft: MailDraft) => Boolean(draft.from) && addresses(draft.to).length > 0 && validAddresses(draft.to) && validAddresses(draft.cc) && Boolean(draft.body.trim())
 
+/** Model-facing sentence. Kept byte-identical in the prompt; stripped before the user bubble. */
+export const APPROVED_MAIL_INSTRUCTION = 'Mail approuvé : envoie-le une seule fois avec la skill mail-approval.'
+
+/** The user bubble hides the model instruction. Anything else is left as written. */
+export function withoutMailInstruction(content: string): string {
+  if (!content.startsWith(APPROVED_MAIL_INSTRUCTION)) return content
+  return content.slice(APPROVED_MAIL_INSTRUCTION.length).replace(/^\n+/, '')
+}
+
 /** Fingerprint of what the user approved: the sending script refuses a mail that no longer matches. */
 export async function mailDigest(draft: MailDraft) {
-  const canonical = [draft.from, draft.draftId, draft.to, draft.cc, draft.subject].map(oneLine).concat(normalizedBody(draft.body)).join('\n').normalize('NFC')
+  const canonical = [draft.from, draft.draftId, draft.to, draft.cc, draft.subject, draft.inReplyTo, draft.references].map(oneLine).concat(normalizedBody(draft.body)).join('\n').normalize('NFC')
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/** The approved block without its fences: what the skill writes, and what the script checks. */
+export async function approvedMailDocument(draft: MailDraft): Promise<string> {
+  const thread = [
+    ...(oneLine(draft.inReplyTo) ? [`In-Reply-To: ${oneLine(draft.inReplyTo)}`] : []),
+    ...(oneLine(draft.references) ? [`References: ${oneLine(draft.references)}`] : []),
+  ]
+  return [
+    `Id: ${oneLine(draft.id)}`,
+    ...(draft.draftId ? [`Draft-Id: ${oneLine(draft.draftId)}`] : []),
+    `From: ${oneLine(draft.from)}`,
+    `To: ${oneLine(draft.to)}`,
+    `Cc: ${oneLine(draft.cc)}`,
+    `Subject: ${oneLine(draft.subject)}`,
+    ...thread,
+    `Approved-Digest: ${await mailDigest(draft)}`,
+    '',
+    normalizedBody(draft.body),
+  ].join('\n')
 }
 
 /** The message sent to the bot when a draft is approved. */
@@ -54,18 +88,10 @@ export async function approvedMailPrompt(draft: MailDraft) {
   const longestRun = Math.max(3, ...[...body.matchAll(/`+/g)].map((match) => match[0].length))
   const fence = '`'.repeat(longestRun + 1)
   return [
-    'Mail approuvé : envoie-le une seule fois avec la skill mail-approval.',
+    APPROVED_MAIL_INSTRUCTION,
     '',
     `${fence}${MAIL_APPROVED_FENCE}`,
-    `Id: ${oneLine(draft.id)}`,
-    ...(draft.draftId ? [`Draft-Id: ${oneLine(draft.draftId)}`] : []),
-    `From: ${oneLine(draft.from)}`,
-    `To: ${oneLine(draft.to)}`,
-    `Cc: ${oneLine(draft.cc)}`,
-    `Subject: ${oneLine(draft.subject)}`,
-    `Approved-Digest: ${await mailDigest(draft)}`,
-    '',
-    body,
+    await approvedMailDocument(draft),
     fence,
   ].join('\n')
 }

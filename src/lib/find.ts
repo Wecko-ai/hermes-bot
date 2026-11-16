@@ -28,11 +28,27 @@ export function findMatches(text: string, query: string): Array<[number, number]
   return found
 }
 
-/** Ranges of every match in the visible text of the messages under `root`, in reading order. */
+/** Stable signature of finished messages. A streaming bubble is left out, so a token does not change it. */
+export function completedMessageStamp(messages: ReadonlyArray<{ id: string; content: string; streaming?: boolean }>): string {
+  let stamp = ''
+  for (const message of messages) {
+    if (message.streaming) continue
+    stamp += `${message.id}\u0000${message.content}\u0001`
+  }
+  return stamp
+}
+
+/** A streaming bubble is unfinished: search walks completed messages only. */
+export function isFinishedMessageContent(content: { closest: (selector: string) => unknown }): boolean {
+  return !content.closest('.is-streaming')
+}
+
+/** Ranges of every match in the visible text of the finished messages under `root`, in reading order. */
 export function findRanges(root: HTMLElement, query: string): Range[] {
   if (!query.trim()) return []
   const ranges: Range[] = []
   for (const content of root.querySelectorAll('.message-content')) {
+    if (!isFinishedMessageContent(content)) continue
     const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => (node.parentElement?.closest('textarea, script, style, [hidden], .visually-hidden') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
     })

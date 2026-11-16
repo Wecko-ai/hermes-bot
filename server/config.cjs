@@ -44,6 +44,23 @@ function origin(value) {
   }
 }
 
+/** This desktop build talks to a gateway and to Ollama on this machine. A remote origin needs an explicit opt-in. */
+function isLoopbackOrigin(value) {
+  try {
+    // Node reports an IPv6 hostname with the brackets (`[::1]`).
+    const host = new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+function pinnedOrigin(value, allowRemote) {
+  const candidate = origin(value)
+  if (!candidate) return ''
+  return allowRemote || isLoopbackOrigin(candidate) ? candidate : ''
+}
+
 /** A command is an argument list, never a shell string: nothing is interpreted. */
 function command(value) {
   const argv = strings(value, 32)
@@ -74,7 +91,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
   const localChat = raw.localChat && typeof raw.localChat === 'object' ? raw.localChat : {}
   const browserTurn = raw.browserTurn && typeof raw.browserTurn === 'object' ? raw.browserTurn : {}
 
-  const gatewayOrigin = origin(env.HERMES_ORIGIN) || origin(raw.gatewayOrigin) || 'http://127.0.0.1:9120'
+  const allowRemoteGateway = raw.allowRemoteGateway === true
+  const gatewayOrigin = pinnedOrigin(env.HERMES_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.gatewayOrigin, allowRemoteGateway) || 'http://127.0.0.1:9120'
   const sshHost = text(env.HERMES_SSH_HOST) || text(raw.sshHost)
   const defaultAnimations = path.join(privateDir, 'animations')
 
@@ -88,7 +106,7 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',
-    ollamaOrigin: origin(env.OLLAMA_ORIGIN) || origin(raw.ollamaOrigin) || 'http://127.0.0.1:11434',
+    ollamaOrigin: pinnedOrigin(env.OLLAMA_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.ollamaOrigin, allowRemoteGateway) || 'http://127.0.0.1:11434',
     localChat: {
       model: text(env.HERMESBOT_LOCAL_MODEL) || text(localChat.model),
       name: text(localChat.name, 64),

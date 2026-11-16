@@ -11,5 +11,5 @@ let package = Package(
         .executableTarget(name: "hermesbot-dictation", dependencies: ["DictationCore"]),
         .testTarget(name: "DictationCoreTests", dependencies: ["DictationCore"]),
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

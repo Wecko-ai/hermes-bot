@@ -27,6 +27,8 @@ To: <recipients, separated by commas>
 Cc: <copy, or empty>
 Subject: <subject>
 Reply-Label: <message you are replying to, in a few words, or empty>
+In-Reply-To: <message id you are replying to, or empty>
+References: <thread ids, or empty>
 
 <body of the mail, in plain text>
 ````
@@ -51,6 +53,8 @@ In this order, only once:
    ```
 
    If the script fails, **stop**. Send nothing and tell the user what the script answered.
+
+   The script copies `In-Reply-To` and `References` from the approved block. It does not copy them from the draft file. It still reads the draft, when you pass `--draft`, to check that `From` is the approved sender, and it refuses when the draft's `In-Reply-To` or `References` differ from the approved ones. Those two headers are part of `Approved-Digest`, together with From, Draft-Id, To, Cc, Subject and the body.
 4. `himalaya message send --no-save < $HERMES_HOME/workspace/mail-drafts/sent-<Id>.eml`, only once. Never retry, even if the command fails: a new attempt may send the mail twice. Report the error.
 5. `himalaya message add -m sent < $HERMES_HOME/workspace/mail-drafts/sent-<Id>.eml`
 6. If there is a `Draft-Id`: `himalaya message move --from drafts --to trash <Draft-Id>`

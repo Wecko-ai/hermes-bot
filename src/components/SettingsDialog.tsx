@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { focusableElements, tabTrapIndex } from '../lib/a11y-focus'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Cpu, KeyRound, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
 import { version } from '../../package.json'
@@ -286,7 +287,25 @@ export function SettingsDialog(props: SettingsDialogProps) {
   const { t } = useTranslation()
   const { tab, onSelectTab, onClose } = props
   const dialogRef = useRef<HTMLDivElement>(null)
-  useEffect(() => dialogRef.current?.focus(), [])
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement && document.activeElement !== dialogRef.current ? document.activeElement : null
+    dialogRef.current?.focus()
+    return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }) }
+  }, [])
+  const onDialogKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab' || !dialogRef.current) return
+    const focusable = focusableElements(dialogRef.current)
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const next = tabTrapIndex(focusable.length, active ? focusable.indexOf(active) : -1, event.shiftKey)
+    if (next === null) return
+    event.preventDefault()
+    focusable[next]?.focus()
+  }
   const title = t(`settings.tabs.${tab}`)
   return (
     <div className="settings-backdrop" onMouseDown={onClose}>
@@ -298,7 +317,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
         aria-label={t('settings.title')}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
-        onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}
+        onKeyDown={onDialogKey}
       >
         <nav className="settings-nav" aria-label={t('settings.sections')}>
           <h2>{t('settings.title')}</h2>

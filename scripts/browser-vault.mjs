@@ -9,13 +9,23 @@ const bot = option('--bot') ?? process.env.HERMES_BOT_PROFILE
 const target = option('--target') ?? process.env.HERMES_BROWSER_TARGET
 // Sign-up only: the login being registered (an e-mail, a username). Never a password.
 const identifier = option('--identifier')
-// Hermes marks the commands of a scheduled task: the vault then refuses to create an account.
+// Hermes marks a scheduled task. save, code and signup are refused here, before any request.
 const unattended = /^(1|true|yes|on)$/i.test(String(process.env.HERMES_CRON_SESSION || '').trim())
 const port = Number(process.env.HERMESBOT_VAULT_PORT || 4331)
 
 if (!['list', 'fill', 'save', 'code', 'signup'].includes(command) || !bot || (command !== 'list' && !target) || (command === 'signup' && !identifier)) {
   console.error('Usage: node scripts/browser-vault.mjs <list|fill|save|code|signup> --bot <profil> [--target <targetId CDP>] [--identifier <login> (signup)]')
   process.exit(2)
+}
+
+// A scheduled task never asks the user. Refuse before any request. The server only honors a client-supplied flag.
+if (unattended && (command === 'save' || command === 'code' || command === 'signup')) {
+  // Same JSON shape as every other error of this CLI: bots parse it.
+  console.error(JSON.stringify({
+    error: 'unattended_session',
+    message: `A scheduled task never asks the user: ${command} is refused while HERMES_CRON_SESSION is set, before any request.`,
+  }))
+  process.exit(1)
 }
 
 try {

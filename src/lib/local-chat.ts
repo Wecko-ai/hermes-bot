@@ -5,6 +5,7 @@
  */
 import type { Bot } from '../types'
 import { i18n } from '../i18n'
+import { isSilentMessage, withoutSilentMarkers } from './hermes'
 
 // The colon makes the profile invalid for /api/media: a `MEDIA:` invented by the model reads no file.
 export const LOCAL_CHAT_SLUG = 'local:ollama'
@@ -185,7 +186,9 @@ export function readLocalChatFrames(buffer: string) {
 
 /** `<think>` reasoning is not the answer, even when the model’s template leaves it in the text. */
 export function visibleAnswer(text: string) {
-  return text.replace(/<think>[\s\S]*?(?:<\/think>\s*|$)/g, '').trimStart()
+  const stripped = text.replace(/<think>[\s\S]*?(?:<\/think>\s*|$)/g, '').trimStart()
+  if (!stripped || isSilentMessage(stripped)) return ''
+  return withoutSilentMarkers(stripped)
 }
 
 const failureMessage = (status: number) =>

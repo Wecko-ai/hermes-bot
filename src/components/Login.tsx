@@ -52,12 +52,12 @@ export function Login({ onLogin, onLocalSignIn, error }: {
     <main className="login-page">
       <section className="login-card">
         <Logo />
-        <p className="login-eyebrow">HERMESBOT</p>
+        <p className="login-eyebrow">{t('login.brand')}</p>
         <h1>{t('login.title')}</h1>
         <p className="login-intro">{t('login.intro')}</p>
         {local && (
           <div className="login-local">
-            <p className="login-intro">{local === 'ready' ? t('login.localHelp') : t('login.localBlocked', { reason: local })}</p>
+            <p className="login-intro">{local === 'ready' ? t('login.localHelp') : t('login.localBlocked', { reason: t(`login.localReasons.${local}`) })}</p>
             {error && <p className="login-error" role="alert">{error}</p>}
             <button className="login-submit" type="button" disabled={busy} onClick={retryLocal}>{busy ? t('login.signingIn') : t('login.localRetry')}{!busy && <ArrowRight size={17} />}</button>
           </div>

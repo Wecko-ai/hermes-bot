@@ -58,6 +58,13 @@ function readAgentProgress(profile: string, statusFile: string): Promise<string[
   return request
 }
 
+/** A hidden window does not poll. Coming back fetches once; the interval runs only while the page is shown and the child is active. */
+export function agentProgressPolling(hidden: boolean, active: boolean) {
+  return { fetch: !hidden, timer: !hidden && active }
+}
+
+const pageHidden = () => typeof document !== 'undefined' && document.hidden
+
 /** Reads only a visible current step or an opened card, through the local document route. */
 export function useAgentProgress(entry: SubagentEntry, profile: string, open = false): string[] {
   const statusFile = entry.run?.statusFile
@@ -68,12 +75,32 @@ export function useAgentProgress(entry: SubagentEntry, profile: string, open = f
     setProgress([])
     if (!statusFile || !readable || (!active && !open)) return
     let cancelled = false
-    const load = () => { readAgentProgress(profile, statusFile).then((lines) => { if (!cancelled) setProgress(lines) }) }
+    let timer: number | undefined
+    const load = () => {
+      if (!agentProgressPolling(pageHidden(), active).fetch) return
+      readAgentProgress(profile, statusFile).then((lines) => { if (!cancelled) setProgress(lines) })
+    }
+    const disarm = () => {
+      if (timer !== undefined) window.clearInterval(timer)
+      timer = undefined
+    }
+    const arm = () => {
+      disarm()
+      if (!agentProgressPolling(pageHidden(), active).timer) return
+      timer = window.setInterval(load, 5000)
+    }
+    const onVisibility = () => {
+      if (pageHidden()) { disarm(); return }
+      load()
+      arm()
+    }
     load()
-    const timer = active ? window.setInterval(load, 5000) : undefined
+    arm()
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
-      if (timer !== undefined) window.clearInterval(timer)
+      disarm()
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [entry.id, profile, statusFile, readable, active, open])
   return progress

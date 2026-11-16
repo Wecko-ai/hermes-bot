@@ -5,13 +5,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable, pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { WebSocket, WebSocketServer } from 'ws'
+import { WebSocketServer } from 'ws'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
 import configModule from './config.cjs'
+import { attachGatewayUpgrade } from './gateway-upgrade.mjs'
+import { DOCUMENT_TEXT_MAX_BYTES, IMAGE_MAX_BYTES, createByteCap, forwardRequestHeaders, isApiPath, readCappedText, relayLimitStatus, staticCacheControl } from './http-limits.mjs'
 import { createLocalGateway } from './local-gateway.mjs'
 import { LOCAL_HISTORY_LIMITS, createLocalChatHistory } from './local-chat-history.mjs'
-import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, parseSharedSettings, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
+import { LOCAL_CHAT_IDLE, LOCAL_CHAT_KEEP, LOCAL_CHAT_OPTIONS, createLocalMemory } from './local-memory.mjs'
+import { installProcessGuards } from './process-guards.mjs'
+import { createSessionStore, credentialsForRestore } from './sessions.mjs'
+import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
+import { postVaultLogout, reduceVaultPoll, selectVaultToken, vaultRequestHeaders } from './vault-client.mjs'
 
 const CONFIG = configModule.loadConfig()
 const HOST = '127.0.0.1'
@@ -66,7 +72,6 @@ async function bodyJson(request, limit = 32_768) {
 
 const SESSION_COOKIE = 'hermesbot_session'
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60
-const sessions = new Map()
 const persistence = globalThis.__hermesBotSessionPersistence
 const credentialStore = globalThis.__hermesBotCredentialStore
 // Shared Chrome vault: a separate service on the bots' machine (LaunchAgent), the only one that reads the keychain.
@@ -79,45 +84,12 @@ const BROWSER_VAULT_ORIGIN = `http://127.0.0.1:${BROWSER_VAULT_PORT}`
 const VAULT_TOKEN_FILE = process.env.HERMESBOT_VAULT_TOKEN_FILE
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/vault-admin.token')
 function vaultToken() {
-  if (/^[0-9a-f]{64}$/.test(process.env.HERMESBOT_VAULT_TOKEN || '')) return process.env.HERMESBOT_VAULT_TOKEN
-  try {
-    const value = readFileSync(VAULT_TOKEN_FILE, 'utf8').trim()
-    return /^[0-9a-f]{64}$/.test(value) ? value : ''
-  } catch {
-    return ''
-  }
+  return selectVaultToken(globalThis.__hermesBotVaultToken, process.env.HERMESBOT_VAULT_TOKEN, () => readFileSync(VAULT_TOKEN_FILE, 'utf8'))
 }
 
-function restoreSessions() {
-  if (!persistence) return
-  try {
-    const records = JSON.parse(persistence.load() || '[]')
-    if (!Array.isArray(records)) return
-    for (const record of records) {
-      if (!record || typeof record.id !== 'string') continue
-      // A session without a password keeps nothing of Hermes: its token is read from the Hermes home at each use.
-      const kind = record.kind === 'local' ? 'local' : 'cookie'
-      if (kind === 'cookie' && typeof record.cookieHeader !== 'string') continue
-      if (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()) continue
-      const cookies = new Map(kind === 'local' ? [] : Object.entries(record.cookies || {}).filter(([, value]) => typeof value === 'string'))
-      sessions.set(record.id, { id: record.id, kind, cookies, cookieHeader: kind === 'local' ? '' : record.cookieHeader, expiresAt: record.expiresAt })
-    }
-  } catch { /* file missing or old format */ }
-}
-
-function persistSessions() {
-  if (!persistence) return
-  const records = [...sessions.values()].map((session) => ({
-    id: session.id,
-    kind: session.kind,
-    cookies: Object.fromEntries(session.cookies),
-    cookieHeader: session.cookieHeader,
-    expiresAt: session.expiresAt,
-  }))
-  persistence.save(JSON.stringify(records))
-}
-
-restoreSessions()
+const sessionStore = createSessionStore(persistence)
+const sessions = sessionStore.sessions
+const persistSessions = () => sessionStore.persist()
 
 function browserSession(request) {
   const cookies = String(request.headers.cookie || '').split(';')
@@ -198,7 +170,13 @@ async function hermesFetch(request, route, options = {}) {
 }
 
 async function proxyJson(response, upstream) {
-  const text = await upstream.text()
+  let text
+  try {
+    text = await readCappedText(upstream)
+  } catch {
+    await upstream.body?.cancel?.().catch(() => {})
+    return json(response, 502, { error: 'hermes_unavailable' })
+  }
   response.writeHead(upstream.status, {
     'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -241,14 +219,18 @@ async function handleLogin(request, response) {
   response.end(text)
 }
 
+let credentialFailureLogged = false
 function savedCredentials() {
-  if (!credentialStore) return null
-  try {
-    const saved = JSON.parse(credentialStore.load() || 'null')
-    return typeof saved?.username === 'string' && typeof saved?.password === 'string' ? saved : null
-  } catch {
+  const loaded = credentialsForRestore(credentialStore)
+  // A locked keychain throws. That is "nothing saved": do not write over the file.
+  if (loaded.unreadable) {
+    if (!credentialFailureLogged) {
+      credentialFailureLogged = true
+      console.error('HermesBot: credential store unreadable')
+    }
     return null
   }
+  return loaded.credentials
 }
 
 /** The Hermes session expired: sign in again with the saved credentials, with no screen. */
@@ -283,6 +265,7 @@ async function handleRestore(request, response) {
 
 async function handleLogout(request, response) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  await postVaultLogout(BROWSER_VAULT_ORIGIN, vaultToken()).catch(() => {})
   credentialStore?.clear()
   const session = browserSession(request)
   // A session without a password has nothing to close on the Hermes side.
@@ -331,10 +314,8 @@ async function handleSharedSettings(request, response) {
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   if (request.method === 'GET') {
     const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: SHARED_SETTINGS_PATH })}`)
-    if (upstream.status === 404) return json(response, 200, { exists: false, settings: {} })
-    if (!upstream.ok) return json(response, upstream.status, { error: 'shared_settings_unreadable' })
-    const body = await upstream.json().catch(() => ({}))
-    return json(response, 200, { exists: true, settings: parseSharedSettings(body.text) })
+    const result = await relaySharedSettingsGet(upstream)
+    return json(response, result.status, result.body)
   }
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   const settings = sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES))
@@ -343,8 +324,8 @@ async function handleSharedSettings(request, response) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: SHARED_SETTINGS_PATH, content: sharedSettingsText(settings) }),
   })
-  if (!upstream.ok) return json(response, upstream.status, { error: 'shared_settings_unwritable' })
-  return json(response, 200, { ok: true, settings })
+  const result = await relaySharedSettingsPut(upstream, settings)
+  return json(response, result.status, result.body)
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
@@ -394,7 +375,6 @@ const MEDIA_TYPES = {
   ogg: ['audio', 'audio/ogg'], opus: ['audio', 'audio/ogg'], flac: ['audio', 'audio/flac'],
 }
 const MEDIA_PROFILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
-const MEDIA_FORWARDED_HEADERS = ['range', 'if-range', 'if-none-match', 'if-modified-since']
 const MEDIA_RELAYED_HEADERS = ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']
 // Gateway status → status and code returned to the interface, with no path detail.
 const MEDIA_ERRORS = {
@@ -429,7 +409,6 @@ const DOCUMENT_TYPES = {
   md: 'text/markdown; charset=utf-8', markdown: 'text/markdown; charset=utf-8',
   txt: 'text/plain; charset=utf-8', log: 'text/plain; charset=utf-8',
 }
-const DOCUMENT_TEXT_MAX_BYTES = 16 * 1024 * 1024
 // A page written by a bot may come from hostile content: opaque origin, local scripts only,
 // and no network access. Remote images, fonts and scripts do not load.
 const DOCUMENT_POLICIES = {
@@ -452,31 +431,29 @@ async function handleMedia(request, response, url) {
   const target = mediaRequest(url)
   if (target.error) return json(response, target.status, { error: target.error })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-  // Images: the gateway's download route. Audio and video: its streaming route, with Range.
+  // Images: the gateway's download route, capped. Audio and video: its streaming route, with Range, uncapped.
+  const ranged = target.kind === 'audio' || target.kind === 'video'
   return relayFile(request, response, target, target.kind === 'image' ? '/api/fs/download' : '/api/files/stream', {
     // The URL carries the message id (`v`): a file rewritten under the same name comes back with a fresh URL.
     'Cache-Control': 'private, max-age=600',
     'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
-  })
+  }, ranged ? Infinity : IMAGE_MAX_BYTES, ranged)
 }
 
 async function handleDocument(request, response, url) {
   const target = documentRequest(url)
   if (target.error) return json(response, target.status, { error: target.error })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const ranged = target.format === 'pdf'
   return relayFile(request, response, target, '/api/fs/download', {
     'Cache-Control': 'no-store',
     'Content-Security-Policy': DOCUMENT_POLICIES[target.format],
-  }, target.format === 'pdf' ? Infinity : DOCUMENT_TEXT_MAX_BYTES)
+  }, ranged ? Infinity : DOCUMENT_TEXT_MAX_BYTES, ranged)
 }
 
 /** Relays a gateway file. The type and the policy come from here, never from the gateway. */
-async function relayFile(request, response, target, route, policyHeaders, maxBytes = Infinity) {
-  const headers = { 'accept-encoding': 'identity' }
-  for (const name of MEDIA_FORWARDED_HEADERS) {
-    const value = request.headers[name]
-    if (typeof value === 'string' && value.length <= 200) headers[name] = value
-  }
+async function relayFile(request, response, target, route, policyHeaders, maxBytes = Infinity, forwardRange = false) {
+  const headers = forwardRequestHeaders(request.headers, { forwardRange })
   const controller = new AbortController()
   response.on('close', () => { if (!response.writableFinished) controller.abort() })
   const headersTimer = setTimeout(() => controller.abort(), 20_000)
@@ -496,7 +473,7 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
     const [errorStatus, error] = MEDIA_ERRORS[status] || [502, 'media_unavailable']
     return json(response, errorStatus, { error })
   }
-  if (Number(upstream.headers.get('content-length') || 0) > maxBytes) {
+  if (relayLimitStatus(status, upstream.headers, maxBytes)) {
     upstream.body?.cancel().catch(() => {})
     return json(response, 413, { error: 'document_too_large' })
   }
@@ -520,9 +497,13 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
     upstream.body?.cancel().catch(() => {})
     return response.end()
   }
-  pipeline(Readable.fromWeb(upstream.body), response, (error) => {
+  pipeline(Readable.fromWeb(upstream.body), createByteCap(maxBytes), response, (error) => {
+    if (error?.code === 'ERR_DOCUMENT_TOO_LARGE') {
+      controller.abort()
+      if (!response.writableEnded) response.destroy()
+    }
     // A video player often abandons its Range requests: that is not an error.
-    if (error && !['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(error.code) && error.name !== 'AbortError') {
+    if (error && error.code !== 'ERR_DOCUMENT_TOO_LARGE' && !['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(error.code) && error.name !== 'AbortError') {
       console.warn(`Hermes media: ${error.code || error.name || 'stream_error'}`)
     }
   })
@@ -534,16 +515,7 @@ const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
 const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
 const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
 let ollamaModelsCache = { at: 0, entries: null }
-// Context of every load: the chat and the Load button must ask for the same one, or Ollama reloads the model.
-const LOCAL_CHAT_OPTIONS = { num_ctx: 32768 }
-// Unloaded quickly after a reply: the machine may be shared, and a large model takes a lot of GPU memory.
-const LOCAL_CHAT_IDLE = '2m'
-// Loaded with the button: kept until 30 minutes after the last message, then Ollama unloads it by itself.
-const LOCAL_CHAT_KEEP = '30m'
-const LOCAL_CHAT_KEEP_MS = 30 * 60_000
-/** Models loaded with the button, and until when the chat keeps them. Lost on restart: back to the short delay. */
-const localChatKept = new Map()
-const keptLocalModel = (model) => (localChatKept.get(model) || 0) > Date.now()
+const localMemory = createLocalMemory()
 
 const byteCount = (value) => (Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
 const shortText = (value) => (typeof value === 'string' ? value.slice(0, 64) : '')
@@ -577,7 +549,7 @@ async function ollamaModels() {
 }
 
 async function handleLocalModels(request, response) {
-  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   const entries = await ollamaModelEntries()
   const details = Object.fromEntries((entries || []).map(({ name, ...detail }) => [name, detail]))
   return json(response, 200, { available: entries !== null, models: (entries || []).map((entry) => entry.name), details, defaultModel: CONFIG.localChat.model })
@@ -585,7 +557,7 @@ async function handleLocalModels(request, response) {
 
 /** Models in memory now (`/api/ps`), never cached: the Load and Unload buttons follow it. */
 async function handleLocalStatus(request, response) {
-  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   try {
     const upstream = await fetch(`${OLLAMA_ORIGIN}/api/ps`, { signal: AbortSignal.timeout(3000) })
     if (!upstream.ok) return json(response, 200, { available: false, loaded: [] })
@@ -598,7 +570,7 @@ async function handleLocalStatus(request, response) {
         vram: byteCount(model.size_vram),
         expiresAt: typeof model.expires_at === 'string' && !Number.isNaN(Date.parse(model.expires_at)) ? new Date(model.expires_at).toISOString() : '',
         context: Number.isInteger(model.context_length) && model.context_length > 0 ? model.context_length : 0,
-        kept: keptLocalModel(model.name),
+        kept: localMemory.keptModel(model.name),
       }))
     return json(response, 200, { available: true, loaded })
   } catch {
@@ -612,32 +584,28 @@ async function handleLocalStatus(request, response) {
  */
 async function handleLocalMemory(request, response, action) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   const body = await bodyJson(request)
   const model = typeof body?.model === 'string' ? body.model : ''
   const installed = await ollamaModels()
   if (installed === null) return json(response, 503, { error: 'local_model_unreachable' })
   if (!model || !installed.includes(model)) return json(response, 404, { error: 'local_model_missing' })
-  const load = action === 'load'
-  if (load) localChatKept.set(model, Date.now() + LOCAL_CHAT_KEEP_MS)
-  else localChatKept.delete(model)
+  const controller = new AbortController()
+  const stop = () => { if (!response.writableFinished) controller.abort() }
+  response.on('close', stop)
   try {
-    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(load ? { model, keep_alive: LOCAL_CHAT_KEEP, options: LOCAL_CHAT_OPTIONS } : { model, keep_alive: 0 }),
-      // A large model from the disk takes a while to load.
-      signal: AbortSignal.timeout(load ? 300_000 : 60_000),
-    })
-    await upstream.text().catch(() => '')
-    if (!upstream.ok) {
-      if (load) localChatKept.delete(model)
-      return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
-    }
-  } catch {
-    if (load) localChatKept.delete(model)
-    return json(response, 503, { error: 'local_model_unreachable' })
+    await localMemory.run({ action, model, origin: OLLAMA_ORIGIN, signal: controller.signal })
+  } catch (error) {
+    if (response.destroyed || response.writableEnded) return
+    const status = Number.isInteger(error?.status) ? error.status : 503
+    const code = ['local_model_busy', 'local_model_missing', 'local_model_failed'].includes(error?.message)
+      ? error.message
+      : 'local_model_unreachable'
+    return json(response, status, { error: code })
+  } finally {
+    response.removeListener('close', stop)
   }
+  if (response.destroyed || response.writableEnded) return
   return json(response, 200, { ok: true })
 }
 
@@ -649,7 +617,7 @@ function localChatMessages(body) {
 
 async function handleLocalChat(request, response) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   const body = await bodyJson(request, LOCAL_CHAT_MAX_BYTES)
   const messages = localChatMessages(body)
   if (!messages) return json(response, 400, { error: 'invalid_messages' })
@@ -659,7 +627,8 @@ async function handleLocalChat(request, response) {
   if (installed === null) return json(response, 503, { error: 'local_model_unreachable' })
   if (!requested || !installed.includes(requested)) return json(response, 404, { error: 'local_model_missing' })
   // A model loaded with the button stays 30 minutes after this message.
-  if (keptLocalModel(requested)) localChatKept.set(requested, Date.now() + LOCAL_CHAT_KEEP_MS)
+  const kept = localMemory.keptModel(requested)
+  if (kept) localMemory.touch(requested)
   const controller = new AbortController()
   response.on('close', () => { if (!response.writableFinished) controller.abort() })
   let upstream
@@ -667,7 +636,7 @@ async function handleLocalChat(request, response) {
     upstream = await fetch(`${OLLAMA_ORIGIN}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: keptLocalModel(requested) ? LOCAL_CHAT_KEEP : LOCAL_CHAT_IDLE, options: LOCAL_CHAT_OPTIONS }),
+      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: kept ? LOCAL_CHAT_KEEP : LOCAL_CHAT_IDLE, options: LOCAL_CHAT_OPTIONS }),
       signal: controller.signal,
     })
   } catch {
@@ -715,15 +684,11 @@ async function handleLocalHistory(request, response, url) {
 
 /** Call to the vault admin API. Service absent: 503 `vault_service_unavailable`. */
 async function vaultAdmin(pathname, body, hermesCookie = '') {
+  const method = body === undefined ? 'GET' : 'POST'
   try {
     const response = await fetch(`${BROWSER_VAULT_ORIGIN}${pathname}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: {
-        Authorization: `Bearer ${vaultToken()}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        // Proof that the user is signed in: the vault checks it with the gateway before any write.
-        ...(hermesCookie ? { 'X-Hermes-Cookie': hermesCookie } : {}),
-      },
+      method,
+      headers: vaultRequestHeaders(method, vaultToken(), hermesCookie),
       body: body === undefined ? undefined : JSON.stringify(body),
       // A code request waits for the CDP injection: up to one minute.
       signal: AbortSignal.timeout(65_000),
@@ -743,16 +708,15 @@ let vaultNotices = '[]'
 let vaultPoll = null
 async function pollVaultRequests() {
   const { status, body } = await vaultAdmin('/admin/v1/requests')
-  const next = JSON.stringify(status === 200 && Array.isArray(body.requests) ? body.requests : [])
-  // Vault unreachable: the last notices stay, the app has already shown them.
-  const notices = status === 200 && Array.isArray(body.notices) ? JSON.stringify(body.notices) : vaultNotices
-  if (next !== vaultSnapshot) {
-    vaultSnapshot = next
-    vaultListeners.forEach((listener) => listener('requests', next))
+  // A failed or malformed poll keeps the cards on screen. The bot is still waiting on the vault.
+  const next = reduceVaultPoll({ requests: vaultSnapshot, notices: vaultNotices }, status, body)
+  if (next.requests !== vaultSnapshot) {
+    vaultSnapshot = next.requests
+    vaultListeners.forEach((listener) => listener('requests', next.requests))
   }
-  if (notices !== vaultNotices) {
-    vaultNotices = notices
-    vaultListeners.forEach((listener) => listener('notices', notices))
+  if (next.notices !== vaultNotices) {
+    vaultNotices = next.notices
+    vaultListeners.forEach((listener) => listener('notices', next.notices))
   }
 }
 
@@ -788,7 +752,8 @@ async function handleBrowserVaultAdmin(request, response, pathname) {
   const session = browserSession(request)
   if (!session) return json(response, 401, { error: 'unauthenticated' })
   const body = request.method === 'POST' ? await bodyJson(request) : undefined
-  const result = await vaultAdmin(pathname, body, session.cookieHeader || '')
+  // The Hermes cookie is a write credential. GETs and the poll do not send it.
+  const result = await vaultAdmin(pathname, body, request.method === 'POST' ? (session.cookieHeader || '') : '')
   if (pathname.startsWith('/admin/v1/requests/')) pollVaultRequests().catch(() => undefined)
   return json(response, result.status, result.body)
 }
@@ -878,7 +843,7 @@ async function serveProduction(response, pathname) {
   response.writeHead(200, {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
     'Content-Length': data.length,
-    'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+    'Cache-Control': staticCacheControl(file),
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': CONTENT_SECURITY_POLICY,
@@ -965,7 +930,7 @@ const server = http.createServer(async (request, response) => {
       return await handleLocalMemory(request, response, url.pathname.endsWith('/load') ? 'load' : 'unload')
     }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
-      if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+      if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
       const turns = await readBrowserTurns(BROWSER_TURN_COMMAND)
       const owners = turns.map((turn) => turn.owner)
       return json(response, 200, { owner: owners[0] || '', owners, turns })
@@ -981,6 +946,7 @@ const server = http.createServer(async (request, response) => {
       return json(response, 200, { ok: true, service: 'hermes-bot' })
     }
 
+    if (isApiPath(url.pathname)) return json(response, 404, { error: 'not_found' })
     if (vite) return vite.middlewares(request, response, () => serveProduction(response, url.pathname))
     return await serveProduction(response, url.pathname)
   } catch (error) {
@@ -990,11 +956,6 @@ const server = http.createServer(async (request, response) => {
   }
 })
 
-// 1005 and 1006 describe a received close: ws refuses to send them.
-function isRelayableCloseCode(code) {
-  return Number.isInteger(code) && ((code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999))
-}
-
 // `file.attach` sends the file as base64 in one frame: same cap as the gateway (384 MiB).
 const WS_MAX_PAYLOAD = 384 * 1024 * 1024
 const wss = new WebSocketServer({
@@ -1003,73 +964,17 @@ const wss = new WebSocketServer({
   handleProtocols: () => 'hermes-gateway-v1',
 })
 
-server.on('upgrade', async (request, socket, head) => {
-  try {
-    if (!localRequest(request) || !LOCAL_ORIGINS.has(request.headers.origin)) throw Object.assign(new Error('forbidden'), { status: 403 })
-    const url = new URL(request.url || '/', `http://${HOST}:${PORT}`)
-    if (url.pathname !== '/api/ws') {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
-      return socket.destroy()
-    }
-    const identity = await hermesFetch(request, '/api/auth/me')
-    await identity.body?.cancel().catch(() => {})
-    if (!identity.ok) {
-      console.warn(`Hermes WS identity: HTTP ${identity.status}`)
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-      return socket.destroy()
-    }
-    const profile = (url.searchParams.get('profile') || 'default').slice(0, 128)
-    const ticket = await mintSocketTicket(request, profile)
-    // Without a password, the socket goes to the same pinned address as the request that got its ticket.
-    const local = browserSession(request)?.kind === 'local'
-    const upstreamUrl = `${local ? localGateway.socketOrigin : HERMES_WS_ORIGIN}/api/ws?native_dial=browser&profile=${encodeURIComponent(profile)}`
-    // The ticket and every frame after it go on a connection checked like the request that got the ticket.
-    const checked = local ? await localGateway.connect() : null
-    const upstream = new WebSocket(upstreamUrl, [
-      'hermes-gateway-v1',
-      `hermes-gateway-ticket.${ticket}`,
-    ], {
-      // Without a password the ticket is the whole credential, and the gateway wants no browser Origin.
-      headers: local ? {} : { Origin: HERMES_BROWSER_ORIGIN },
-      handshakeTimeout: 20_000,
-      maxPayload: WS_MAX_PAYLOAD,
-      ...(checked ? { createConnection: () => checked } : {}),
-    })
-    if (checked) upstream.once('close', () => checked.destroy())
-
-    wss.handleUpgrade(request, socket, head, (browser) => {
-      const closeBoth = () => {
-        if (browser.readyState === WebSocket.OPEN) browser.close()
-        if (upstream.readyState === WebSocket.OPEN) upstream.close()
-      }
-      upstream.on('open', () => {
-        console.log('Hermes WS upstream: connected')
-        browser.on('message', (data, binary) => upstream.readyState === WebSocket.OPEN && upstream.send(data, { binary }))
-        upstream.on('message', (data, binary) => browser.readyState === WebSocket.OPEN && browser.send(data, { binary }))
-      })
-      upstream.on('close', (code, reason) => {
-        console.warn(`Hermes WS upstream: close ${code}`)
-        if (browser.readyState !== WebSocket.OPEN) return
-        if (isRelayableCloseCode(code)) browser.close(code, reason)
-        else browser.close(1011)
-      })
-      upstream.on('unexpected-response', (_request, response) => {
-        console.error(`Hermes WS upstream: HTTP ${response.statusCode}`)
-      })
-      upstream.on('error', (error) => {
-        console.error(`Hermes WS upstream: ${error.code || 'connection_error'}`)
-        closeBoth()
-      })
-      browser.on('close', () => upstream.readyState === WebSocket.OPEN && upstream.close())
-      browser.on('error', () => closeBoth())
-    })
-  } catch (error) {
-    console.error(`Hermes WS upgrade: ${error?.status || error?.code || 'failed'}`)
-    if (!socket.destroyed) {
-      socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n')
-      socket.destroy()
-    }
-  }
+attachGatewayUpgrade(server, wss, {
+  host: HOST,
+  port: PORT,
+  accept: (request) => localRequest(request) && LOCAL_ORIGINS.has(request.headers.origin),
+  browserSession,
+  hermesFetch,
+  mintSocketTicket,
+  localGateway,
+  hermesWsOrigin: HERMES_WS_ORIGIN,
+  browserOrigin: HERMES_BROWSER_ORIGIN,
+  maxPayload: WS_MAX_PAYLOAD,
 })
 
 let vite
@@ -1097,9 +1002,17 @@ server.listen(PORT, HOST, () => {
 async function shutdown() {
   wss.clients.forEach((client) => client.close(1001, 'server_shutdown'))
   if (vaultPoll) clearInterval(vaultPoll)
+  sessionStore.stop()
   if (vite) await vite.close()
   server.close(() => process.exit(0))
   server.closeAllConnections()
 }
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+// Electron quits through app.quit() and installs its own fatal handlers. A bare `node server`
+// still has to shut down on SIGTERM and stay up if one request throws.
+installProcessGuards(process, {
+  onShutdown: () => { shutdown().catch(() => process.exit(1)) },
+  onError: (error) => {
+    const code = error && typeof error === 'object' ? (error.code || error.name) : ''
+    console.error(`HermesBot: ${code || 'error'}`)
+  },
+})

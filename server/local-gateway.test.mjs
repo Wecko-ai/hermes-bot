@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import http from 'node:http'
+import { readCappedText } from './http-limits.mjs'
 import { createLocalGateway, holdsPeer, listensOn, loopbackPort, ownedBy, parseIdentify } from './local-gateway.mjs'
 
 const TOKEN = 'A'.repeat(43)
@@ -62,6 +63,11 @@ describe('createLocalGateway', () => {
   let upstream
   let port
   let received
+  let responseGate
+  let destroyOnConnect
+  let chunkedBody
+  let openSockets
+  let rawBytes
 
   // lsof as the module reads it: the listener line, and one line per connection this process holds.
   const fakeLsof = (pid) => {
@@ -81,7 +87,9 @@ describe('createLocalGateway', () => {
         if (statusBody === null) throw new Error('down')
         return new Response(JSON.stringify(statusBody), { status: 200 })
       },
-      lsofSockets: async (pid) => fakeLsof(pid),
+      ...(options.lsofSockets || options.execFile ? {} : { lsofSockets: async (pid) => fakeLsof(pid) }),
+      ...(options.lsofSockets ? { lsofSockets: options.lsofSockets } : {}),
+      ...(options.execFile ? { execFile: options.execFile } : {}),
     },
   })
 
@@ -94,13 +102,35 @@ describe('createLocalGateway', () => {
     statusCalls = 0
     listening = true
     received = []
+    responseGate = null
+    destroyOnConnect = false
+    chunkedBody = false
+    openSockets = 0
+    rawBytes = 0
     const clients = new Set()
     upstream = http.createServer((request, response) => {
       received.push({ url: request.url, token: request.headers['x-hermes-session-token'], host: request.headers.host })
-      response.setHeader('Content-Type', 'application/json')
-      response.end(JSON.stringify({ ok: true }))
+      const send = () => {
+        if (chunkedBody) {
+          response.writeHead(200, { 'Content-Type': 'application/octet-stream' })
+          response.write(Buffer.alloc(8000, 97))
+          response.write(Buffer.alloc(8000, 98))
+          response.end()
+          return
+        }
+        response.setHeader('Content-Type', 'application/json')
+        response.end(JSON.stringify({ ok: true }))
+      }
+      if (responseGate) responseGate.then(send)
+      else send()
     })
-    upstream.on('connection', (socket) => { clients.add(socket.remotePort); socket.on('close', () => clients.delete(socket.remotePort)) })
+    upstream.on('connection', (socket) => {
+      openSockets += 1
+      clients.add(socket.remotePort)
+      socket.on('data', (chunk) => { rawBytes += chunk.length })
+      socket.on('close', () => { openSockets -= 1; clients.delete(socket.remotePort) })
+      if (destroyOnConnect) setImmediate(() => socket.destroy())
+    })
     await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve))
     port = upstream.address().port
     peerSeen = () => [...clients]
@@ -217,5 +247,112 @@ describe('createLocalGateway', () => {
     await down.check()
     statusBody = { auth_required: false }
     expect((await down.check()).ok).toBe(true)
+  })
+
+  async function captureUnhandled(run) {
+    const failures = []
+    const onException = (error) => failures.push(error)
+    const onRejection = (error) => failures.push(error)
+    process.on('uncaughtException', onException)
+    process.on('unhandledRejection', onRejection)
+    try {
+      await run()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(failures).toEqual([])
+    } finally {
+      process.off('uncaughtException', onException)
+      process.off('unhandledRejection', onRejection)
+    }
+  }
+
+  it('rejects when the caller aborts before or during the request, with no unhandled error', async () => {
+    const local = gateway()
+    await captureUnhandled(async () => {
+      const early = new AbortController()
+      early.abort()
+      await expect(local.fetch('/api/auth/me', { signal: early.signal })).rejects.toThrow(/abort/i)
+    })
+
+    let release
+    responseGate = new Promise((resolve) => { release = resolve })
+    const localDuring = gateway()
+    const during = new AbortController()
+    const pending = localDuring.fetch('/api/slow', { signal: during.signal })
+    const arrived = new Promise((resolve) => {
+      const started = Date.now()
+      const check = () => {
+        if (received.some((item) => item.url === '/api/slow') || Date.now() - started > 2000) resolve()
+        else setTimeout(check, 10)
+      }
+      check()
+    })
+    await arrived
+    await captureUnhandled(async () => {
+      during.abort()
+      await expect(pending).rejects.toThrow(/abort/i)
+    })
+    release()
+  })
+
+  it('writes nothing when the socket errors after connect', async () => {
+    destroyOnConnect = true
+    const local = gateway({
+      lsofSockets: async (pid) => {
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        return fakeLsof(pid)
+      },
+    })
+    await captureUnhandled(async () => {
+      await expect(local.fetch('/api/auth/me')).rejects.toMatchObject({ status: 401, reason: 'gateway_down' })
+    })
+    expect(received).toEqual([])
+    expect(rawBytes).toBe(0)
+  })
+
+  it('runs only a few peer checks at a time and does not pass the vault token to lsof', async () => {
+    let current = 0
+    let max = 0
+    const local = gateway({
+      lsofSockets: async (pid) => {
+        current += 1
+        max = Math.max(max, current)
+        await new Promise((resolve) => setTimeout(resolve, 40))
+        current -= 1
+        return fakeLsof(pid)
+      },
+    })
+    const answers = await Promise.all(Array.from({ length: 8 }, () => local.fetch('/api/auth/me')))
+    expect(answers).toHaveLength(8)
+    expect(max).toBeGreaterThan(1)
+    expect(max).toBeLessThanOrEqual(3)
+    expect(received).toHaveLength(8)
+    expect(received.every((item) => item.token === TOKEN)).toBe(true)
+
+    const previous = process.env.HERMESBOT_VAULT_TOKEN
+    process.env.HERMESBOT_VAULT_TOKEN = 'ab'.repeat(32)
+    let seen
+    try {
+      const probed = gateway({
+        execFile: (_command, _args, options, callback) => {
+          seen = options.env
+          callback(null, fakeLsof(4242))
+        },
+      })
+      expect((await probed.check()).ok).toBe(true)
+      expect(seen.HERMESBOT_VAULT_TOKEN).toBeUndefined()
+      expect(seen.PATH).toBe(process.env.PATH)
+    } finally {
+      if (previous === undefined) delete process.env.HERMESBOT_VAULT_TOKEN
+      else process.env.HERMESBOT_VAULT_TOKEN = previous
+    }
+  })
+
+  it('destroys the gateway socket when the body is cancelled over the cap', async () => {
+    chunkedBody = true
+    const response = await gateway().fetch('/api/big')
+    await expect(readCappedText(response, 1000)).rejects.toMatchObject({ status: 502 })
+    const deadline = Date.now() + 1000
+    while (openSockets > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(openSockets).toBe(0)
   })
 })

@@ -141,7 +141,7 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
       {draft && (
         <form className="vault-form" onSubmit={submit} autoComplete="off">
           <label>{t('vault.site')}
-            <input value={draft.origin} placeholder="https://www.instagram.com" disabled={Boolean(draft.editing) || saving} required
+            <input value={draft.origin} placeholder={t('vault.originPlaceholder')} disabled={Boolean(draft.editing) || saving} required
               onChange={(event) => setDraft({ ...draft, origin: event.target.value })} autoCapitalize="none" spellCheck={false} />
           </label>
           <label>{t('vault.identifier')}

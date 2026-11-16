@@ -18,6 +18,10 @@ describe('chat local', () => {
     expect(visibleAnswer('<think>je cherche</think>\n\nRéponse')).toBe('Réponse')
     expect(visibleAnswer('<think>je cherche encore')).toBe('')
     expect(visibleAnswer('Réponse simple')).toBe('Réponse simple')
+    expect(visibleAnswer('Done\n\nNO_REPLY')).toBe('Done')
+    expect(visibleAnswer('NO REPLY')).toBe('')
+    expect(visibleAnswer('*NO_REPLY*')).toBe('')
+    expect(visibleAnswer('Still here\n\n[silent]')).toBe('Still here')
   })
 
   it('nomme le modèle sans son étiquette latest ni son dépôt', () => {

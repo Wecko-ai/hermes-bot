@@ -12,6 +12,8 @@ export const PASSWORD_ALPHABET = PASSWORD_CLASSES.join('')
 /**
  * Strong password for an account a bot creates. Drawn with `node:crypto` only; it never leaves the
  * vault except into the keychain and the page's password fields.
+ * Length stays 20, with one character from each class (including a symbol). That length is a
+ * recorded decision: do not shorten it here.
  */
 export function generatePassword(length = 20) {
   if (!Number.isInteger(length) || length < PASSWORD_CLASSES.length || length > 128) throw new RangeError('invalid_length')

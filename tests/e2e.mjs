@@ -8,6 +8,15 @@ import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { WebSocket, WebSocketServer } from 'ws'
 import { chromium } from 'playwright-core'
+import { assertE2ePortsFree, e2ePorts } from './e2e-ports.mjs'
+
+const {
+  E2E_PORT, E2E_GATEWAY_PORT, E2E_CDP_PORT, E2E_VAULT_PORT,
+  E2E_APP_ORIGIN, E2E_GATEWAY_ORIGIN, E2E_CDP_ORIGIN, E2E_CDP_WS,
+} = e2ePorts()
+const E2E_VAULT_ORIGIN = `http://127.0.0.1:${E2E_VAULT_PORT}`
+const E2E_APP_WS = E2E_APP_ORIGIN.replace('http', 'ws')
+
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const execFileAsync = promisify(execFile)
@@ -184,7 +193,7 @@ function serveMediaFixture(request, response, url, route) {
 }
 
 const mock = http.createServer((request, response) => {
-  const url = new URL(request.url, 'http://127.0.0.1:9121')
+  const url = new URL(request.url, E2E_GATEWAY_ORIGIN)
   response.setHeader('Content-Type', 'application/json')
   if (request.headers['x-hermes-session-token']) localTokenSightings.push(url.pathname)
   const authenticated = localMode
@@ -606,7 +615,11 @@ wss.on('connection', (socket) => {
         ],
       })
     }
-    if (frame.method === 'session.history') return reply({ messages: [] })
+    // Like the gateway: the user row that started a turn is in the history (message.start carries no text).
+    if (frame.method === 'session.history') {
+      const input = historyTurnInputs[frame.params?.session_id]
+      return reply({ messages: input ? [{ role: 'user', content: input, timestamp: Date.now() }] : [] })
+    }
     if (frame.method === 'session.active_list') {
       activeListParams.push(frame.params)
       const status = liveStatusByProfile[frame.params.profile]
@@ -738,7 +751,7 @@ wss.on('connection', (socket) => {
       }
       if (frame.params.text.startsWith('Test mail')) {
         const id = frame.params.text.split(' ').pop()
-        const draft = ['````hermes-mail', `Id: ${id}`, 'Draft-Id: 77', 'From: Bot <bot@exemple.test>', 'To: contact@exemple.test', 'Cc:', 'Subject: Re: Votre demande', 'Reply-Label: « Votre demande » de Contact', '', 'Bonjour,', '', 'Voici notre réponse.', '````'].join('\n')
+        const draft = ['````hermes-mail', `Id: ${id}`, 'Draft-Id: 77', 'From: Bot <bot@exemple.test>', 'To: contact@exemple.test', 'Cc:', 'Subject: Re: Votre demande', 'Reply-Label: « Votre demande » de Contact', 'In-Reply-To: <a1@exemple.test>', 'References: <a0@exemple.test> <a1@exemple.test>', '', 'Bonjour,', '', 'Voici notre réponse.', '````'].join('\n')
         at(30, 'message.start', { turn_id: 'turn-mail' })
         at(80, 'message.delta', { turn_id: 'turn-mail', text: draft.slice(0, 70) })
         at(900, 'message.complete', { turn_id: 'turn-mail', text: `Brouillon à valider :\n\n${draft}`, status: 'complete' })
@@ -858,7 +871,7 @@ wss.on('connection', (socket) => {
 })
 
 mock.on('upgrade', (request, socket, head) => {
-  if (new URL(request.url, 'http://127.0.0.1:9121').pathname !== '/api/ws') return socket.destroy()
+  if (new URL(request.url, E2E_GATEWAY_ORIGIN).pathname !== '/api/ws') return socket.destroy()
   if (localMode) localSocketOrigins.push(request.headers.origin || '')
   wss.handleUpgrade(request, socket, head, (client) => wss.emit('connection', client, request))
 })
@@ -867,6 +880,9 @@ mock.on('upgrade', (request, socket, head) => {
 let cdpUrl = 'https://store.steampowered.com/login/'
 const cdpExpressions = []
 const cdpInjections = []
+// Turn inputs the mock gateway reports in `session.history`, per session id.
+const historyTurnInputs = {}
+const cdpIsolatedWorlds = []
 // Password fields the simulated sign-up page shows (password and confirmation).
 let cdpSignupPasswords = 2
 // What the federated sign-in lookup finds on the simulated page (`FEDERATED_SIGNIN`).
@@ -875,8 +891,8 @@ const cdpMock = http.createServer((request, response) => {
   if (request.url !== '/json/list') { response.statusCode = 404; return response.end() }
   response.setHeader('Content-Type', 'application/json')
   response.end(JSON.stringify([
-    { id: 'onglet-leurre', type: 'page', url: cdpUrl, webSocketDebuggerUrl: 'ws://127.0.0.1:9223/devtools/page/onglet-leurre' },
-    { id: 'onglet-steam', type: 'page', url: cdpUrl, webSocketDebuggerUrl: 'ws://127.0.0.1:9223/devtools/page/onglet-steam' },
+    { id: 'onglet-leurre', type: 'page', url: cdpUrl, webSocketDebuggerUrl: `${E2E_CDP_WS}/devtools/page/onglet-leurre` },
+    { id: 'onglet-steam', type: 'page', url: cdpUrl, webSocketDebuggerUrl: `${E2E_CDP_WS}/devtools/page/onglet-steam` },
   ]))
 })
 const cdpWss = new WebSocketServer({ noServer: true })
@@ -893,14 +909,25 @@ cdpWss.on('connection', (socket, request) => {
       if (params.expression.includes('federated sign-in')) return send(socket, { id, result: { result: { type: 'object', value: cdpSso } } })
       return send(socket, { id, result: { result: { type: 'object', objectId: 'champs-actifs' } } })
     }
-    if (method === 'Runtime.callFunctionOn' && !params.arguments) {
-      // Sign-up, before anything is stored: the vault counts the fields, without any value.
+    // The vault types in an isolated world of the top frame, never in the page's own world.
+    if (method === 'Page.getFrameTree') return send(socket, { id, result: { frameTree: { frame: { id: 'cadre-principal' } } } })
+    if (method === 'Page.createIsolatedWorld') {
+      cdpIsolatedWorlds.push(params.frameId)
+      return send(socket, { id, result: { executionContextId: 7 } })
+    }
+    if (method === 'Runtime.callFunctionOn' && params.executionContextId !== 7) {
+      return send(socket, { id, error: { message: 'main world refused by the mock' } })
+    }
+    if (method === 'Runtime.callFunctionOn' && params.arguments?.length === 2) {
+      // Inspection (origin and href checked in the page, field counts), before anything is stored or typed.
       return send(socket, { id, result: { result: { type: 'object', value: { identifier: false, passwords: cdpSignupPasswords } } } })
     }
     if (method === 'Runtime.callFunctionOn') {
-      const values = params.arguments.map((argument) => argument.value)
+      const [, kindArgument, first, second] = params.arguments
+      const kind = kindArgument.value
+      const values = kind === 'code' ? [first.value] : [first.value, second.value]
       cdpInjections.push({ target, origin: new URL(cdpUrl).origin, values })
-      const filled = params.functionDeclaration.includes("'confirmation'") ? ['password', 'confirmation'] : values.length === 2 ? ['identifier', 'password'] : ['code']
+      const filled = kind === 'signup' ? ['password', 'confirmation'] : kind === 'code' ? ['code'] : ['identifier', 'password']
       return send(socket, { id, result: { result: { type: 'object', value: { filled } } } })
     }
     send(socket, { id, error: { message: 'unsupported' } })
@@ -915,17 +942,18 @@ let child
 let vaultService
 let browser
 try {
-  await new Promise((resolve) => mock.listen(9121, '127.0.0.1', resolve))
-  await new Promise((resolve) => cdpMock.listen(9223, '127.0.0.1', resolve))
+  await assertE2ePortsFree({ E2E_PORT, E2E_GATEWAY_PORT, E2E_CDP_PORT, E2E_VAULT_PORT })
+  await new Promise((resolve) => mock.listen(Number(E2E_GATEWAY_PORT), '127.0.0.1', resolve))
+  await new Promise((resolve) => cdpMock.listen(Number(E2E_CDP_PORT), '127.0.0.1', resolve))
   for (const args of [['create-keychain', '-p', 'e2e', BROWSER_VAULT_KEYCHAIN], ['unlock-keychain', '-p', 'e2e', BROWSER_VAULT_KEYCHAIN], ['set-keychain-settings', BROWSER_VAULT_KEYCHAIN]]) {
     await execFileAsync('/usr/bin/security', args)
   }
   vaultService = spawn(process.execPath, ['server/browser-vault/standalone.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
-      ...process.env, BROWSER_VAULT_PORT: '4333', BROWSER_VAULT_CDP_ORIGIN: 'http://127.0.0.1:9223',
+      ...process.env, BROWSER_VAULT_PORT: E2E_VAULT_PORT, BROWSER_VAULT_CDP_ORIGIN: E2E_CDP_ORIGIN,
       HERMESBOT_KEYCHAIN: BROWSER_VAULT_KEYCHAIN, HERMESBOT_VAULT_AUDIT: BROWSER_VAULT_AUDIT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
-      HERMESBOT_VAULT_SETTINGS: BROWSER_VAULT_SETTINGS, HERMES_ORIGIN: 'http://127.0.0.1:9121',
+      HERMESBOT_VAULT_SETTINGS: BROWSER_VAULT_SETTINGS, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -938,8 +966,8 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -952,12 +980,12 @@ try {
   child.stderr.on('data', (data) => { serverLog += data })
   let ready = false
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) { ready = true; break } } catch { /* server not ready */ }
+    try { if ((await fetch(`${E2E_APP_ORIGIN}/api/health`)).ok) { ready = true; break } } catch { /* server not ready */ }
     await delay(100)
   }
   if (!ready) throw new Error(`Serveur de test indisponible: ${serverLog}`)
 
-  if ((await fetch('http://127.0.0.1:4332/api/health', { headers: { Origin: 'null' } })).status !== 403) throw new Error('Origin null accepté.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/health`, { headers: { Origin: 'null' } })).status !== 403) throw new Error('Origin null accepté.')
 
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   // French interface: the texts searched below come from the French catalog.
@@ -1004,6 +1032,11 @@ try {
     }
   })
   const notificationsSent = () => page.evaluate(() => window.__notifications.map(({ title, body, tag }) => ({ title, body, tag })))
+  // A finished-turn notification waits for the turn's user row (read from the history): give it a moment.
+  const notificationsSince = async (before, expected = 1) => {
+    for (let wait = 0; wait < 40 && (await notificationsSent()).length - before < expected; wait++) await page.waitForTimeout(50)
+    return (await notificationsSent()).slice(before)
+  }
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   // Chromium announces the request before the CSP blocks it: only a CSP refusal removes it from the list.
@@ -1011,7 +1044,7 @@ try {
   page.on('requestfailed', (request) => {
     if (request.failure()?.errorText === 'csp') remoteRequests.splice(remoteRequests.indexOf(request.url()), 1)
   })
-  await page.goto('http://127.0.0.1:4332/', { waitUntil: 'domcontentloaded' })
+  await page.goto(`${E2E_APP_ORIGIN}/`, { waitUntil: 'domcontentloaded' })
   await page.locator('.login-card').waitFor({ timeout: 15_000 })
   await page.getByLabel('Identifiant Hermes').fill('test')
   await page.getByLabel('Mot de passe').fill('test')
@@ -1201,7 +1234,7 @@ try {
   await cited.locator('.media-fallback').getByText('absente.png').waitFor({ timeout: 5_000 })
   if (mediaRequests.some((item) => item.path.includes('exemple-cite'))) throw new Error('Un chemin d’un bloc de code a été chargé.')
   // A command in a code block: one click copies it, without the final line break.
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:4332' })
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `${E2E_APP_ORIGIN}` })
   const codeBlock = page.locator('.message-assistant .code-block').filter({ hasText: 'exemple-cite.mp4' })
   await codeBlock.hover()
   await codeBlock.getByRole('button', { name: 'Copier', exact: true }).click()
@@ -1306,12 +1339,12 @@ try {
   if (remoteRequests.length) throw new Error(`Chargement distant : ${remoteRequests[0]}`)
 
   // /api/document: session required, four formats only (plain text for agents' logs), HTML with no origin or network.
-  const documentRoute = (file, profile = 'orion') => `http://127.0.0.1:4332/api/document?${new URLSearchParams({ profile, path: file })}`
+  const documentRoute = (file, profile = 'orion') => `${E2E_APP_ORIGIN}/api/document?${new URLSearchParams({ profile, path: file })}`
   if ((await fetch(documentRoute('/Users/test/docs/note.md'))).status !== 401) throw new Error('/api/document sans session.')
   const documentHeaders = await page.evaluate(async (routes) => Promise.all(routes.map(async (route) => {
     const response = await fetch(route, { credentials: 'same-origin' })
     return { status: response.status, type: response.headers.get('content-type'), csp: response.headers.get('content-security-policy'), disposition: response.headers.get('content-disposition') }
-  })), ['/Users/test/docs/page.html', '/Users/test/docs/rapport.pdf', '/Users/test/secret.env', '/Users/test/../etc/a.md', '/Users/test/docs/agent.log'].map((file) => documentRoute(file).replace('http://127.0.0.1:4332', '')))
+  })), ['/Users/test/docs/page.html', '/Users/test/docs/rapport.pdf', '/Users/test/secret.env', '/Users/test/../etc/a.md', '/Users/test/docs/agent.log'].map((file) => documentRoute(file).replace(`${E2E_APP_ORIGIN}`, '')))
   if (documentHeaders[0].status !== 200 || !documentHeaders[0].csp.startsWith('sandbox allow-scripts;') || documentHeaders[0].csp.includes('allow-same-origin') || !documentHeaders[0].csp.includes("default-src 'none'")) throw new Error(`CSP HTML : ${JSON.stringify(documentHeaders[0])}`)
   if (documentHeaders[0].disposition !== 'inline') throw new Error('Une page HTML doit s’afficher en ligne.')
   if (documentHeaders[1].type !== 'application/pdf' || documentHeaders[1].csp.includes('sandbox')) throw new Error(`PDF : ${JSON.stringify(documentHeaders[1])}`)
@@ -1717,6 +1750,7 @@ try {
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
 
   // Background turn of an already open bot: "Au travail" right away, then "Terminé".
+  historyTurnInputs['chat-nova'] = 'Lance le travail de fond.'
   for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: 'turn-fond' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 3_000 })
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 3_000 })
@@ -1724,12 +1758,14 @@ try {
   for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: 'turn-fond', text: 'Travail de fond terminé.', status: 'complete' }))
   await page.locator('[data-bot=nova] .bot-row-status.is-done').waitFor({ timeout: 3_000 })
   // A bot whose chat is not open: one macOS notification, its name as title.
-  const novaDone = (await notificationsSent()).slice(notificationsBefore)
+  const novaDone = await notificationsSince(notificationsBefore)
   if (novaDone.length !== 1 || novaDone[0].tag !== 'hermesbot-nova' || novaDone[0].body !== 'Travail de fond terminé.') throw new Error(`Notification de fin de tour : seulement le message du bot, ${JSON.stringify(novaDone)}`)
   // A turn started by another bot's message is between bots: done, but no notification. Same for a silent turn.
   for (const [turn, start, reply] of [['turn-entre-bots', 'Message from 🤖 Orion (@orion): relis le plan', 'Plan relu, OK.'], ['turn-silence', 'Fais le point.', '[SILENT]']]) {
     const sentBefore = (await notificationsSent()).length
-    for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: turn, text: start }))
+    historyTurnInputs['chat-nova'] = start
+    // The current gateway sends message.start without the prompt text: the app must read the history.
+    for (const client of wss.clients) send(client, event('chat-nova', 'message.start', { turn_id: turn }))
     await page.locator('[data-bot=nova] .bot-row-status.is-working').waitFor({ timeout: 3_000 })
     for (const client of wss.clients) send(client, event('chat-nova', 'message.complete', { turn_id: turn, text: reply, status: 'complete' }))
     await page.locator('[data-bot=nova] .bot-row-status.is-done, [data-bot=nova] .bot-row-status.is-idle').first().waitFor({ timeout: 3_000 })
@@ -1756,6 +1792,7 @@ try {
   if (await unreadOf() !== unreadBeforeWork + 1) throw new Error('La fin du tour doit compter un seul non-lu.')
 
   // On the open bot: a step in the header and the panel, never a terminal command.
+  historyTurnInputs['chat-orion'] = 'Lis le plan.'
   for (const client of wss.clients) {
     send(client, event('chat-orion', 'message.start', { turn_id: 'turn-etape' }))
     send(client, event('chat-orion', 'tool.start', { tool_id: 'a', name: 'read_file', context: '/tmp/dossier/plan.md' }))
@@ -1770,7 +1807,7 @@ try {
   const sentBeforeOpenDone = (await notificationsSent()).length
   for (const client of wss.clients) send(client, event('chat-orion', 'message.complete', { turn_id: 'turn-etape', text: 'Étape terminée.', status: 'complete' }))
   await page.locator('.work-card').waitFor({ state: 'detached', timeout: 3_000 })
-  const openDone = (await notificationsSent()).slice(sentBeforeOpenDone)
+  const openDone = await notificationsSince(sentBeforeOpenDone)
   await page.evaluate(() => { document.hasFocus = window.__hasFocus })
   if (openDone.length !== 1 || openDone[0].tag !== 'hermesbot-orion' || openDone[0].body !== 'Étape terminée.') throw new Error(`Fin de tour du bot ouvert, fenêtre en arrière-plan : ${JSON.stringify(openDone)}`)
 
@@ -1831,10 +1868,12 @@ try {
   await sheet.getByRole('button', { name: 'Autoriser une fois' }).click()
   if ((await answerOf('srq-ok')).result.choice !== 'once') throw new Error('Choix d’accord incorrect.')
   await sheet.waitFor({ state: 'detached', timeout: 2_000 })
+  // A request this app does not answer gets no frame at all: on the gateway, any answer (even an error)
+  // settles it for every other client, which would close the same card in another app.
   ask('srq-non-gere', 'clarify', { question: 'Question ?' })
-  if ((await answerOf('srq-non-gere')).error?.code !== -32601) throw new Error('Une demande non gérée doit être refusée tout de suite.')
   ask('srq-fenetre', 'terminal.read')
-  if ((await answerOf('srq-fenetre')).error?.code !== 4404) throw new Error('Une demande de fenêtre doit répondre 4404.')
+  await delay(600)
+  if (clientResponses.has('srq-non-gere') || clientResponses.has('srq-fenetre')) throw new Error('Une demande non gérée a reçu une réponse.')
   // A request left open comes back when the session resumes.
   openRequests = [{ id: 'srq-reprise', method: 'vault.code', params: { session_id: 'chat-nova', site: 'reprise.test' } }]
   await page.locator('[data-bot=nova]').click()
@@ -1849,15 +1888,15 @@ try {
 
   // CDP vault: bots API on 4333, local window on 4332, gateway never the recipient.
   const vaultCall = async (action, timeout = 10_000) => {
-    const response = await fetch(`http://127.0.0.1:4333/v1/${action}`, {
+    const response = await fetch(`${E2E_VAULT_ORIGIN}/v1/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet-steam' }),
       signal: AbortSignal.timeout(timeout),
     })
     const raw = await response.text()
     return { httpStatus: response.status, body: JSON.parse(raw), raw }
   }
-  if ((await fetch('http://127.0.0.1:4332/api/browser-vault/events')).status !== 401) throw new Error('Les demandes du coffre sont lisibles sans session.')
-  const missingTarget = await fetch('http://127.0.0.1:4333/v1/save', {
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/browser-vault/events`)).status !== 401) throw new Error('Les demandes du coffre sont lisibles sans session.')
+  const missingTarget = await fetch(`${E2E_VAULT_ORIGIN}/v1/save`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion' }),
   })
   if (missingTarget.status !== 400 || (await missingTarget.json()).error !== 'target_required') throw new Error('Un appel sans targetId doit être refusé.')
@@ -1877,16 +1916,16 @@ try {
   // Stored in the keychain (disposable here), reserved for the bot that asked for it.
   const keychainDump = await execFileAsync('/usr/bin/security', ['dump-keychain', BROWSER_VAULT_KEYCHAIN])
   if (!keychainDump.stdout.includes('HermesBot') || !keychainDump.stdout.includes('"crtr"<uint32>="HBot"') || keychainDump.stdout.includes(BROWSER_SECRET)) throw new Error('Identifiant absent du trousseau.')
-  const otherBot = await fetch('http://127.0.0.1:4333/v1/fill', {
+  const otherBot = await fetch(`${E2E_VAULT_ORIGIN}/v1/fill`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
   })
   if (otherBot.status !== 403 || (await otherBot.json()).error !== 'bot_not_allowed') throw new Error('Un autre bot utilise un identifiant qui ne lui est pas réservé.')
-  const otherList = await fetch('http://127.0.0.1:4333/v1/list', {
+  const otherList = await fetch(`${E2E_VAULT_ORIGIN}/v1/list`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova' }),
   })
   if ((await otherList.json()).entries?.length !== 0) throw new Error('Un bot voit les identifiants réservés à un autre.')
   // A bot cannot authorize itself through the app API: token required, file in 0600.
-  const selfGrant = (headers) => fetch('http://127.0.0.1:4333/admin/v1/entries', {
+  const selfGrant = (headers) => fetch(`${E2E_VAULT_ORIGIN}/admin/v1/entries`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({ origin: 'https://store.steampowered.com', identifier: 'steam-test', bots: ['*'] }),
   })
@@ -1894,21 +1933,21 @@ try {
     const refused = await selfGrant(headers)
     if (refused.status !== 403 || (await refused.json()).error !== 'admin_forbidden') throw new Error('API d’administration du coffre ouverte sans jeton.')
   }
-  if ((await fetch('http://127.0.0.1:4333/admin/v1/entries')).status !== 403) throw new Error('Liste d’administration lisible sans jeton.')
+  if ((await fetch(`${E2E_VAULT_ORIGIN}/admin/v1/entries`)).status !== 403) throw new Error('Liste d’administration lisible sans jeton.')
   // Even with the token (readable by a bot of the same account), a write requires the user's Hermes session.
   const stolenToken = { Authorization: `Bearer ${readFileSync(BROWSER_VAULT_TOKEN, 'utf8').trim()}` }
   for (const headers of [stolenToken, { ...stolenToken, 'X-Hermes-Cookie': 'hermes_session=faux' }]) {
     const refused = await selfGrant(headers)
     if (refused.status !== 403 || (await refused.json()).error !== 'user_session_required') throw new Error('Écriture du coffre acceptée sans session Hermes.')
   }
-  if ((await fetch('http://127.0.0.1:4333/admin/v1/entries', { headers: stolenToken })).status !== 200) throw new Error('Lecture des métadonnées refusée avec le jeton.')
+  if ((await fetch(`${E2E_VAULT_ORIGIN}/admin/v1/entries`, { headers: stolenToken })).status !== 200) throw new Error('Lecture des métadonnées refusée avec le jeton.')
   if (((await import('node:fs')).statSync(BROWSER_VAULT_TOKEN).mode & 0o777) !== 0o600) throw new Error('Jeton du coffre lisible par d’autres comptes.')
   const cliListed = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'list', '--bot', 'orion'], {
-    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
+    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: E2E_VAULT_PORT },
   })
   if (JSON.parse(cliListed.stdout).entries?.[0]?.identifier !== 'steam-test' || cliListed.stdout.includes(BROWSER_SECRET)) throw new Error('CLI du coffre CDP incorrect.')
   const cliFilled = await execFileAsync(process.execPath, ['scripts/browser-vault.mjs', 'fill', '--bot', 'orion', '--target', 'onglet-steam'], {
-    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' },
+    cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: E2E_VAULT_PORT },
   })
   if (JSON.parse(cliFilled.stdout).status !== 'filled' || cdpInjections.at(-1).target !== 'onglet-steam') throw new Error('CLI fill ne respecte pas le targetId.')
 
@@ -1921,13 +1960,14 @@ try {
   if (loginInjection.values.join() !== `steam-test,${BROWSER_SECRET}`) throw new Error('Les champs CDP ne reçoivent pas les identifiants.')
   if (cdpExpressions.some((expression) => expression.includes(BROWSER_SECRET))) throw new Error('Secret interpolé dans Runtime.evaluate.')
   if (filledBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le secret CDP est renvoyé au bot après fill.')
+  if (!cdpIsolatedWorlds.includes('cadre-principal')) throw new Error('Remplissage hors du monde isolé du cadre principal.')
 
   const injectionsBeforeRefusal = cdpInjections.length
   cdpUrl = 'https://example.com/login'
   const refusedBrowser = await vaultCall('fill')
   if (refusedBrowser.httpStatus !== 404 || refusedBrowser.body.error !== 'origin_not_found') throw new Error('Origine différente non refusée.')
   if (cdpInjections.length !== injectionsBeforeRefusal) throw new Error('Injection sur une origine différente.')
-  const crossOrigin = await fetch('http://127.0.0.1:4333/v1/fill', {
+  const crossOrigin = await fetch(`${E2E_VAULT_ORIGIN}/v1/fill`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: JSON.stringify({ bot: 'orion' }),
   })
   if (crossOrigin.status !== 403) throw new Error('Une page web peut appeler le service des bots.')
@@ -2026,7 +2066,7 @@ try {
   cdpUrl = 'https://comptes.exemple.org/inscription'
   const SIGNUP_LOGIN = 'inscription-test@exemple.org'
   const signupArgs = ['scripts/browser-vault.mjs', 'signup', '--bot', 'orion', '--target', 'onglet-steam', '--identifier', SIGNUP_LOGIN]
-  const cliOptions = { cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: '4333' } }
+  const cliOptions = { cwd: new URL('..', import.meta.url), env: { ...process.env, HERMESBOT_VAULT_PORT: E2E_VAULT_PORT } }
   const signingUp = execFileAsync(process.execPath, signupArgs, cliOptions)
   const signupSheet = page.locator('.browser-vault-signup')
   await signupSheet.getByText(`Orion veut créer un compte sur https://comptes.exemple.org avec ${SIGNUP_LOGIN}. Un mot de passe fort sera généré, rempli et rangé dans le coffre ; il ne passera jamais par le chat.`, { exact: true }).waitFor({ timeout: 5_000 })
@@ -2070,7 +2110,7 @@ try {
   await page.locator('.vault-form').getByRole('button', { name: 'Enregistrer' }).click()
   await vaultEntry.getByText('steam-test · Nova, Orion').waitFor({ timeout: 5_000 })
   await page.screenshot({ path: `${SCREENSHOTS}vault-settings.png` })
-  const allowedFill = await fetch('http://127.0.0.1:4333/v1/fill', {
+  const allowedFill = await fetch(`${E2E_VAULT_ORIGIN}/v1/fill`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'nova', target: 'onglet-steam' }),
   })
   if (allowedFill.status !== 200 || cdpInjections.at(-1).values.join() !== `steam-test,${BROWSER_SECRET}`) throw new Error('Mot de passe perdu après le changement de bots.')
@@ -2178,8 +2218,9 @@ try {
   if (promptCalls !== promptsBeforeMail + 1) throw new Error('Un clic sur Envoyer doit lancer un seul tour.')
   if (lastApiText !== undefined) throw new Error('Un mail validé ne doit pas porter la consigne du mode.')
   await page.getByRole('radio', { name: 'EXEC', exact: true }).click()
-  const digest = createHash('sha256').update('Bot <bot@exemple.test>\n77\nautre@exemple.test\n\nRe: Votre demande\nBonjour,\n\nTexte corrigé.').digest('hex')
-  for (const expected of ['````hermes-mail-approved', 'Id: m1', 'Draft-Id: 77', 'To: autre@exemple.test', 'Texte corrigé.', `Approved-Digest: ${digest}`]) {
+  // The thread headers shown on the card are part of what is approved (and of the digest).
+  const digest = createHash('sha256').update('Bot <bot@exemple.test>\n77\nautre@exemple.test\n\nRe: Votre demande\n<a1@exemple.test>\n<a0@exemple.test> <a1@exemple.test>\nBonjour,\n\nTexte corrigé.').digest('hex')
+  for (const expected of ['````hermes-mail-approved', 'Id: m1', 'Draft-Id: 77', 'To: autre@exemple.test', 'In-Reply-To: <a1@exemple.test>', 'References: <a0@exemple.test> <a1@exemple.test>', 'Texte corrigé.', `Approved-Digest: ${digest}`]) {
     if (!lastPromptText.includes(expected)) throw new Error(`Mail approuvé sans « ${expected} ».`)
   }
   await card.waitFor({ state: 'detached', timeout: 3_000 })
@@ -2401,9 +2442,9 @@ try {
   if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('[SILENT]').count()) throw new Error('Un [SILENT] ajouté à une réponse est visible dans le roster.')
 
   // /api/media over HTTP: session required, extensions and paths filtered, exact Range, strict headers.
-  const sessionCookie = (await page.context().cookies('http://127.0.0.1:4332')).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
-  const media = (query, headers = {}) => fetch(`http://127.0.0.1:4332/api/media?${new URLSearchParams(query)}`, { headers: { Cookie: sessionCookie, ...headers } })
-  if ((await fetch('http://127.0.0.1:4332/api/media?profile=orion&path=%2FUsers%2Ftest%2Fvideos%2Fvideo.mp4')).status !== 401) throw new Error('/api/media répond sans session.')
+  const sessionCookie = (await page.context().cookies(`${E2E_APP_ORIGIN}`)).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+  const media = (query, headers = {}) => fetch(`${E2E_APP_ORIGIN}/api/media?${new URLSearchParams(query)}`, { headers: { Cookie: sessionCookie, ...headers } })
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/media?profile=orion&path=%2FUsers%2Ftest%2Fvideos%2Fvideo.mp4`)).status !== 401) throw new Error('/api/media répond sans session.')
   for (const [query, status] of [
     [{ profile: 'orion', path: '/Users/test/.env' }, 415],
     [{ profile: 'orion', path: '/Users/test/auth.json' }, 415],
@@ -2730,7 +2771,7 @@ try {
   // Abrupt gateway cut (code 1006): the server must survive, then sending must resume.
   for (const client of wss.clients) client.terminate()
   await delay(500)
-  if (!(await fetch('http://127.0.0.1:4332/api/health')).ok) throw new Error('Le serveur est tombé sur une fermeture 1006.')
+  if (!(await fetch(`${E2E_APP_ORIGIN}/api/health`)).ok) throw new Error('Le serveur est tombé sur une fermeture 1006.')
   const promptsBeforeReconnect = promptCalls
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Après coupure')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
@@ -2786,7 +2827,7 @@ try {
 
   // Another local process, even with the right Origin, gets nothing without a session cookie.
   const loginsBeforeForged = loginCalls
-  const forged = await fetch('http://127.0.0.1:4332/api/auth/restore', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332' } })
+  const forged = await fetch(`${E2E_APP_ORIGIN}/api/auth/restore`, { method: 'POST', headers: { Origin: `${E2E_APP_ORIGIN}` } })
   await forged.arrayBuffer()
   if (forged.status !== 404 || forged.headers.get('set-cookie') || loginCalls !== loginsBeforeForged) throw new Error(`Restauration sans cookie acceptée : HTTP ${forged.status}.`)
 
@@ -3288,8 +3329,8 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -3298,7 +3339,7 @@ try {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { if ((await fetch('http://127.0.0.1:4332/api/health')).ok) break } catch { /* server not ready */ }
+    try { if ((await fetch(`${E2E_APP_ORIGIN}/api/health`)).ok) break } catch { /* server not ready */ }
     await delay(100)
   }
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -3308,9 +3349,14 @@ try {
   if (persistedBrowser.body.entries?.[0]?.identifier !== 'steam-test' || persistedBrowser.raw.includes(BROWSER_SECRET)) throw new Error('Le coffre CDP ne survit pas au redémarrage.')
 
   // Owner of the shared Chrome: the route and the roster mark it as working, even without a Hermes turn.
-  if ((await fetch('http://127.0.0.1:4332/api/browser-turn')).status !== 401) throw new Error('Le propriétaire du Chrome est lisible sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/browser-turn`)).status !== 401) throw new Error('Le propriétaire du Chrome est lisible sans session.')
   writeFileSync(BROWSER_TOUR_OWNER_FILE, 'orion')
-  const browserTurn = await page.evaluate(async () => (await fetch('/api/browser-turn')).json())
+  // The server keeps the arbiter's answer 2 s (one run for the whole roster refresh).
+  let browserTurn = {}
+  for (let attempt = 0; attempt < 30 && browserTurn.owner !== 'orion'; attempt += 1) {
+    if (attempt) await delay(100)
+    browserTurn = await page.evaluate(async () => (await fetch('/api/browser-turn')).json())
+  }
   if (browserTurn.owner !== 'orion') throw new Error('Le serveur ne lit pas le propriétaire du Chrome partagé.')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 15_000 })
@@ -3318,7 +3364,7 @@ try {
   rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
 
   // Isolated local chat: installed model only, no tools, no request to Hermes.
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat`, { method: 'POST', headers: { Origin: `${E2E_APP_ORIGIN}`, 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
   await page.locator('[data-bot="local:ollama"]').click()
   const localBox = page.getByRole('textbox', { name: 'Message à Modèle local' })
   await localBox.waitFor({ timeout: 3_000 })
@@ -3386,9 +3432,9 @@ try {
   if (otherRequest.model !== 'autre-local:1b' || otherRequest.keep_alive !== '2m' || otherRequest.messages.length !== 5) throw new Error(`Requête après changement de modèle : ${JSON.stringify(otherRequest)}`)
   // Load and unload: the page’s origin, a session and an installed model only, nothing sent otherwise.
   const generatesBefore = localGenerateRequests.length
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat/load', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4332', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 401) throw new Error('/api/local-chat/load répond sans session.')
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat/unload', { method: 'POST', headers: { Origin: 'https://exemple.test', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 403) throw new Error('/api/local-chat/unload accepte une autre origine.')
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat/status')).status !== 401) throw new Error('/api/local-chat/status répond sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/load`, { method: 'POST', headers: { Origin: `${E2E_APP_ORIGIN}`, 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 401) throw new Error('/api/local-chat/load répond sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/unload`, { method: 'POST', headers: { Origin: 'https://exemple.test', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 403) throw new Error('/api/local-chat/unload accepte une autre origine.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/status`)).status !== 401) throw new Error('/api/local-chat/status répond sans session.')
   if (await page.evaluate(async () => (await fetch('/api/local-chat/load', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe' }) })).status) !== 404) throw new Error('Chargement d’un modèle non installé.')
   if (localGenerateRequests.length !== generatesBefore) throw new Error('Une demande refusée est partie vers Ollama.')
   // Back to the configured model and its name; nothing left in memory.
@@ -3446,12 +3492,12 @@ try {
   const afterDelete = await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())
   if (afterDelete.conversations.length !== 1 || afterDelete.conversations[0].title !== 'Deuxième conversation') throw new Error(`Suppression : ${JSON.stringify(afterDelete)}`)
   // The routes: a session, the page's origin, and messages of the local chat only.
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat/history')).status !== 401) throw new Error('/api/local-chat/history répond sans session.')
-  if ((await fetch('http://127.0.0.1:4332/api/local-chat/history', { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié ouvre l’historique local.')
-  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${afterDelete.conversations[0].id}`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié lit une conversation locale.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history`)).status !== 401) throw new Error('/api/local-chat/history répond sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié ouvre l’historique local.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${afterDelete.conversations[0].id}`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié lit une conversation locale.')
   const historyId = afterDelete.conversations[0].id
-  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'http://127.0.0.1:4332' } })).status !== 401) throw new Error('Suppression sans session.')
-  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'https://exemple.test' } })).status !== 403) throw new Error('Suppression depuis une autre origine.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: `${E2E_APP_ORIGIN}` } })).status !== 401) throw new Error('Suppression sans session.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'https://exemple.test' } })).status !== 403) throw new Error('Suppression depuis une autre origine.')
   const historyStatus = (id, body) => page.evaluate(async ([id, body]) => (await fetch(`/api/local-chat/history/${id}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, [id, body])
   if (await historyStatus('court', { messages: [{ id: 'm', role: 'user', content: 'x' }] }) !== 404) throw new Error('Identifiant de conversation invalide accepté.')
   if (await historyStatus('local-conversation-test', { messages: [{ id: 'm', role: 'system', content: 'x' }] }) !== 400) throw new Error('Rôle system accepté dans l’historique.')
@@ -3488,7 +3534,7 @@ try {
   if (existsSync(SAVED_LOGIN_FILE)) throw new Error('Case décochée : rien ne doit être enregistré.')
 
   // Demo mode: several states at once (working, done, waiting), light and dark captures.
-  await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
+  await page.goto(`${E2E_APP_ORIGIN}/?demo=1`, { waitUntil: 'domcontentloaded' })
   await page.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
   await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
   await page.locator('[data-bot=orion] img.live-avatar-motion').waitFor()
@@ -3508,7 +3554,7 @@ try {
     const response = await route.fetch()
     await route.fulfill({ response, json: { ...(await response.json()), animatedBots: [] } })
   })
-  await english.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
+  await english.goto(`${E2E_APP_ORIGIN}/?demo=1`, { waitUntil: 'domcontentloaded' })
   await english.locator('.working-strip.has-work').waitFor({ timeout: 10_000 })
   await english.getByRole('button', { name: 'Settings' }).waitFor({ timeout: 3_000 })
   await english.getByRole('button', { name: 'Activity', exact: true }).waitFor({ timeout: 3_000 })
@@ -3525,7 +3571,7 @@ try {
   await english.locator('[data-bot=orion] .bot-row-status.is-working').waitFor()
   await delay(900)
   await english.screenshot({ path: `${SCREENSHOTS}demo-english.png` })
-  await english.goto('http://127.0.0.1:4332/?demo=1&room=1', { waitUntil: 'domcontentloaded' })
+  await english.goto(`${E2E_APP_ORIGIN}/?demo=1&room=1`, { waitUntil: 'domcontentloaded' })
   await english.locator('.room-panel h1').getByText('Launch room').waitFor({ timeout: 5_000 })
   if (await english.locator('.room-member-message').count() !== 4) throw new Error('La démo du salon doit montrer quatre voix distinctes.')
   await english.getByRole('button', { name: 'Replay the live demo' }).click()
@@ -3546,7 +3592,7 @@ try {
   await chooseThemeInSettings('Clair')
   // Demo room: replayable local playback and mention targeting, with no gateway or model call.
   const roomCallsBeforeDemo = roomCalls.length
-  await page.goto('http://127.0.0.1:4332/?demo=1&room=1', { waitUntil: 'domcontentloaded' })
+  await page.goto(`${E2E_APP_ORIGIN}/?demo=1&room=1`, { waitUntil: 'domcontentloaded' })
   await page.locator('.room-panel h1').getByText('Salon de lancement').waitFor({ timeout: 5_000 })
   await page.getByRole('button', { name: 'Rejouer la démo en direct' }).click()
   await page.locator('.room-member-message').getByText('Les 128 vérifications passent.').waitFor({ timeout: 8_000 })
@@ -3561,7 +3607,7 @@ try {
   await page.locator('.room-user-message').getByText('@nova Prépare le plan').waitFor({ timeout: 5_000 })
   await page.locator('.room-notice.is-settled').waitFor({ timeout: 10_000 })
   if (roomCalls.length !== roomCallsBeforeDemo) throw new Error('La démo du salon a appelé la gateway.')
-  await page.goto('http://127.0.0.1:4332/?demo=1', { waitUntil: 'domcontentloaded' })
+  await page.goto(`${E2E_APP_ORIGIN}/?demo=1`, { waitUntil: 'domcontentloaded' })
   // Demo: the bot menu works without a gateway. Pin stays local, the other actions only change the roster on screen.
   const configureBeforeDemo = configureCalls.length
   const demoRow = page.locator('[data-bot=vega]')
@@ -3608,8 +3654,8 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: '4332', HERMES_ORIGIN: 'http://127.0.0.1:9121', OLLAMA_ORIGIN: 'http://127.0.0.1:9121',
-      BROWSER_VAULT_PORT: '4333', HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
@@ -3623,7 +3669,7 @@ try {
   for (let attempt = 0; attempt < 100 && !/\?key=/.test(localLog); attempt += 1) await delay(100)
   const localKey = /\/\?key=([A-Za-z0-9_-]{32,})/.exec(localLog)?.[1]
   if (!localKey) throw new Error(`Connexion sans mot de passe : lien absent des logs du serveur. ${localLog.slice(-400)}`)
-  const localBase = 'http://127.0.0.1:4332'
+  const localBase = `${E2E_APP_ORIGIN}`
   const localOptions = await (await fetch(`${localBase}/api/auth/options`)).json()
   if (localOptions.local?.available !== true) throw new Error(`Connexion sans mot de passe : ${JSON.stringify(localOptions.local)}`)
 
@@ -3643,7 +3689,7 @@ try {
     if ((await stranger.text()).includes(LOCAL_TOKEN)) throw new Error(`Jeton local dans la réponse de ${route}.`)
   }
   const strangerSocket = await new Promise((resolve) => {
-    const socket = new WebSocket(`ws://127.0.0.1:4332/api/ws?profile=default`, 'hermes-gateway-v1', { headers: { Origin: localBase } })
+    const socket = new WebSocket(`${E2E_APP_WS}/api/ws?profile=default`, 'hermes-gateway-v1', { headers: { Origin: localBase } })
     socket.on('open', () => { socket.close(); resolve('open') })
     socket.on('unexpected-response', (_request, response) => resolve(response.statusCode))
     socket.on('error', () => resolve('error'))
@@ -3692,6 +3738,7 @@ try {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')
   localControl.close()
+  rmSync(LOCAL_HOME, { recursive: true, force: true })
   if (vaultService) vaultService.kill('SIGTERM')
   await execFileAsync('/usr/bin/security', ['delete-keychain', BROWSER_VAULT_KEYCHAIN]).catch(() => undefined)
   rmSync(BROWSER_VAULT_KEYCHAIN, { force: true })

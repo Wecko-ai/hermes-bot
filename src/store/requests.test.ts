@@ -56,6 +56,32 @@ describe('demandes en attente', () => {
     expect(useRequestsStore.getState().serverRequests).toEqual([])
   })
 
+  it('resetRequestsStore empties server requests left open across a reconnect', () => {
+    const { addServerRequest: add, addPrompt: addPromptToStore } = useRequestsStore.getState()
+    add({ id: 'r1', method: 'approval', params: {} })
+    addPromptToStore(prompt('s1', 'p1'))
+    resetRequestsStore()
+    expect(useRequestsStore.getState().serverRequests).toEqual([])
+    expect(useRequestsStore.getState().prompts).toEqual([])
+    expect(useRequestsStore.getState().browserVaultRequests).toEqual([])
+  })
+
+  it('clearServerRequests drops cards and addServerRequest puts one back', () => {
+    const card = { id: 'r1', method: 'vault.unlock_prompt', params: { origin: 'https://example.test' } }
+    const { addServerRequest: add, removeServerRequest, clearServerRequests, addPrompt: addPromptToStore } = useRequestsStore.getState()
+    add(card)
+    addPromptToStore(prompt('s1', 'p1'))
+    clearServerRequests()
+    expect(useRequestsStore.getState().serverRequests).toEqual([])
+    expect(useRequestsStore.getState().prompts.map((item) => item.promptId)).toEqual(['p1'])
+    const emptied = useRequestsStore.getState()
+    clearServerRequests()
+    expect(useRequestsStore.getState()).toBe(emptied)
+    removeServerRequest('r1')
+    add(card)
+    expect(useRequestsStore.getState().serverRequests).toEqual([card])
+  })
+
   it('les demandes du coffre se remplacent en bloc puis se retirent une à une', () => {
     const { setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
     const base = { kind: 'save' as const, bot: 'a', origin: 'https://x', busy: false, createdAt: '' }

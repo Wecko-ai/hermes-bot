@@ -4,6 +4,7 @@ import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } f
 import type { ModelOption } from '../types'
 import { modelLabel } from '../lib/model'
 import { providerBrand } from '../lib/providers'
+import { isImeComposition } from '../lib/keyboard'
 
 interface ModelPickerProps {
   options: ModelOption[]
@@ -158,6 +159,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, un
       event.preventDefault()
       move(event.key === 'ArrowDown' ? 1 : -1)
     } else if (event.key === 'Enter') {
+      if (isImeComposition(event)) return
       event.preventDefault()
       if (active?.kind === 'model') choose(active.option)
       if (active?.kind === 'group') setGroupOpen(active.slug, !isOpen(active.slug))

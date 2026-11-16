@@ -67,7 +67,20 @@ export const useRoomStore = create<RoomState>()((set) => ({
   }),
   applySnapshot: (roomId, snapshot) => set((state) => {
     const cached = state.cache[roomId]
-    const events = mergeRoomEvents(cached?.events || [], snapshot.events, snapshot.reset || cached?.epoch !== snapshot.epoch)
+    const reset = Boolean(snapshot.reset) || cached?.epoch !== snapshot.epoch
+    const events = mergeRoomEvents(cached?.events || [], snapshot.events, reset)
+    if (
+      cached
+      && !reset
+      && !cached.loading
+      && cached.error === ''
+      && cached.cursor === snapshot.cursor
+      && cached.epoch === snapshot.epoch
+      && sameRoomIdentity(cached.room, snapshot.room)
+      && sameLog(cached.events, events)
+      && sameValue(cached.driver, snapshot.driver)
+      && sameValue(cached.context, snapshot.context)
+    ) return state
     const cache = {
       room: snapshot.room,
       driver: snapshot.driver,
@@ -91,6 +104,22 @@ export const useRoomStore = create<RoomState>()((set) => ({
   }),
   setSendFlight: (roomId, flying) => set((state) => ({ sendFlights: { ...state.sendFlights, [roomId]: flying } })),
 }))
+
+function sameValue(a: unknown, b: unknown) {
+  return a === b || JSON.stringify(a) === JSON.stringify(b)
+}
+
+function sameLog(current: RoomEvent[], next: RoomEvent[]) {
+  if (current.length !== next.length) return false
+  return (current[current.length - 1]?.seq ?? 0) === (next[next.length - 1]?.seq ?? 0)
+}
+
+function sameRoomIdentity(current: Room, next: Room) {
+  return current.updated_at === next.updated_at
+    && current.name === next.name
+    && current.latest_seq === next.latest_seq
+    && current.disbanded_at === next.disbanded_at
+}
 
 function emptyCache(room: Room): RoomCacheEntry {
   return { room, driver: null, context: null, events: [], cursor: 0, epoch: room.authority_epoch || 0, loading: true, error: '' }

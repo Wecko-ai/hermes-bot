@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import gateModule from './dictation-gate.cjs'
 
-const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, CLIENT_START_INTERVAL_MS, CLIENT_MAX_LISTEN_MS, MAX_LISTEN_MS } = gateModule
+const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS } = gateModule
 
 function clock(start = 1_000_000) {
   let time = start
@@ -11,6 +11,11 @@ function clock(start = 1_000_000) {
 const inFront = { focused: true, visible: true }
 const click = { type: 'mouseDown', button: 'left' }
 const enter = { type: 'keyDown', key: 'Enter', isAutoRepeat: false }
+
+function prepare(gate, input = click) {
+  gate.noteInput(input)
+  return gate.mayPrepare()
+}
 
 describe('dictation gate', () => {
   it('only a click, or Enter pressed once, is a gesture', () => {
@@ -35,86 +40,108 @@ describe('dictation gate', () => {
     const gate = createDictationGate({ now: clock().now })
     for (const key of 'Bonjour à tous') gate.noteInput({ type: 'keyDown', key, isAutoRepeat: false })
     gate.noteInput({ type: 'keyDown', key: 'Enter', isAutoRepeat: true })
-    expect(gate.mayPrepare()).toBe(false)
+    expect(gate.mayPrepare()).toBeNull()
   })
 
-  it('prepare only right after a gesture', () => {
+  it('prepare only right after a gesture, and the gesture is consumed', () => {
     const time = clock()
     const gate = createDictationGate({ now: time.now })
-    expect(gate.mayPrepare()).toBe(false)
+    expect(gate.mayPrepare()).toBeNull()
     gate.noteInput(click)
-    expect(gate.mayPrepare()).toBe(true)
     time.advance(GESTURE_MS)
-    expect(gate.mayPrepare()).toBe(true)
-    time.advance(1)
-    expect(gate.mayPrepare()).toBe(false)
+    const token = gate.mayPrepare()
+    expect(token).toEqual({ generation: expect.any(Number) })
+    expect(gate.mayPrepare()).toBeNull()
+    gate.noteInput(click)
+    time.advance(GESTURE_MS + 1)
+    expect(gate.mayPrepare()).toBeNull()
     gate.noteInput(enter)
-    expect(gate.mayPrepare()).toBe(true)
+    expect(gate.mayPrepare()).not.toBeNull()
   })
 
-  it('one start per accepted prepare, shortly after it', () => {
+  it('one gesture authorizes one prepare', () => {
+    const gate = createDictationGate({ now: clock().now })
+    gate.noteInput(click)
+    const token = gate.mayPrepare()
+    expect(token).not.toBeNull()
+    expect(gate.mayPrepare()).toBeNull()
+    expect(gate.armStart(token)).toBe(true)
+    expect(gate.armStart(token)).toBe(false)
+  })
+
+  it('two prepares need two gestures', () => {
+    const gate = createDictationGate({ now: clock().now })
+    gate.noteInput(click)
+    const first = gate.mayPrepare()
+    expect(gate.mayPrepare()).toBeNull()
+    gate.noteInput(enter)
+    const second = gate.mayPrepare()
+    expect(second).not.toBeNull()
+    expect(gate.armStart(first)).toBe(false)
+    expect(gate.armStart(second)).toBe(true)
+  })
+
+  it('disarm during prepare invalidates arming', () => {
+    const gate = createDictationGate({ now: clock().now })
+    const token = prepare(gate)
+    gate.disarm()
+    expect(gate.armStart(token)).toBe(false)
+    expect(gate.takeStart(inFront)).toBe(false)
+  })
+
+  it('a new gesture during prepare invalidates the token already issued', () => {
+    const gate = createDictationGate({ now: clock().now })
+    const token = prepare(gate)
+    gate.noteInput(click)
+    expect(gate.armStart(token)).toBe(false)
+    const next = gate.mayPrepare()
+    expect(gate.armStart(next)).toBe(true)
+  })
+
+  it('one start per armed prepare, shortly after it', () => {
     const time = clock()
     const gate = createDictationGate({ now: time.now })
     expect(gate.takeStart(inFront)).toBe(false)
-    gate.armStart()
+    expect(gate.armStart(null)).toBe(false)
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart(inFront)).toBe(true)
     expect(gate.takeStart(inFront)).toBe(false)
-    gate.armStart()
+    expect(gate.armStart(prepare(gate))).toBe(true)
     time.advance(START_WINDOW_MS + 1)
     expect(gate.takeStart(inFront)).toBe(false)
-    gate.armStart()
+    expect(gate.armStart(prepare(gate))).toBe(true)
     gate.disarm()
     expect(gate.takeStart(inFront)).toBe(false)
   })
 
   it('the window must be focused and visible, and a refused start uses up the right', () => {
     const gate = createDictationGate({ now: clock().now })
-    gate.armStart()
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart({ focused: false, visible: true })).toBe(false)
     expect(gate.takeStart(inFront)).toBe(false)
-    gate.armStart()
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart({ focused: true, visible: false })).toBe(false)
-    gate.armStart()
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart({ focused: 'yes', visible: true })).toBe(false)
   })
 
-  it('own server: no consent, no pacing, two minutes at most', () => {
+  it('sessions last two minutes and are not paced', () => {
     const time = clock()
-    const gate = createDictationGate({ clientMode: false, now: time.now })
-    expect(gate.needsConsent()).toBe(false)
-    expect(gate.refused()).toBe(false)
-    gate.armStart()
+    const gate = createDictationGate({ now: time.now })
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart(inFront)).toBe(true)
-    gate.armStart()
+    time.advance(1)
+    expect(gate.armStart(prepare(gate))).toBe(true)
     expect(gate.takeStart(inFront)).toBe(true)
     expect(gate.maxListenMs()).toBe(MAX_LISTEN_MS)
+    expect(MAX_LISTEN_MS).toBe(120_000)
   })
 
-  it('client mode: consent asked once per launch, never read from disk, a refusal holds', () => {
-    const gate = createDictationGate({ clientMode: true, consent: 'granted' })
-    expect(gate.needsConsent()).toBe(true)
-    gate.setConsent('granted')
-    expect(gate.needsConsent()).toBe(false)
-    expect(gate.refused()).toBe(false)
-    // A new launch is a new gate: asked again.
-    expect(createDictationGate({ clientMode: true }).needsConsent()).toBe(true)
-    const refused = createDictationGate({ clientMode: true })
-    refused.setConsent('denied')
-    expect(refused.needsConsent()).toBe(false)
-    expect(refused.refused()).toBe(true)
-  })
-
-  it('client mode: one start every 5 s at most, one minute per session', () => {
-    const time = clock()
-    const gate = createDictationGate({ clientMode: true, now: time.now })
-    gate.armStart()
-    expect(gate.takeStart(inFront)).toBe(true)
-    time.advance(CLIENT_START_INTERVAL_MS - 1)
-    gate.armStart()
-    expect(gate.takeStart(inFront)).toBe(false)
-    time.advance(1)
-    gate.armStart()
-    expect(gate.takeStart(inFront)).toBe(true)
-    expect(gate.maxListenMs()).toBe(CLIENT_MAX_LISTEN_MS)
+  it('ignores a retired client-mode option and keeps the two-minute cap', () => {
+    const gate = createDictationGate({ clientMode: true, now: clock().now })
+    expect(gate.maxListenMs()).toBe(MAX_LISTEN_MS)
+    expect(gate.needsConsent).toBeUndefined()
+    expect(gate.refused).toBeUndefined()
+    expect(gate.setConsent).toBeUndefined()
   })
 })

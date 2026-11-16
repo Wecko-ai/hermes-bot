@@ -14,6 +14,7 @@ import type { PendingPrompt } from '../lib/hermes'
 import { SubagentsPanel } from './SubagentsPanel'
 import type { SubagentEntry } from '../lib/subagent-history'
 import { backgroundSummary, type SubagentTail } from '../lib/background'
+import { isImeComposition } from '../lib/keyboard'
 
 interface ChatViewProps {
   /** The local chat is on screen: this view stays mounted, to keep its draft and position. */
@@ -157,7 +158,10 @@ export function ChatView(props: ChatViewProps) {
           <Search size={15} />
           <input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setPosition(-1) }}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') { event.preventDefault(); step(!event.shiftKey) }
+              if (event.key === 'Enter') {
+                if (isImeComposition(event)) return
+                event.preventDefault(); step(!event.shiftKey)
+              }
               else if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
             }}
             placeholder={t('chat.searchPlaceholder')} aria-label={t('chat.searchLabel')} autoFocus />
@@ -177,7 +181,7 @@ export function ChatView(props: ChatViewProps) {
         activity={props.activity}
         workText={props.workText}
         loading={props.loading}
-        onSuggestion={(text) => { void props.onSend(text, []) }}
+        onSuggestion={async (text) => (await props.onSend(text, [])) !== false}
         onOpenDocument={props.onOpenDocument}
         onOpenBot={props.onOpenBot}
       />

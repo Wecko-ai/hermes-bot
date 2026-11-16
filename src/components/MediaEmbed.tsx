@@ -20,8 +20,32 @@ interface MediaEmbedProps {
 }
 
 // Media that cannot be found: the viewer skips them. A media that eventually loads leaves the set.
+// Capped so a long session of broken paths cannot grow it for the life of the page.
+export const FAILED_MEDIA_CAP = 500
 const failedMedia = new Set<string>()
+const failedOrder: string[] = []
 const failureKey = (profile: string, path: string) => `${profile}\n${path}`
+
+export function noteMediaFailure(profile: string, path: string) {
+  const key = failureKey(profile, path)
+  if (failedMedia.has(key)) return
+  failedMedia.add(key)
+  failedOrder.push(key)
+  while (failedOrder.length > FAILED_MEDIA_CAP) {
+    const oldest = failedOrder.shift()
+    if (oldest) failedMedia.delete(oldest)
+  }
+}
+
+export function clearMediaFailure(profile: string, path: string) {
+  const key = failureKey(profile, path)
+  if (!failedMedia.delete(key)) return
+  const index = failedOrder.indexOf(key)
+  if (index >= 0) failedOrder.splice(index, 1)
+}
+
+export const failedMediaCount = () => failedMedia.size
+export const resetFailedMedia = () => { failedMedia.clear(); failedOrder.length = 0 }
 export const mediaFailed = (profile: string, media: MediaRef) => failedMedia.has(failureKey(profile, media.path))
 
 /** A bot `MEDIA:` item, read through the local server. Nothing loads directly from disk or from the outside. */
@@ -29,8 +53,8 @@ export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocumen
   const { t } = useTranslation()
   const [failed, setFailedState] = useState(false)
   const setFailed = (value: boolean) => {
-    if (value) failedMedia.add(failureKey(profile, media.path))
-    else failedMedia.delete(failureKey(profile, media.path))
+    if (value) noteMediaFailure(profile, media.path)
+    else clearMediaFailure(profile, media.path)
     setFailedState(value)
   }
   if (media.kind === 'link') {

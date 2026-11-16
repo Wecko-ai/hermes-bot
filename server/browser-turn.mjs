@@ -1,6 +1,7 @@
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { childEnv } from './child-env.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -55,20 +56,52 @@ export function browserTurnCommand(setting, username = os.userInfo().username) {
   return setting.command
 }
 
-/** Read-only call to the arbiter. Any failure means « nobody », never an error for the window. */
-export async function readBrowserTurns(argv) {
-  if (!argv?.length) return []
+const BROWSER_TURN_CACHE_MS = 2_000
+let browserTurnCache = null
+let browserTurnInflight = null
+
+/** Drops the short-lived arbiter cache. Tests use this; the server does not. */
+export function clearBrowserTurnCache() {
+  browserTurnCache = null
+  browserTurnInflight = null
+}
+
+function commandKey(argv) {
+  return argv.join('\0')
+}
+
+async function runBrowserTurn(argv) {
   try {
     const { stdout } = await execFileAsync(argv[0], argv.slice(1), {
       timeout: 4000,
       maxBuffer: 16_384,
       windowsHide: true,
-      env: process.env,
+      // The vault token must not ride along into the arbiter (often ssh).
+      env: childEnv(),
     })
     return parseBrowserTurns(stdout)
   } catch {
     return []
   }
+}
+
+/**
+ * Read-only call to the arbiter. Any failure means « nobody », never an error for the window.
+ * The same command is cached for 2s, and concurrent callers share one run.
+ */
+export async function readBrowserTurns(argv) {
+  if (!argv?.length) return []
+  const key = commandKey(argv)
+  const now = Date.now()
+  if (browserTurnCache && browserTurnCache.key === key && now - browserTurnCache.at < BROWSER_TURN_CACHE_MS) return browserTurnCache.turns
+  if (browserTurnInflight && browserTurnInflight.key === key) return browserTurnInflight.promise
+  const promise = runBrowserTurn(argv).then((turns) => {
+    browserTurnCache = { key, at: Date.now(), turns }
+    if (browserTurnInflight?.promise === promise) browserTurnInflight = null
+    return turns
+  })
+  browserTurnInflight = { key, promise }
+  return promise
 }
 
 export async function readBrowserOwners(argv) {

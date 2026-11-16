@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
-import { freshNotes, latestMessageTime, markMessageFailed, resetChatStore, resolveSyncedMessages, useChatStore, type ChatCacheEntry } from './chat'
+import { CHAT_CACHE_LIMIT, freshNotes, latestMessageTime, markMessageFailed, resetChatStore, resolveSyncedMessages, trimCachedMessages, useChatStore, type ChatCacheEntry } from './chat'
 
 const message = (id: string, createdAt: string | null = null, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id, role: 'assistant', content: id, createdAt, ...extra })
 const chat = (profile: string, extra: Partial<ActiveChat> = {}): ActiveChat => ({
@@ -22,25 +22,74 @@ describe('fusion du cache de chat', () => {
 
   it('ne remplace jamais un message récent du cache par une copie serveur plus ancienne', () => {
     const cached = entry('a', [message('old', T1), message('new', T2)])
-    expect(resolveSyncedMessages(cached, [message('old', T1)], false)).toBe(cached.messages)
+    const serverRow = message('old', T1)
+    const merged = resolveSyncedMessages(cached, [serverRow], false)
+    expect(merged.map((item) => item.id)).toEqual(['old', 'new'])
+    expect(merged[0]).toBe(serverRow)
+    expect(merged[1]).toBe(cached.messages[1])
   })
 
-  it('prend la copie serveur quand elle est aussi récente ou plus récente', () => {
+  it('prend la copie serveur quand le cache n’a rien de plus récent que ce qu’elle contient', () => {
     const cached = entry('a', [message('old', T1)])
     const server = [message('old', T1), message('new', T2)]
     expect(resolveSyncedMessages(cached, server, false)).toBe(server)
-    const same = [message('x', T1)]
-    expect(resolveSyncedMessages(cached, same, false)).toBe(same)
   })
 
-  it('garde le cache quand un tour est suivi en direct, même si le serveur est plus récent', () => {
+  it('garde une ligne du cache que le serveur n’a pas, même si les horloges sont égales', () => {
     const cached = entry('a', [message('old', T1)])
-    expect(resolveSyncedMessages(cached, [message('new', T2)], true)).toBe(cached.messages)
+    const server = [message('x', T1)]
+    expect(resolveSyncedMessages(cached, server, false).map((item) => item.id)).toEqual(['x', 'old'])
+  })
+
+  it('preserveLive garde l’objet du cache pour le même id et les lignes que seul le serveur a', () => {
+    const live = message('row-1', T2, { content: 'on screen' })
+    const stale = message('row-1', T1, { content: 'server copy' })
+    const tool = message('tool-1', T1, { role: 'tool', content: 'step' })
+    const merged = resolveSyncedMessages(entry('a', [live]), [stale, tool], true)
+    expect(merged.map((item) => item.id)).toEqual(['row-1', 'tool-1'])
+    expect(merged[0]).toBe(live)
   })
 
   it('sans cache, la copie serveur fait foi', () => {
     const server = [message('a', T1)]
     expect(resolveSyncedMessages(undefined, server, true)).toBe(server)
+  })
+
+  const FUTURE = '2099-01-01T00:00:00.000Z'
+  const PAST = '2000-01-01T00:00:00.000Z'
+
+  it('keeps server tool rows and a live cache row, whichever clock is ahead', () => {
+    const cases = [
+      { cacheTime: FUTURE, serverTime: PAST },
+      { cacheTime: PAST, serverTime: FUTURE },
+    ]
+    for (const { cacheTime, serverTime } of cases) {
+      const cachedUser = message('local-user', cacheTime, { role: 'user', content: 'Hello' })
+      const live = message('live-1', cacheTime, { content: 'Not on the server yet' })
+      const serverUser = message('row-user', serverTime, { role: 'user', content: 'Hello' })
+      const tool = message('row-tool', serverTime, { role: 'tool', content: 'ran a tool' })
+      const serverReply = message('row-reply', serverTime, { content: 'Server only reply' })
+      const withLive = resolveSyncedMessages(entry('a', [cachedUser, live]), [serverUser, tool], false)
+      expect(withLive.map((item) => item.id)).toEqual(['row-user', 'row-tool', 'live-1'])
+      const serverOnly = resolveSyncedMessages(entry('a', [cachedUser]), [serverUser, serverReply], false)
+      expect(serverOnly.map((item) => item.id)).toEqual(['row-user', 'row-reply'])
+    }
+  })
+
+  it('does not replace a cached row with a different body for the same id', () => {
+    const cachedRow = message('row-1', PAST, { content: 'kept' })
+    const serverRow = message('row-1', FUTURE, { content: 'other' })
+    expect(resolveSyncedMessages(entry('a', [cachedRow]), [serverRow], false)[0]).toBe(cachedRow)
+  })
+
+  it('trimCachedMessages keeps the last 500 messages', () => {
+    const messages = Array.from({ length: CHAT_CACHE_LIMIT + 1 }, (_, index) => message(`m${index}`))
+    const trimmed = trimCachedMessages(messages)
+    expect(trimmed).toHaveLength(CHAT_CACHE_LIMIT)
+    expect(trimmed[0].id).toBe('m1')
+    expect(trimmed.at(-1)?.id).toBe(`m${CHAT_CACHE_LIMIT}`)
+    const few = messages.slice(0, 3)
+    expect(trimCachedMessages(few)).toBe(few)
   })
 
   it('freshNotes écarte les notes déjà présentes', () => {
@@ -145,6 +194,21 @@ describe('store de conversation', () => {
     const state = useChatStore.getState()
     expect(state.messages.map((item) => item.id)).toEqual(['m'])
     expect([state.streaming, state.streamKey, state.activity]).toEqual(['', '', ''])
+  })
+
+  it('caps each cached transcript at the last 500 messages', () => {
+    const s = useChatStore.getState()
+    const many = Array.from({ length: CHAT_CACHE_LIMIT + 1 }, (_, index) => message(`m${index}`))
+    s.setCached('a', entry('a', many))
+    expect(s.getCached('a')!.messages.map((item) => item.id)[0]).toBe('m1')
+    expect(s.getCached('a')!.messages).toHaveLength(CHAT_CACHE_LIMIT)
+    s.appendCachedMessage('a', message('tail'))
+    const ids = s.getCached('a')!.messages.map((item) => item.id)
+    expect(ids).toHaveLength(CHAT_CACHE_LIMIT)
+    expect(ids[0]).toBe('m2')
+    expect(ids.at(-1)).toBe('tail')
+    s.setMessages(many)
+    expect(useChatStore.getState().messages).toHaveLength(CHAT_CACHE_LIMIT)
   })
 
   it('applySyncedChat laisse le streaming d’un tour encore en cours', () => {

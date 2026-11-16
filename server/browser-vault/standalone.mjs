@@ -5,7 +5,8 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createBrowserVault } from './service.mjs'
+import { appendAudit } from './audit.mjs'
+import { createBrowserVault, loopbackOrigin } from './service.mjs'
 import { fileSettings } from './settings.mjs'
 import { cdpOriginForBot, loadChromeTeams } from '../chrome-teams.mjs'
 
@@ -37,11 +38,17 @@ const settingsFile = process.env.HERMESBOT_VAULT_SETTINGS
   || path.join(os.homedir(), 'Library/Application Support/HermesBot/browser-vault-settings.json')
 
 // The user's Hermes session, passed by the app for each write: the gateway says whether it is valid.
-const hermesOrigin = process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120'
+// A non-loopback HERMES_ORIGIN fails closed: verifyUser never treats that host as the user.
+const hermesOrigin = loopbackOrigin(process.env.HERMES_ORIGIN || 'http://127.0.0.1:9120')
 async function verifyUser(cookie) {
-  const response = await fetch(`${hermesOrigin}/api/auth/me`, { headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(8000) })
-  await response.arrayBuffer().catch(() => undefined)
-  return response.status === 200
+  if (!hermesOrigin) return false
+  try {
+    const response = await fetch(`${hermesOrigin}/api/auth/me`, { headers: { cookie }, redirect: 'manual', signal: AbortSignal.timeout(8000) })
+    await response.arrayBuffer().catch(() => undefined)
+    return response.status === 200
+  } catch {
+    return false
+  }
 }
 
 // CDP origin: BROWSER_VAULT_CDP_ORIGIN forces a single Chrome; otherwise the teams file; otherwise 9222.
@@ -54,7 +61,7 @@ const vault = createBrowserVault({
   port: Number(process.env.BROWSER_VAULT_PORT || 4331),
   cdpOrigin: process.env.BROWSER_VAULT_CDP_ORIGIN || undefined,
   cdpOriginFor: chromeTeams ? (bot) => cdpOriginForBot(chromeTeams, bot) : undefined,
-  audit: { append: (line) => fs.appendFileSync(auditFile, `${line}\n`, { mode: 0o600 }) },
+  audit: { append: (line) => appendAudit(auditFile, line) },
   settings: fileSettings(settingsFile),
 })
 

@@ -24,6 +24,13 @@ const work = new Map<string, WorkSummary>()
 const workSeq = new Map<string, number>()
 const doneTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+function dropDoneTimer(slug: string) {
+  const timer = doneTimers.get(slug)
+  if (!timer) return
+  clearTimeout(timer)
+  doneTimers.delete(slug)
+}
+
 export interface RosterState {
   bots: Bot[]
   selected: string
@@ -60,8 +67,15 @@ export const useRosterStore = create<RosterState>()((set, get) => ({
   reconnecting: false,
   workSummaries: {},
 
-  setBots: (value) => set((state) => ({ bots: resolveUpdater(value, state.bots) })),
-  updateBot: (slug, changes) => set((state) => ({ bots: patchBot(state.bots, slug, changes) })),
+  setBots: (value) => set((state) => {
+    const bots = resolveUpdater(value, state.bots)
+    for (const bot of bots) if (bot.status === 'working') dropDoneTimer(bot.slug)
+    return { bots }
+  }),
+  updateBot: (slug, changes) => set((state) => {
+    if (changes.status === 'working') dropDoneTimer(slug)
+    return { bots: patchBot(state.bots, slug, changes) }
+  }),
   setSelected: (value) => set((state) => ({ selected: resolveUpdater(value, state.selected) })),
   setRosterLoaded: (rosterLoaded) => set({ rosterLoaded }),
   setConnected: (connected) => set({ connected }),
@@ -82,21 +96,20 @@ export const useRosterStore = create<RosterState>()((set, get) => ({
   getWorkSeq: (slug) => workSeq.get(slug) ?? 0,
   setWorkSeq: (slug, seq) => { workSeq.set(slug, seq) },
 
-  clearDoneTimer: (slug) => {
-    const timer = doneTimers.get(slug)
-    if (timer) clearTimeout(timer)
-    doneTimers.delete(slug)
-  },
+  clearDoneTimer: (slug) => { dropDoneTimer(slug) },
   markDone: (slug) => {
-    const { clearDoneTimer, updateBot } = get()
-    clearDoneTimer(slug)
+    const { updateBot } = get()
+    dropDoneTimer(slug)
     // A worker of the bot is still running: the chat turn is over, not its work.
     if (get().bots.find((bot) => bot.slug === slug)?.workerActive) {
       updateBot(slug, { status: 'working' })
       return
     }
     updateBot(slug, { status: 'done' })
-    doneTimers.set(slug, setTimeout(() => get().updateBot(slug, { status: 'idle' }), DONE_VISIBLE_MS))
+    doneTimers.set(slug, setTimeout(() => {
+      dropDoneTimer(slug)
+      if (get().bots.find((bot) => bot.slug === slug)?.status === 'done') get().updateBot(slug, { status: 'idle' })
+    }, DONE_VISIBLE_MS))
   },
 }))
 

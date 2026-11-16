@@ -5,6 +5,8 @@ import type { Bot } from '../types'
 import type { PendingRoomSend } from '../store/rooms'
 import { roomTimeline, type Room, type RoomDriverStatus, type RoomEvent, type RoomMember, type RoomMemberActivity } from '../lib/rooms'
 import { mentionIndex, mentionOptions, mentionTokenAt, resolveMentions } from '../lib/mentions'
+import { mentionKeyAction } from '../lib/room-mention'
+import { nextStick, roomSendSettled, roomStopStillCurrent } from '../lib/room-scroll'
 import { toolLabel } from '../lib/work-summary'
 import { messageDay, shortTime } from '../lib/time'
 import { BotAvatar, avatarColor } from './BotAvatar'
@@ -64,12 +66,17 @@ export function RoomView(props: RoomViewProps) {
   const [draft, setDraft] = useState(() => props.pending?.text || readDraft(room.room_id))
   const [caret, setCaret] = useState(0)
   const [menuClosed, setMenuClosed] = useState(false)
+  const [mentionIndexState, setMentionIndex] = useState(0)
   const [stopping, setStopping] = useState(false)
   const [showJump, setShowJump] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
+  const lastScrollTop = useRef(0)
+  // The room on screen now. A send started in another room must not clear this one's draft.
+  const shownRoomId = useRef(room.room_id)
+  shownRoomId.current = room.room_id
   const roomBots = useMemo(() => room.members.map((member) => bots.find((bot) => bot.slug === (member.profile || member.member_id)) || fallbackBot(member)), [room.members, bots])
   const activities = useMemo(() => driver?.member_activity || [], [driver])
   const activityByMember = useMemo(() => new Map(activities.map((activity) => [activity.member_id, activity])), [activities])
@@ -86,18 +93,23 @@ export function RoomView(props: RoomViewProps) {
   }), [roomBots, props.onOpenBot])
   const token = menuClosed ? null : mentionTokenAt(draft, caret)
   const options = token ? mentionOptions(token.query, roomBots, '', 6) : []
+  const locked = Boolean(props.pending) || props.sending
+  const menuOpen = Boolean(token && options.length > 0 && !locked)
+  const activeOption = Math.min(mentionIndexState, Math.max(0, options.length - 1))
   const addressed = resolveMentions(draft, roomBots, '')
   const targetLabel = addressed.length ? t('room.only', { names: addressed.map((bot) => bot.name).join(', ') }) : t('room.everyone')
   const working = Boolean(driver?.working || activities.length)
-  const locked = Boolean(props.pending) || props.sending
 
   useLayoutEffect(() => {
     const next = props.pending?.text || readDraft(room.room_id)
     setDraft(next)
     setCaret(next.length)
     setMenuClosed(false)
+    setMentionIndex(0)
+    setStopping(false)
     stickRef.current = true
     setShowJump(false)
+    lastScrollTop.current = 0
   }, [room.room_id])
 
   useEffect(() => {
@@ -108,8 +120,12 @@ export function RoomView(props: RoomViewProps) {
     if (!locked && !props.loading) textareaRef.current?.focus()
   }, [room.room_id, props.focusSignal, locked, props.loading])
 
+  useEffect(() => { setMentionIndex(0) }, [token?.start, token?.query])
+
   useEffect(() => {
-    if (stickRef.current) endRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
+    if (!stickRef.current) return
+    endRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
+    if (scrollRef.current) lastScrollTop.current = scrollRef.current.scrollTop
   }, [items.length, activities.length, props.loading])
 
   const updateDraft = (value: string, position: number) => {
@@ -135,34 +151,64 @@ export function RoomView(props: RoomViewProps) {
   }
 
   const submit = async () => {
+    const roomId = room.room_id
     const content = (props.pending?.text || draft).trim()
     if (!content || props.sending) return
     const sent = await props.onSend(content)
-    if (sent) {
-      setDraft('')
-      setCaret(0)
-      writeDraft(room.room_id, '')
-      requestAnimationFrame(() => textareaRef.current?.focus())
-    }
+    const settled = roomSendSettled(roomId, shownRoomId.current, sent)
+    if (settled.clearStorage) writeDraft(roomId, '')
+    if (!settled.clearField) return
+    setDraft('')
+    setCaret(0)
+    requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
   const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Escape' && token) {
+    const action = mentionKeyAction({
+      key: event.key,
+      keyCode: event.nativeEvent.keyCode,
+      composing: event.nativeEvent.isComposing,
+      shiftKey: event.shiftKey,
+      menuOpen,
+      optionCount: options.length,
+      activeIndex: activeOption,
+    })
+    if (action.type === 'move') {
+      event.preventDefault()
+      setMentionIndex(action.index)
+      return
+    }
+    if (action.type === 'pick') {
+      event.preventDefault()
+      const option = options[action.index]
+      if (option) chooseMention(option)
+      return
+    }
+    if (action.type === 'close') {
       event.preventDefault()
       setMenuClosed(true)
       return
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (action.type === 'submit') {
       event.preventDefault()
-      if (token && options.length) chooseMention(options[0])
-      else void submit()
+      void submit()
     }
   }
 
   const stop = async () => {
+    const roomId = room.room_id
     if (stopping) return
     setStopping(true)
-    try { await props.onStop() } finally { setStopping(false) }
+    try { await props.onStop() } finally { if (roomStopStillCurrent(roomId, shownRoomId.current)) setStopping(false) }
+  }
+
+  const commitStick = (deltaY: number) => {
+    const element = scrollRef.current
+    if (!element) return
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    const stuck = nextStick(stickRef.current, deltaY, distance)
+    stickRef.current = stuck
+    setShowJump((shown) => (shown === !stuck ? shown : !stuck))
   }
 
   const memberName = (memberId: string) => room.members.find((member) => member.member_id === memberId)?.display_name || memberId
@@ -208,13 +254,13 @@ export function RoomView(props: RoomViewProps) {
         <div
           className="messages-scroll room-scroll"
           ref={scrollRef}
-          onWheel={(event) => { if (event.deltaY < 0) { stickRef.current = false; setShowJump(true) } }}
+          onWheel={(event) => { if (event.deltaY < 0) commitStick(event.deltaY) }}
           onScroll={() => {
             const element = scrollRef.current
-            if (element && element.scrollHeight - element.scrollTop - element.clientHeight < 80) {
-              stickRef.current = true
-              setShowJump(false)
-            }
+            if (!element) return
+            const delta = element.scrollTop - lastScrollTop.current
+            lastScrollTop.current = element.scrollTop
+            commitStick(delta)
           }}
         >
           <MentionContext.Provider value={mentionValue}>
@@ -270,14 +316,27 @@ export function RoomView(props: RoomViewProps) {
             </div>
           </MentionContext.Provider>
         </div>
-        {showJump && <button className="jump-latest" aria-label={t('room.latest')} onClick={() => { stickRef.current = true; setShowJump(false); endRef.current?.scrollIntoView({ behavior: 'instant' }) }}><ArrowDown size={18} /></button>}
+        {showJump && <button className="jump-latest" aria-label={t('room.latest')} onClick={() => { stickRef.current = true; setShowJump(false); endRef.current?.scrollIntoView({ behavior: 'instant' }); if (scrollRef.current) lastScrollTop.current = scrollRef.current.scrollTop }}><ArrowDown size={18} /></button>}
       </div>
 
       <div className="composer-wrap room-composer-wrap">
         {props.error && <div className="room-error" role="alert"><span>{props.error}</span><button aria-label={t('room.dismissError')} onClick={props.onRefresh}><X size={14} /></button></div>}
-        {token && options.length > 0 && !locked && (
-          <div className="room-mention-menu" role="listbox" aria-label={t('room.mention')}>
-            {options.map((option) => <button key={option.bot.slug} role="option" aria-selected="false" onClick={() => chooseMention(option)}><BotAvatar bot={option.bot} size={25} /><span>{option.bot.name}</span><span>@{option.tag}</span></button>)}
+        {menuOpen && (
+          <div className="room-mention-menu" id="room-mention-menu" role="listbox" aria-label={t('room.mention')}>
+            {options.map((option, index) => (
+              <button
+                type="button"
+                key={option.bot.slug}
+                id={`room-mention-${option.bot.slug}`}
+                role="option"
+                aria-selected={index === activeOption}
+                className={index === activeOption ? 'is-active' : ''}
+                onMouseEnter={() => setMentionIndex(index)}
+                onMouseDown={(event) => { event.preventDefault(); chooseMention(option) }}
+              >
+                <BotAvatar bot={option.bot} size={25} /><span>{option.bot.name}</span><span>@{option.tag}</span>
+              </button>
+            ))}
           </div>
         )}
         <div className="room-routing" title={targetLabel}><UsersRound size={13} /><span>{targetLabel}</span></div>
@@ -288,6 +347,9 @@ export function RoomView(props: RoomViewProps) {
             disabled={locked || props.loading}
             rows={1}
             aria-label={t('room.messageLabel')}
+            aria-expanded={menuOpen}
+            aria-controls={menuOpen ? 'room-mention-menu' : undefined}
+            aria-activedescendant={menuOpen ? `room-mention-${options[activeOption].bot.slug}` : undefined}
             placeholder={addressed.length ? t('room.messageTarget', { names: addressed.map((bot) => bot.name).join(', ') }) : t('room.messageEveryone')}
             onChange={(event) => updateDraft(event.target.value, event.target.selectionStart)}
             onSelect={(event) => setCaret(event.currentTarget.selectionStart)}

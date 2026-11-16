@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
@@ -12,7 +12,7 @@ import type { AgentProcess } from './lib/agent-process'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel } from './store'
-import { createRoom, listRooms, loadRoomCapabilities, readRoom, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
+import { createRoom, listRooms, loadRoomCapabilities, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
 import { modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
@@ -48,7 +48,12 @@ import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
 import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { noteTurnEvent, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
+import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
+import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
+
+const MemoSidebar = memo(Sidebar)
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 const DEMO_ROOM = DEMO && new URLSearchParams(location.search).get('room') === '1'
@@ -127,6 +132,17 @@ export default function App() {
   /** Stale-request guard: only the latest re-read of a Bot Chat applies. */
   const chatRequestRef = useRef(0)
   const initializedRef = useRef(false)
+  /** Off-screen streaming text, keyed by session id, used when a completion arrives with empty text. */
+  const backgroundStreams = useRef(new Map<string, string>())
+  /** Profiles with a send between the click and the last await. Checked before any await. */
+  const sendsInFlight = useRef(new Set<string>())
+  /** Latest Stop per session, so a finished stop does not clear a newer one. */
+  const stopTickets = useRef(new Map<string, number>())
+  /** Latest model-list request. A late answer for another bot is dropped. */
+  const modelRequestRef = useRef(0)
+  const syncChatRef = useRef<(profile: string, resumed?: boolean) => Promise<void> | void>(() => undefined)
+  /** One in-flight audience read per bot, so a late history result cannot classify the next turn. */
+  const turnAudience = useRef(new Map<string, number>())
 
   const [auth, setAuth] = useState<'checking' | 'login' | 'ready'>(DEMO ? 'ready' : 'checking')
   const [authError, setAuthError] = useState('')
@@ -288,12 +304,18 @@ export default function App() {
         if (owner?.status === 'waiting') updateBot(owner.slug, { status: 'working' })
         return
       }
-      // A finished turn waits for nothing.
-      if (event.type === 'message.complete' && event.session_id) {
+      // The fanout dropped this socket's subscription. Resume re-attaches it; the socket itself stays up.
+      if (event.type === 'session.replay_gap' && replayGapResumes(event.session_id, currentSession) && current) {
+        void syncChatRef.current(current.profile)
+        return
+      }
+      // A cancelled or replaced queued admission is a message.complete that does not end the running turn.
+      const turnEnded = event.type !== 'message.complete' || isRunningTurnEnd(event)
+      if (turnEnded && event.type === 'message.complete' && event.session_id) {
         clearSessionPrompts(event.session_id)
       }
       const workOwner = isCurrent && current ? current.profile : event.session_id ? useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)?.slug : undefined
-      if (workOwner) {
+      if (workOwner && turnEnded) {
         applyWork(workOwner, event)
         noteTurnEvent(workOwner, event)
       }
@@ -317,16 +339,33 @@ export default function App() {
           if (owner.status !== 'working') updateBot(owner.slug, { status: 'working' })
         }
       }
-      if (event.type === 'message.complete' && event.session_id && !isCurrent) {
+      if (event.type === 'message.start' && event.session_id) backgroundStreams.current.delete(event.session_id)
+      if (!isCurrent && event.session_id && event.type === 'message.delta') {
+        appendSessionStream(backgroundStreams.current, event.session_id, typeof payload.text === 'string' ? payload.text : '')
+      }
+      if (!isCurrent && event.session_id && event.type === 'message.interim') backgroundStreams.current.set(event.session_id, '')
+      if (event.type === 'message.complete' && event.session_id && !isCurrent && turnEnded) {
         const owner = useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)
-        const finalText = typeof payload.text === 'string' ? payload.text : ''
+        const finalText = completedText(payload.text, takeSessionStream(backgroundStreams.current, event.session_id))
         const visibleText = withoutSilentMarkers(finalText)
         if (owner && owner.slug !== useRosterStore.getState().selected) {
           const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
-          appendCachedMessage(owner.slug, {
-            id: `background-${Date.now()}`, role: meaningful ? 'assistant' : 'system', content: meaningful ? visibleText : finalText || '[NO_REPLY]', createdAt: new Date().toISOString(), technical: !meaningful,
-          })
+          const status = typeof payload.status === 'string' ? payload.status : ''
+          if (meaningful) {
+            appendCachedMessage(owner.slug, {
+              id: `background-${Date.now()}`, role: 'assistant', content: visibleText, createdAt: new Date().toISOString(),
+            })
+          } else if (finalText.trim()) {
+            appendCachedMessage(owner.slug, {
+              id: `background-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true,
+            })
+          } else if (status === 'interrupted') {
+            appendCachedMessage(owner.slug, {
+              id: `background-${Date.now()}`, role: 'system', content: i18n.t('app.turnInterrupted'), createdAt: new Date().toISOString(),
+            })
+          }
           updateCachedChat(owner.slug, { running: false })
+          noteTurnSilence(owner.slug, finalText)
           markDone(owner.slug)
           const finishedAt = new Date().toISOString()
           // While a worker is running, the unread mark waits for the re-read that sees the bot stopped.
@@ -366,12 +405,16 @@ export default function App() {
       }
       if (event.type === 'tool.complete') setActivity('')
       // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
-      if (event.type === 'message.interim') setStreaming('')
-      if (event.type === 'message.complete') {
+      if (event.type === 'message.interim') {
+        setStreaming('')
+        if (current.sessionId) backgroundStreams.current.set(current.sessionId, '')
+      }
+      if (event.type === 'message.complete' && turnEnded) {
         const status = typeof payload.status === 'string' ? payload.status : 'complete'
         const finalUsage = parseUsage(payload.usage)
         if (finalUsage) setUsage((value) => mergeUsage(value, finalUsage))
-        const finalText = typeof payload.text === 'string' && payload.text.trim() ? payload.text : useChatStore.getState().streaming
+        const buffered = current.sessionId ? takeSessionStream(backgroundStreams.current, current.sessionId) : ''
+        const finalText = completedText(payload.text, useChatStore.getState().streaming || buffered)
         const visibleText = withoutSilentMarkers(finalText)
         const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
         if (meaningful) {
@@ -404,6 +447,7 @@ export default function App() {
         setRunning(false)
         updateCachedChat(current.profile, { running: false })
         setActivity('')
+        noteTurnSilence(current.profile, finalText)
         markDone(current.profile)
         if (event.execution_generation) setActiveChat({ ...current, executionGeneration: event.execution_generation, running: false })
       }
@@ -449,9 +493,10 @@ export default function App() {
       if (beating || document.hidden || !useRosterStore.getState().connected || useRosterStore.getState().reconnecting) return
       beating = true
       const generation = client.generation
-      client.request('gateway.ping', {}, HEARTBEAT_TIMEOUT_MS).catch(() => {
+      client.request('gateway.ping', {}, HEARTBEAT_TIMEOUT_MS).catch((error: unknown) => {
         // A socket replaced meanwhile is not the one that went silent.
-        if (client.generation !== generation) return
+        // A JSON-RPC error result is not a dead socket: only a timeout or a transport error closes it.
+        if (client.generation !== generation || !heartbeatFailureClosesSocket(error)) return
         client.close()
         setConnected(false)
       }).finally(() => { beating = false })
@@ -470,7 +515,7 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready' || typeof Notification === 'undefined') return
     if (getSettings().notifications && Notification.permission === 'default') void Notification.requestPermission()
-    const notify = (slug: string, kind: NotificationKind) => {
+    const show = (slug: string, kind: NotificationKind) => {
       const viewing = !localOpenRef.current && !useRoomStore.getState().selectedRoomId && useRosterStore.getState().selected === slug
       if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
       const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
@@ -489,6 +534,49 @@ export default function App() {
         if (target) selectBotRef.current(target)
         notification.close()
       }
+    }
+    // message.start carries no prompt text. The user row of this turn is read before a finished-turn
+    // notification, and a previous turn's flag is never reused. Questions and approvals do not wait on it.
+    const readTurnEnds = async (slug: string) => {
+      if (!useRosterStore.getState().connected) return null
+      const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+      const sessionId = bot?.sessionId || getCached(slug)?.chat.sessionId
+      if (!sessionId) return null
+      const fromHistory = async () => {
+        const history = await client.request('session.history', { profile: slug, session_id: sessionId })
+        const messages = Array.isArray(history?.messages) ? history.messages : []
+        return turnEndsFromRows(messages)
+      }
+      const fromEvents = async () => {
+        const { events } = await loadSessionEvents(client, slug, sessionId, getWorkSeq(slug))
+        return turnEndsFromRows(events)
+      }
+      try {
+        const history = await fromHistory()
+        if (history.input) return history
+        try {
+          const events = await fromEvents()
+          return { input: events.input, reply: history.reply ?? events.reply }
+        } catch {
+          return history
+        }
+      } catch {
+        try { return await fromEvents() } catch { return null }
+      }
+    }
+    const notify = (slug: string, kind: NotificationKind) => {
+      if (kind !== 'done') {
+        show(slug, kind)
+        return
+      }
+      const ticket = (turnAudience.current.get(slug) ?? 0) + 1
+      turnAudience.current.set(slug, ticket)
+      void readTurnEnds(slug).then((ends) => {
+        if (turnAudience.current.get(slug) !== ticket) return
+        if (!ends) noteTurnInput(slug, null, null)
+        else noteTurnInput(slug, ends.input, ends.reply)
+        show(slug, 'done')
+      })
     }
     const unsubscribeRoster = useRosterStore.subscribe((state, previous) => {
       if (state.bots === previous.bots) return
@@ -555,7 +643,7 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
     const timer = setInterval(() => {
-      if (document.hidden) return
+      if (document.hidden || !useRosterStore.getState().connected) return
       loadRoster(client).then((roster) => {
         setBots((current) => mergeRoster(current, roster.bots, useRosterStore.getState().selected, (slug) => getCached(slug)?.chat.running === true))
       }).catch(() => { /* the connection is reported by the sidebar footer */ })
@@ -573,7 +661,7 @@ export default function App() {
     let lastPoll = 0
     const poll = (announced = false) => {
       const bots = useRosterStore.getState().bots
-      if (busy || bots.length === 0) return
+      if (busy || bots.length === 0 || !useRosterStore.getState().connected) return
       if (document.hidden && !announced && !watchWhileHidden(bots)) return
       busy = true
       lastPoll = Date.now()
@@ -583,6 +671,8 @@ export default function App() {
           const live = liveTurnStatus(statuses.get(bot.sessionId))
           const busyNow = bot.status === 'working' || bot.status === 'thinking'
           if (live === 'working' && !busyNow) {
+            // A new turn: the previous turn's audience flag must not decide this one.
+            forgetTurn(bot.slug)
             clearDoneTimer(bot.slug)
             updateBot(bot.slug, { status: 'working' })
           } else if (live === 'waiting' && bot.status !== 'waiting') {
@@ -606,16 +696,19 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
     let busy = false
-    const read = (profiles: string[]) => loadBackgroundWork(client, profiles).then(({ counts, answered }) => {
-      for (const slug of answered) {
-        const next = counts.get(slug)
-        const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
-        if (bot && !sameBackground(bot.background, next)) updateBot(slug, { background: hasBackground(next) ? next : undefined })
-      }
-    })
+    const read = (profiles: string[]) => {
+      if (!useRosterStore.getState().connected) return Promise.resolve()
+      return loadBackgroundWork(client, profiles).then(({ counts, answered }) => {
+        for (const slug of answered) {
+          const next = counts.get(slug)
+          const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+          if (bot && !sameBackground(bot.background, next)) updateBot(slug, { background: hasBackground(next) ? next : undefined })
+        }
+      })
+    }
     const poll = () => {
       const profiles = useRosterStore.getState().bots.map((bot) => bot.slug)
-      if (busy || document.hidden || profiles.length === 0) return
+      if (busy || document.hidden || profiles.length === 0 || !useRosterStore.getState().connected) return
       busy = true
       read(profiles).finally(() => { busy = false })
     }
@@ -645,7 +738,7 @@ export default function App() {
     let busy = false
     const chat = { profile: openProfile, sessionId: openSession }
     const refresh = () => {
-      if (busy || document.hidden) return
+      if (busy || document.hidden || !useRosterStore.getState().connected) return
       busy = true
       loadChatBackground(client, chat).then(({ processes, agentProcesses, subagents }) => {
         if (stopped) return
@@ -684,7 +777,7 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready') return
     const timer = setInterval(() => {
-      if (document.hidden) return
+      if (document.hidden || !useRosterStore.getState().connected) return
       for (const bot of useRosterStore.getState().bots) {
         if ((bot.status !== 'working' && bot.status !== 'thinking') || !bot.sessionId) continue
         // A chat already open on this socket receives its events live.
@@ -701,13 +794,14 @@ export default function App() {
     return () => clearInterval(timer)
   }, [auth, client])
 
+  const headerUsageSession = activeChat?.sessionId
   useEffect(() => {
     const chat = useChatStore.getState().activeChat
-    if (!showUsage || !chat || DEMO) return
+    if (!showUsage || !chat || DEMO || chat.sessionId !== headerUsageSession) return
     loadUsage(client, chat).then((next) => {
       if (useChatStore.getState().activeChat?.sessionId === chat.sessionId) setUsage(next)
     }).catch(() => setUsage(null))
-  }, [showUsage, selected, chatLoading, client])
+  }, [showUsage, selected, chatLoading, client, headerUsageSession])
 
   const publishDemoRoom = (room: Room, events: RoomEvent[], driver: RoomDriverStatus) => {
     const latestSeq = events.at(-1)?.seq || 0
@@ -730,7 +824,7 @@ export default function App() {
 
   /** Reads the room list and the driver's capabilities independently of individual Bot Chats. */
   const refreshRooms = async () => {
-    if (DEMO) return
+    if (DEMO || !useRosterStore.getState().connected) return
     const ticket = ++roomIndexRequestRef.current
     if (useRoomStore.getState().support === 'unknown') setSupport('loading')
     try {
@@ -755,7 +849,7 @@ export default function App() {
 
   /** Incremental state + log read. A per-room ticket fences late answers after reconnects or authority changes. */
   const refreshRoom = async (roomId: string) => {
-    if (DEMO || !roomId || roomBusyRef.current.has(roomId)) return
+    if (DEMO || !roomId || roomBusyRef.current.has(roomId) || !useRosterStore.getState().connected) return
     roomBusyRef.current.add(roomId)
     const ticket = (roomRequestRef.current.get(roomId) || 0) + 1
     roomRequestRef.current.set(roomId, ticket)
@@ -765,6 +859,8 @@ export default function App() {
       const snapshot = await readRoom(client, roomId, cached?.cursor || 0, cached?.epoch)
       if (roomRequestRef.current.get(roomId) !== ticket) return
       applySnapshot(roomId, snapshot)
+      // The log stopped advancing (an event larger than one page): say so instead of polling it forever.
+      if (snapshot.error === ROOM_LOG_STALLED) setRoomError(roomId, i18n.t('room.logStalled'))
     } catch {
       if (roomRequestRef.current.get(roomId) === ticket) setRoomError(roomId, i18n.t('room.loadFailed'))
     } finally {
@@ -792,7 +888,7 @@ export default function App() {
       if (roomId && !document.hidden) void refreshRoom(roomId)
     }, ROOM_POLL_MS)
     const unsubscribe = client.onEvent((event) => {
-      if (event.type !== 'groups.changed') return
+      if (event.type !== 'groups.changed' || !useRosterStore.getState().connected) return
       const ids = Array.isArray(event.payload?.room_ids) ? event.payload.room_ids : []
       const selectedId = useRoomStore.getState().selectedRoomId
       if (selectedId && (!ids.length || ids.includes(selectedId))) void refreshRoom(selectedId)
@@ -859,10 +955,15 @@ export default function App() {
   const sendOpenRoom = async (content: string): Promise<boolean> => {
     const roomId = useRoomStore.getState().selectedRoomId
     const room = useRoomStore.getState().cache[roomId]?.room
-    if (!roomId || !room || useRoomStore.getState().sendFlights[roomId]) return false
-    const existing = useRoomStore.getState().pendingSends[roomId]
-    const pending = existing || { eventId: crypto.randomUUID(), threadId: crypto.randomUUID(), text: content }
-    if (existing && existing.text !== content) return false
+    if (!roomId || !room) return false
+    // Same text as an unconfirmed send: retry with the same event_id. New text: a new event, unless one is in flight.
+    const plan = planRoomSend(content, useRoomStore.getState().pendingSends[roomId], Boolean(useRoomStore.getState().sendFlights[roomId]))
+    if (plan.status === 'previous-still-sending') {
+      setRoomError(roomId, i18n.t('room.previousStillSending'))
+      return false
+    }
+    if (plan.status !== 'send') return false
+    const pending = plan.pending
     setPendingSend(roomId, pending)
     setSendFlight(roomId, true)
     setRoomError(roomId, '')
@@ -1072,6 +1173,8 @@ export default function App() {
     if (DEMO || useRosterStore.getState().reconnecting) return
     setReconnecting(true)
     setNotice('')
+    // Cards answered into a dropped socket are dropped by the gateway. Drop them here; resume puts back what is still open.
+    useRequestsStore.getState().clearServerRequests()
     try {
       await window.hermesBot?.restartTunnel()
       const session = await fetch('/api/auth/me', { credentials: 'same-origin' })
@@ -1109,17 +1212,32 @@ export default function App() {
   }
 
   reconnectRef.current = reconnect
+  syncChatRef.current = syncChat
 
   useEffect(() => {
     if (!selected || DEMO) return
     const profile = selected
+    const previous = useChatStore.getState()
+    if (previous.activeChat && previous.activeChat.profile !== profile && previous.activeChat.sessionId && previous.streaming) {
+      backgroundStreams.current.set(previous.activeChat.sessionId, previous.streaming)
+    }
     enterProfile(profile)
+    const sessionId = getCached(profile)?.chat.sessionId
+    const seeded = sessionId ? backgroundStreams.current.get(sessionId) ?? '' : ''
+    if (seeded) {
+      setStreaming(seeded)
+      if (sessionId) backgroundStreams.current.delete(sessionId)
+    }
     setModelQuery(null)
     setMobileOpen(false)
     void syncChat(profile)
   }, [selected, client])
 
   const selectBot = (bot: Bot) => {
+    const leaving = useChatStore.getState()
+    if (leaving.activeChat && leaving.activeChat.profile !== bot.slug && leaving.activeChat.sessionId && leaving.streaming) {
+      backgroundStreams.current.set(leaving.activeChat.sessionId, leaving.streaming)
+    }
     closeRoom()
     const wasLocal = localOpenRef.current
     localOpenRef.current = bot.slug === LOCAL_CHAT_SLUG
@@ -1178,65 +1296,99 @@ export default function App() {
       return true
     }
     let chat = useChatStore.getState().activeChat
-    if (!chat || chat.profile !== selected) return false
-    // A fresh socket is subscribed to nothing: without resuming, prompt.submit answers permission_denied.
+    const profile = chat?.profile
+    if (!chat || !profile || !stillOnProfile(useRosterStore.getState().selected, profile)) return false
+    if (!claimSend(sendsInFlight.current, profile)) return false
+    const onScreen = () => stillOnProfile(useRosterStore.getState().selected, profile)
     try {
-      await client.connect()
-      if (chat.socketGeneration !== client.generation) {
-        const reopened = await openChat(client, chat.profile, chat.sessionId)
-        chat = reopened.chat
-        replaceSessionPrompts(chat.sessionId, reopened.prompts)
-        setActiveChat(chat)
-        updateCachedChat(chat.profile, chat)
+      // A fresh socket is subscribed to nothing: without resuming, prompt.submit answers permission_denied.
+      try {
+        await client.connect()
+        if (chat.socketGeneration !== client.generation) {
+          const reopened = await openChat(client, chat.profile, chat.sessionId)
+          chat = reopened.chat
+          replaceSessionPrompts(chat.sessionId, reopened.prompts)
+          updateCachedChat(profile, chat)
+          if (onScreen()) setActiveChat(chat)
+        }
+      } catch (error) {
+        if (onScreen()) setNotice(error instanceof Error ? error.message : i18n.t('app.connectFailed'))
+        return false
       }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : i18n.t('app.connectFailed'))
-      return false
+      const runningNow = onScreen() ? useChatStore.getState().running : getCached(profile)?.chat.running === true
+      if (sendBlockedWhileRunning(runningNow, delivery)) return false
+      const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
+      clearDoneTimer(profile)
+      const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(runningNow ? { delivery: delivery as 'queue' | 'priority' } : {}) }
+      if (onScreen()) setMessages((items) => [...items, userMessage])
+      appendCachedMessage(profile, userMessage)
+      if (runningNow) return await queueTurn(chat, text, attachments, userMessage, mode, caveman, delivery === 'priority')
+      updateCachedChat(profile, { running: true })
+      updateBot(profile, { preview: text, timestamp: now, status: 'working' })
+      if (onScreen()) {
+        setRunning(true)
+        setActivity('')
+      }
+      try {
+        const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
+        if (onScreen()) setActivity('')
+        const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, profile)
+        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: cavemanApiText(prompt, modeApiText(prompt, mode), caveman) })
+        updateCachedChat(profile, { ...submitted, running: true })
+        if (onScreen()) {
+          const open = useChatStore.getState().activeChat
+          if (!open || open.sessionId === submitted.sessionId) setActiveChat({ ...(open ?? submitted), ...submitted, running: true })
+        }
+        return true
+      } catch (error) {
+        if (onScreen()) {
+          setRunning(false)
+          setActivity('')
+        }
+        updateCachedChat(profile, { running: false })
+        updateBot(profile, { status: 'idle' })
+        markSendFailed(profile, userMessage, error)
+        return false
+      }
+    } finally {
+      releaseSend(sendsInFlight.current, profile)
     }
-    // During a turn, the composer only lets a queued or priority message through (Wait keeps the draft).
-    if (running && delivery !== 'queue' && delivery !== 'priority') return false
-    const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
-    clearDoneTimer(selected)
-    const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(running ? { delivery: delivery as 'queue' | 'priority' } : {}) }
-    setMessages((items) => [...items, userMessage])
-    appendCachedMessage(selected, userMessage)
-    if (running) return queueTurn(chat, text, attachments, userMessage, mode, caveman, delivery === 'priority')
-    updateCachedChat(selected, { running: true })
-    updateBot(selected, { preview: text, timestamp: now, status: 'working' })
-    setRunning(true)
-    setActivity('')
+  }
+
+  /** One resume and one retry when the socket is no longer subscribed to this session. */
+  const submitPromptResuming = async (target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string }) => {
+    const onScreen = () => stillOnProfile(useRosterStore.getState().selected, target.profile)
     try {
-      const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
-      setActivity('')
-      const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      await submitPrompt(client, chat, prompt, images, { apiText: cavemanApiText(prompt, modeApiText(prompt, mode), caveman) })
-      setActiveChat({ ...chat, running: true })
-      return true
+      await submitPrompt(client, target, prompt, images, options)
+      return target
     } catch (error) {
-      setRunning(false)
-      updateCachedChat(selected, { running: false })
-      updateBot(selected, { status: 'idle' })
-      setActivity('')
-      markSendFailed(selected, userMessage, error)
-      return false
+      if (!isPermissionDenied(error)) throw error
+      const reopened = await openChat(client, target.profile, target.sessionId)
+      replaceSessionPrompts(reopened.chat.sessionId, reopened.prompts)
+      updateCachedChat(target.profile, reopened.chat)
+      if (onScreen()) setActiveChat(reopened.chat)
+      await submitPrompt(client, reopened.chat, prompt, images, options)
+      return reopened.chat
     }
   }
 
   const markSendFailed = (profile: string, userMessage: ChatMessage, error: unknown) => {
     // An approved email whose delivery to the bot fails must become a card to approve again.
-    setMessages((items) => markMessageFailed(items, userMessage.id))
+    const onScreen = stillOnProfile(useRosterStore.getState().selected, profile)
+    if (onScreen) setMessages((items) => markMessageFailed(items, userMessage.id))
     markCachedFailed(profile, userMessage.id)
     const message: ChatMessage = { id: `error-${Date.now()}`, role: 'system', content: i18n.t('app.notSent'), createdAt: new Date().toISOString() }
-    setMessages((items) => [...items, message])
+    if (onScreen) setMessages((items) => [...items, message])
     appendCachedMessage(profile, message)
-    setNotice(error instanceof Error ? error.message : i18n.t('app.sendFailed'))
+    if (onScreen) setNotice(error instanceof Error ? error.message : i18n.t('app.sendFailed'))
   }
 
   const uploadAttachments = async (chat: ActiveChat, attachments: PendingAttachment[], userMessage?: ChatMessage, text = '') => {
     const images: { path: string; mime: string }[] = []
     const fileRefs: string[] = []
+    const onScreen = () => stillOnProfile(useRosterStore.getState().selected, chat.profile)
     for (const attachment of attachments) {
-      setActivity(i18n.t('app.sending', { name: attachment.name }))
+      if (onScreen()) setActivity(i18n.t('app.sending', { name: attachment.name }))
       const dataUrl = await readDataUrl(attachment.file)
       if (attachment.kind === 'image') images.push(await attachImageBytes(client, chat, attachment.name, dataUrl))
       else fileRefs.push(await attachFile(client, chat, attachment.name, dataUrl))
@@ -1245,7 +1397,7 @@ export default function App() {
     const paths = images.map((image) => image.path).filter(Boolean)
     if (userMessage && paths.length) {
       const changes = { content: [text, ...attachments.filter((item) => item.kind !== 'image').map(attachmentLabel)].filter(Boolean).join('\n\n'), images: paths }
-      setMessages((items) => items.map((item) => item.id === userMessage.id ? { ...item, ...changes } : item))
+      if (onScreen()) setMessages((items) => items.map((item) => item.id === userMessage.id ? { ...item, ...changes } : item))
       useChatStore.getState().patchCachedMessage(chat.profile, userMessage.id, changes)
     }
     return { images, fileRefs }
@@ -1256,23 +1408,32 @@ export default function App() {
    * the same queue with a resume instruction, then the current turn is interrupted: so it runs right after.
    */
   const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, caveman: boolean, priority: boolean) => {
+    const onScreen = () => stillOnProfile(useRosterStore.getState().selected, chat.profile)
+    // Copied before submit: a turn that ends during the await must not be interrupted as if it were this message.
+    const generation = chat.executionGeneration
     try {
       const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
-      setActivity('')
+      if (onScreen()) setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
       const modeText = cavemanApiText(prompt, modeApiText(prompt, mode), caveman)
-      await submitPrompt(client, chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
+      await submitPromptResuming(chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
       if (priority) {
-        // The generation of the current turn, read at the last `message.start`: the old one would be refused.
         const open = useChatStore.getState().activeChat
-        const current = open?.sessionId === chat.sessionId ? open : chat
-        setActivity(i18n.t('app.priorityInterrupt'))
-        // Turn already finished: the queued message goes out anyway.
-        await interruptChat(client, current).catch(() => setActivity(''))
+        const after = open?.sessionId === chat.sessionId ? open.executionGeneration : chat.executionGeneration
+        const generationToStop = interruptGenerationForPriority(generation, after)
+        if (generationToStop !== null) {
+          if (onScreen()) setActivity(i18n.t('app.priorityInterrupt'))
+          try {
+            await interruptChat(client, { ...chat, executionGeneration: generationToStop })
+          } catch (error) {
+            // stale_generation: the pre-submit turn is already gone. Do not stop the generation that replaced it.
+            if (interruptGenerationForPriority(generation, after, error) === null && onScreen()) setActivity('')
+          }
+        }
       }
       return true
     } catch (error) {
-      setActivity('')
+      if (onScreen()) setActivity('')
       markSendFailed(chat.profile, userMessage, error)
       return false
     }
@@ -1332,11 +1493,22 @@ export default function App() {
       if (DEMO) updateBot(useRosterStore.getState().selected, { status: 'idle' })
       return
     }
+    const ticket = (stopTickets.current.get(chat.sessionId) ?? 0) + 1
+    stopTickets.current.set(chat.sessionId, ticket)
+    const sessionId = chat.sessionId
+    const latest = () => stopTickets.current.get(sessionId) === ticket && useChatStore.getState().activeChat?.sessionId === sessionId
     try {
       setActivity(i18n.t('app.stopping'))
-      await interruptChat(client, chat)
+      const result = await interruptChat(client, chat)
+      if (latest() && interruptLeftSessionIdle(result)) {
+        setRunning(false)
+        updateCachedChat(chat.profile, { running: false })
+      }
     } catch (error) {
+      if (latest()) setActivity('')
       setNotice(error instanceof Error ? error.message : i18n.t('app.interruptFailed'))
+    } finally {
+      if (latest()) setActivity('')
     }
   }
 
@@ -1417,18 +1589,21 @@ export default function App() {
 
   const refreshModels = () => {
     if (DEMO) return
+    const ticket = ++modelRequestRef.current
+    const profile = useRosterStore.getState().selected
     setModelsLoading(true)
     setModelsError('')
-    const profile = selected
+    const applies = () => modelRefreshApplies(ticket, modelRequestRef.current, profile, useRosterStore.getState().selected)
     loadModelOptions(client, profile, useChatStore.getState().activeChat?.sessionId).then((result) => {
+      if (!applies()) return
       setModelOptions(result.options)
       if (result.current) setChatModel((value) => value || result.current)
       // The rows appear at once; the routes without a usable key are marked when the checks answer.
       void checkModelRoutes(client, profile, result.options.map((option) => option.provider))
-        .then((issues) => setRouteIssues({ profile, issues }))
+        .then((issues) => { if (applies()) setRouteIssues({ profile, issues }) })
     }).catch((error) => {
-      setModelsError(error instanceof Error ? error.message : i18n.t('app.modelsUnavailable'))
-    }).finally(() => setModelsLoading(false))
+      if (applies()) setModelsError(error instanceof Error ? error.message : i18n.t('app.modelsUnavailable'))
+    }).finally(() => { if (applies()) setModelsLoading(false) })
   }
 
   const selectModel = async (option: ModelOption) => {
@@ -1453,23 +1628,28 @@ export default function App() {
         ...(typeof result?.execution_generation === 'number' ? { executionGeneration: result.execution_generation } : {}),
       }
       const open = useChatStore.getState().activeChat
-      if (open?.sessionId === chat.sessionId) setActiveChat({ ...open, ...changes })
       updateCachedChat(chat.profile, changes)
-      setChatModel(option.model)
-      setModelQuery(null)
-      if (result?.deferred) setNotice(i18n.t('app.modelDeferred', { model: modelLabel(option.model) }))
+      if (open?.sessionId === chat.sessionId) {
+        setActiveChat({ ...open, ...changes })
+        setChatModel(option.model)
+        setModelQuery(null)
+        if (result?.deferred) setNotice(i18n.t('app.modelDeferred', { model: modelLabel(option.model) }))
+      }
     } catch (error) {
       setModelsError(error instanceof Error ? error.message : i18n.t('app.modelSwitchRefused'))
     }
   }
 
   const answerServerRequest = (id: string, result: Record<string, unknown>) => {
+    const card = useRequestsStore.getState().serverRequests.find((item) => item.id === id)
     try {
       client.respond(id, result)
-      removeServerRequest(id)
-    } catch {
-      setNotice(i18n.t('app.disconnectedValidate'))
+    } catch (error) {
+      if (card && !useRequestsStore.getState().serverRequests.some((item) => item.id === id)) addServerRequest(card)
+      setNotice(error instanceof Error ? error.message : i18n.t('app.disconnectedValidate'))
+      return
     }
+    removeServerRequest(id)
   }
 
   /**
@@ -1538,15 +1718,24 @@ export default function App() {
   const subagentEntries = useMemo(() => subagentHistory(messages, openSubagents, openAgentProcesses), [messages, openSubagents, openAgentProcesses])
   const openProcesses = openChatSession ? chatProcesses[openChatSession] ?? 0 : 0
   // The open conversation’s reads and events are fresher than the roster’s for this bot.
-  const openWork = chatBackground(openSubagents, openProcesses)
-  const selectedBot = rosterSelected && openWork ? { ...rosterSelected, background: mergeBackground(rosterSelected.background, openWork) } : rosterSelected
+  const openWork = useMemo(() => chatBackground(openSubagents, openProcesses), [openSubagents, openProcesses])
+  const selectedBot = useMemo(
+    () => rosterSelected && openWork ? { ...rosterSelected, background: mergeBackground(rosterSelected.background, openWork) } : rosterSelected,
+    [rosterSelected, openWork],
+  )
   const localModel = chooseLocalModel(localModels, settings.localModel)
   // The configured name belongs to the configured model: another model shows its own name.
   const localName = !localModels?.defaultModel || localModel === localModels.defaultModel ? appConfig.localChat.name : ''
-  const localBot: Bot | null = localModel ? { ...localChatBot(localModel, localName), status: localRunning ? 'working' : 'idle' } : null
+  const localBot = useMemo<Bot | null>(
+    () => localModel ? { ...localChatBot(localModel, localName), status: localRunning ? 'working' : 'idle' } : null,
+    [localModel, localName, localRunning],
+  )
   localBotRef.current = localBot
-  const shownBots = selectedBot && selectedBot !== rosterSelected ? bots.map((bot) => bot.slug === selectedBot.slug ? selectedBot : bot) : bots
-  const rosterBots = !localBot ? shownBots : [...shownBots, localBot]
+  const shownBots = useMemo(
+    () => selectedBot && selectedBot !== rosterSelected ? bots.map((bot) => bot.slug === selectedBot.slug ? selectedBot : bot) : bots,
+    [bots, selectedBot, rosterSelected],
+  )
+  const rosterBots = useMemo(() => !localBot ? shownBots : [...shownBots, localBot], [shownBots, localBot])
   const openRequest = serverRequests[0]
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
@@ -1561,8 +1750,25 @@ export default function App() {
   const seatable = roomCapabilities?.seatable_profiles
   const roomCandidateBots = bots.filter((bot) => !bot.hidden && (!seatable || seatable.includes(bot.slug)))
   const newRoomDialog = newRoomOpen && <NewRoomDialog bots={roomCandidateBots} connected={DEMO || (connected && roomSupport === 'ready')} onCreate={createNewRoom} onClose={() => setNewRoomOpen(false)} />
-  const roomPreviews = Object.fromEntries(rooms.map((room) => [room.room_id, roomPreview(roomCache[room.room_id]?.events || [])]))
-  const roomWorking = Object.fromEntries(rooms.map((room) => [room.room_id, Boolean(roomCache[room.room_id]?.driver?.working || roomCache[room.room_id]?.driver?.member_activity?.length)]))
+  const roomPreviews = useMemo(
+    () => Object.fromEntries(rooms.map((room) => [room.room_id, roomPreview(roomCache[room.room_id]?.events || [])])),
+    [rooms, roomCache],
+  )
+  const roomWorking = useMemo(
+    () => Object.fromEntries(rooms.map((room) => [room.room_id, Boolean(roomCache[room.room_id]?.driver?.working || roomCache[room.room_id]?.driver?.member_activity?.length)])),
+    [rooms, roomCache],
+  )
+  const sidebarActions = useRef({ reconnect, logout, selectBot, selectRoom, botAction })
+  sidebarActions.current = { reconnect, logout, selectBot, selectRoom, botAction }
+  const onSidebarReconnect = useCallback(() => { void sidebarActions.current.reconnect() }, [])
+  const onSidebarLogout = useCallback(() => { void sidebarActions.current.logout() }, [])
+  const onSidebarSelect = useCallback((bot: Bot) => { sidebarActions.current.selectBot(bot) }, [])
+  const onSidebarSelectRoom = useCallback((roomId: string) => { sidebarActions.current.selectRoom(roomId) }, [])
+  const onSidebarBotAction = useCallback((bot: Bot, action: BotAction) => sidebarActions.current.botAction(bot, action), [])
+  const onSidebarNewBot = useCallback(() => { setNewBotOpen(true); setMobileOpen(false) }, [])
+  const onSidebarNewRoom = useCallback(() => { setNewRoomOpen(true); setMobileOpen(false) }, [])
+  const onSidebarSettings = useCallback(() => { setSettingsTab('general') }, [])
+  const onSidebarCloseMobile = useCallback(() => { setMobileOpen(false) }, [])
 
   if (auth === 'checking') {
     return <LoadingScreen />
@@ -1576,7 +1782,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar
+      <MemoSidebar
         bots={rosterBots}
         rooms={rooms}
         selected={selectedRoomId || (localOpen ? LOCAL_CHAT_SLUG : selectedBot.slug)}
@@ -1586,18 +1792,18 @@ export default function App() {
         roomWorking={roomWorking}
         connected={connected}
         reconnecting={reconnecting}
-        onReconnect={reconnect}
-        onLogout={logout}
+        onReconnect={onSidebarReconnect}
+        onLogout={onSidebarLogout}
         workSummaries={workSummaries}
         mobileOpen={mobileOpen}
-        onCloseMobile={() => setMobileOpen(false)}
-        onSelect={selectBot}
-        onSelectRoom={selectRoom}
-        onNewBot={() => { setNewBotOpen(true); setMobileOpen(false) }}
-        onNewRoom={() => { setNewRoomOpen(true); setMobileOpen(false) }}
-        onOpenSettings={() => setSettingsTab('general')}
+        onCloseMobile={onSidebarCloseMobile}
+        onSelect={onSidebarSelect}
+        onSelectRoom={onSidebarSelectRoom}
+        onNewBot={onSidebarNewBot}
+        onNewRoom={onSidebarNewRoom}
+        onOpenSettings={onSidebarSettings}
         canManage={DEMO || connected}
-        onBotAction={botAction}
+        onBotAction={onSidebarBotAction}
         onNotice={setNotice}
       />
       <ChatView
@@ -1648,6 +1854,7 @@ export default function App() {
       />
       {openRoom && (
         <RoomView
+          key={openRoom.room_id}
           room={openRoom}
           bots={bots}
           events={openRoomCache?.events || []}
@@ -1677,6 +1884,7 @@ export default function App() {
           tabRequest={detailsTabRequest}
           loading={routinesLoading}
           running={running}
+          sessionId={activeChat?.sessionId}
           usage={usage}
           loadUsageDetails={loadUsageDetails}
           onOpenDocument={openDocument}

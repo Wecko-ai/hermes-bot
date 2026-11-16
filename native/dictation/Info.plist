@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>hermesbot-dictation</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>HermesBot listens to the microphone only while you dictate a message.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>HermesBot turns what you dictate into text with the speech recognition of macOS.</string>
+</dict>
+</plist>

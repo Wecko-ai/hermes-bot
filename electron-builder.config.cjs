@@ -1,6 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { signApp, signModeFrom } = require('./scripts/mac-sign.cjs')
+const { afterPackDarwin } = require('./electron/fuses.cjs')
 
 // A private build may ship its own settings and bot animations in private/ (ignored by git, see server/config.cjs).
 const privateConfig = (() => {
@@ -55,6 +56,7 @@ module.exports = {
     icon: macIcon,
     target: [{ target: 'dir', arch: ['arm64'] }],
     identity: null,
+    // Left off on purpose. A hardened runtime is not used on this install.
     hardenedRuntime: false,
     // A process outside the asar: the helper runs as a child of the app, which macOS names in its prompts.
     extraResources: fs.existsSync(dictationHelper) ? [{ from: dictationHelper, to: 'hermesbot-dictation' }] : [],
@@ -66,9 +68,12 @@ module.exports = {
   },
   npmRebuild: false,
   // electron-builder's own signing stays off (identity null): it would seal the whole bundle, with a code hash
-  // that changes at every build. The hook signs after packing, in the chosen mode.
-  afterPack: async (context) => {
-    if (!macSign || context.electronPlatformName !== 'darwin') return
-    signApp(path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`), macSign, appId)
-  },
+  // that changes at every build. The hook flips three Electron fuses, then signs in the chosen mode.
+  // `electronFuses` stays unset: the packager would otherwise flip the wire again after that signature.
+  afterPack: (context) => afterPackDarwin({
+    platform: context.electronPlatformName,
+    appPath: path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
+    macSign,
+    signApp: (appPath, mode) => signApp(appPath, mode, appId),
+  }),
 }

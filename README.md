@@ -192,13 +192,14 @@ All settings are optional. Each one is an environment variable, or a key of `con
 
 | Variable | Key in `config.json` | Default | Purpose |
 |---|---|---|---|
-| `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Address of the Hermes gateway |
+| `HERMES_ORIGIN` | `gatewayOrigin` | `http://127.0.0.1:9120` | Address of the Hermes gateway. Loopback only (`127.0.0.1`, `localhost`, `[::1]`): a remote gateway goes through `sshHost` |
 | `HERMES_BROWSER_ORIGIN` | `browserOrigin` | same as the gateway | `Origin` header sent to the gateway, when it only trusts its public address behind a reverse proxy |
 | `HERMES_SSH_HOST` | `sshHost` | none | SSH host alias for the tunnel to a remote gateway |
 | `HERMES_HOME` | `hermesHome` | `~/.hermes` | Home of the Hermes on this Mac, for the sign-in without a password |
-| `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat |
+| `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat. Loopback only, like the gateway |
 | `HERMESBOT_ANIMATIONS` | `animationsDir` | `animations/` in the data folder | Folder of bot animations |
 | `PORT` | | `4330` | Port of the local server |
+| | `allowRemoteGateway` | `false` | `true` lets `gatewayOrigin` and `ollamaOrigin` point to another machine (your cookies and prompts then leave this Mac; prefer the SSH tunnel) |
 
 Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) only exist in `config.json`.
 
