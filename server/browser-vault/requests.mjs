@@ -8,6 +8,8 @@ const publicRequest = (request) => ({
   origin: request.origin,
   // Sign-up only: the login the bot registers, shown on the user's card (never a password).
   ...(request.identifier ? { identifier: request.identifier } : {}),
+  // Login only: the page's federated sign-in (provider names and a boolean, see `sso.mjs`).
+  ...(request.sso ? { sso: request.sso } : {}),
   busy: request.busy,
   createdAt: request.createdAt,
 })
@@ -46,11 +48,11 @@ export class BrowserVaultRequests {
     return () => this.listeners.delete(listener)
   }
 
-  create({ kind, bot, origin, targetId, identifier }, timeoutMs) {
+  create({ kind, bot, origin, targetId, identifier, sso }, timeoutMs) {
     const id = randomUUID()
     return new Promise((resolve, reject) => {
       const request = {
-        id, kind, bot, origin, targetId, identifier, busy: false, createdAt: new Date().toISOString(),
+        id, kind, bot, origin, targetId, identifier, sso, busy: false, createdAt: new Date().toISOString(),
         deadline: Date.now() + timeoutMs, resolve, reject, timer: null,
       }
       this.pending.set(id, request)

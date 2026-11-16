@@ -9,7 +9,8 @@ import { WebSocketServer } from 'ws'
 import { BrowserVaultRequests } from './requests.mjs'
 import { createBrowserVault } from './service.mjs'
 import { generatePassword, PASSWORD_ALPHABET, PASSWORD_CLASSES } from './password.mjs'
-import { CODE_FIELD, FILL_CODE, FILL_LOGIN, FILL_SIGNUP, LOGIN_FIELDS, SIGNUP_FIELDS } from './cdp.mjs'
+import { CODE_FIELD, FEDERATED_SIGNIN, FILL_CODE, FILL_LOGIN, FILL_SIGNUP, LOGIN_FIELDS, SIGNUP_FIELDS } from './cdp.mjs'
+import { accountPageProvider, federatedSignIn, useSsoResult } from './sso.mjs'
 
 const darwin = process.platform === 'darwin' && existsSync('/usr/bin/security')
 
@@ -278,6 +279,11 @@ async function fakeChrome(state, events) {
     const reply = (result) => socket.send(JSON.stringify({ id, result }))
     if (method === 'Runtime.evaluate') {
       if (params.expression === 'window.location.origin') return reply({ result: { type: 'string', value: state.origin } })
+      if (params.expression.includes('federated sign-in')) {
+        events.push({ sso: true })
+        if (state.sso === 'throw') return reply({ exceptionDetails: { text: 'boom' } })
+        return reply({ result: { type: 'object', value: state.sso ?? { providers: [], hasPasswordField: false } } })
+      }
       return reply({ result: { type: 'object', objectId: 'champs' } })
     }
     if (method === 'Runtime.callFunctionOn' && !params.arguments) return reply({ result: { type: 'object', value: { identifier: false, passwords: state.passwords } } })
@@ -417,6 +423,201 @@ describe('coffre navigateur — création de compte', () => {
       expect(JSON.parse(missing.raw)).toEqual({ error: 'invalid_credentials' })
       expect(vault.requests.snapshot()).toEqual([])
       expect(events).toEqual([])
+    } finally {
+      await close()
+    }
+  })
+})
+
+// Page elements for the federated sign-in lookup: tag, text, attributes, sources, shadow roots, frames.
+class FakeElement {
+  constructor(tagName, fields = {}) {
+    const { attributes = {}, children = [], ...rest } = fields
+    Object.assign(this, { tagName, textContent: '', shadowRoot: null }, rest)
+    this.attributes = attributes
+    this.children = children
+  }
+  getAttribute(name) { return this.attributes[name] ?? null }
+}
+const page = (...elements) => ({ querySelectorAll: () => elements })
+const federated = (document) => new Function('document', `return ${FEDERATED_SIGNIN}`)(document)
+
+describe('coffre navigateur — connexion fédérée, repérage sur la page', () => {
+  it('bouton Google seul : google, sans champ de mot de passe', () => {
+    const button = new FakeElement('BUTTON', { textContent: '  Continue with\n  Google ' })
+    const email = new FakeInput({ tagName: 'INPUT', type: 'email' })
+    expect(federated(page(button, email))).toEqual({ providers: ['google'], hasPasswordField: false })
+  })
+
+  it('Google et mot de passe : google, avec champ de mot de passe', () => {
+    const button = new FakeElement('DIV', { attributes: { role: 'button', 'aria-label': 'Sign in with Google' } })
+    const password = new FakeInput({ tagName: 'INPUT', type: 'password' })
+    expect(federated(page(new FakeInput({ tagName: 'INPUT', type: 'email' }), password, button))).toEqual({ providers: ['google'], hasPasswordField: true })
+  })
+
+  it('aucun bouton fédéré : rien, même avec un champ de mot de passe caché ou des scripts Google sans connexion', () => {
+    const hidden = new FakeInput({ tagName: 'INPUT', type: 'password', shown: false })
+    const analytics = new FakeElement('SCRIPT', { src: 'https://www.googletagmanager.com/gtag/js?id=G-1' })
+    const signIn = new FakeElement('BUTTON', { textContent: 'Sign in with your email' })
+    const help = new FakeElement('A', { textContent: 'Google Workspace help', href: 'https://support.google.com/' })
+    expect(federated(page(hidden, analytics, signIn, help))).toEqual({ providers: [], hasPasswordField: false })
+  })
+
+  it('textes français, Apple et Microsoft, dans l’ordre de la page', () => {
+    const apple = new FakeElement('A', { textContent: 'Se connecter avec Apple' })
+    const microsoft = new FakeElement('BUTTON', { textContent: 'Continuer avec un compte Microsoft' })
+    const google = new FakeElement('BUTTON', { textContent: 'Continuer avec Google' })
+    const submit = new FakeElement('INPUT', { type: 'submit', value: 'S’inscrire avec Google' })
+    expect(federated(page(apple, microsoft, google, submit)).providers).toEqual(['apple', 'microsoft', 'google'])
+    expect(federated(page(submit)).providers).toEqual(['google'])
+  })
+
+  it('scripts, iframes et liens des fournisseurs, shadow roots et iframes de même origine', () => {
+    const gsi = new FakeElement('SCRIPT', { src: 'https://accounts.google.com/gsi/client' })
+    expect(federated(page(gsi)).providers).toEqual(['google'])
+    const appleFrame = new FakeElement('IFRAME', { src: 'https://appleid.apple.com/auth/authorize?client_id=x' })
+    expect(federated(page(appleFrame)).providers).toEqual(['apple'])
+    const microsoftLink = new FakeElement('A', { href: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize' })
+    expect(federated(page(microsoftLink)).providers).toEqual(['microsoft'])
+    const inShadow = { shadowRoot: page(new FakeElement('BUTTON', { textContent: 'Log in with Google' })) }
+    expect(federated(page(inShadow)).providers).toEqual(['google'])
+    const sameOrigin = new FakeElement('IFRAME', { src: '/login-frame', contentDocument: page(new FakeElement('BUTTON', { textContent: 'Continue with Apple' }), new FakeInput({ tagName: 'INPUT', type: 'password' })) })
+    expect(federated(page(sameOrigin))).toEqual({ providers: ['apple'], hasPasswordField: true })
+    // A cross-origin frame cannot be read: no error, nothing found inside it.
+    const crossOrigin = new FakeElement('IFRAME', { src: 'https://ads.example/frame' })
+    Object.defineProperty(crossOrigin, 'contentDocument', { get() { throw new Error('SecurityError') } })
+    expect(federated(page(crossOrigin))).toEqual({ providers: [], hasPasswordField: false })
+  })
+
+  it('accounts.google.com : la page du compte Google lui-même, même sans bouton', () => {
+    expect(accountPageProvider('https://accounts.google.com')).toBe('google')
+    expect(accountPageProvider('https://appleid.apple.com')).toBe('apple')
+    expect(accountPageProvider('https://login.live.com')).toBe('microsoft')
+    expect(accountPageProvider('https://login.exemple.org')).toBeNull()
+    expect(federatedSignIn('https://accounts.google.com', { providers: [], hasPasswordField: true })).toEqual({ provider: 'google', providers: ['google'], hasPasswordField: true, accountPage: true })
+    expect(federatedSignIn('https://accounts.google.com', null)).toMatchObject({ provider: 'google', accountPage: true })
+  })
+
+  it('ne garde que des noms de fournisseur connus venus de la page', () => {
+    expect(federatedSignIn('https://login.exemple.org', null)).toBeNull()
+    expect(federatedSignIn('https://login.exemple.org', { providers: ['<img>', 'google', 'google'], hasPasswordField: 'yes' })).toEqual({ provider: 'google', providers: ['google'], hasPasswordField: false })
+    expect(federatedSignIn('https://login.exemple.org', { providers: 'google' })).toBeNull()
+  })
+})
+
+describe('coffre navigateur — connexion fédérée, réponse au bot', () => {
+  const SITE = 'https://login.exemple.org'
+
+  async function setup({ origin = SITE, sso } = {}) {
+    const events = []
+    const lines = []
+    const chrome = await fakeChrome({ origin, passwords: 1, sso }, events)
+    const probe = http.createServer()
+    const port = await listenOn(probe)
+    await closeServer(probe)
+    const vault = createBrowserVault({
+      port, adminToken: 'x', verifyUser: async () => true, cdpOrigin: chrome.origin,
+      store: memoryStore(events), audit: { append: (line) => lines.push(line) },
+    })
+    await vault.listen()
+    const save = () => fetch(`http://127.0.0.1:${port}/v1/save`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet' }),
+    }).then(async (response) => ({ status: response.status, body: await response.json() }))
+    const pending = async () => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [request] = vault.requests.snapshot()
+        if (request) return request
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      throw new Error('no request')
+    }
+    const close = async () => { await vault.close(); await chrome.close() }
+    return { events, lines, vault, save, pending, close }
+  }
+
+  it('la demande save porte le bouton Google vu sur la page', async () => {
+    const { vault, save, pending, close } = await setup({ sso: { providers: ['google'], hasPasswordField: false } })
+    try {
+      const answer = save()
+      const request = await pending()
+      expect(request).toMatchObject({ kind: 'save', origin: SITE, sso: { provider: 'google', providers: ['google'], hasPasswordField: false } })
+      await vault.respond(request.id, { action: 'cancel' })
+      expect((await answer).body).toEqual({ status: 'cancelled', origin: SITE })
+    } finally {
+      await close()
+    }
+  })
+
+  it('sso : rend use_sso avec la consigne, ne range rien, journal save use_sso', async () => {
+    const { events, lines, vault, save, pending, close } = await setup({ sso: { providers: ['google'], hasPasswordField: true } })
+    try {
+      const answer = save()
+      await vault.respond((await pending()).id, { action: 'sso', provider: 'google' })
+      const result = await answer
+      expect(result.status).toBe(200)
+      expect(result.body).toEqual(useSsoResult(SITE, 'google'))
+      expect(result.body).toMatchObject({ status: 'use_sso', origin: SITE, provider: 'google' })
+      expect(result.body.next).toBe("The user signs in to this site with Google: click the site's 'Continue with Google' button and pick the account already signed in in this Chrome. Do not ask for a password.")
+      expect(events.some((event) => event.save || event.fill)).toBe(false)
+      expect(lines.map((line) => JSON.parse(line))).toContainEqual(expect.objectContaining({ action: 'save', bot: 'orion', origin: SITE, result: 'use_sso' }))
+    } finally {
+      await close()
+    }
+  })
+
+  it('sso accepté sans bouton repéré (Apple choisi), refuse un fournisseur inconnu sans fermer la demande', async () => {
+    const { vault, save, pending, close } = await setup()
+    try {
+      const answer = save()
+      const request = await pending()
+      expect(request.sso).toBeUndefined()
+      await expect(vault.respond(request.id, { action: 'sso', provider: 'facebook' })).rejects.toThrow('invalid_provider')
+      expect(vault.requests.snapshot()[0]).toMatchObject({ id: request.id, busy: false })
+      await vault.respond(request.id, { action: 'sso', provider: 'apple' })
+      expect((await answer).body).toMatchObject({ status: 'use_sso', provider: 'apple' })
+    } finally {
+      await close()
+    }
+  })
+
+  it('repérage en échec : la demande part quand même, sans indice', async () => {
+    const { events, vault, save, pending, close } = await setup({ sso: 'throw' })
+    try {
+      const answer = save()
+      const request = await pending()
+      expect(events).toContainEqual({ sso: true })
+      expect(request.sso).toBeUndefined()
+      await vault.respond(request.id, { action: 'cancel' })
+      expect((await answer).body.status).toBe('cancelled')
+    } finally {
+      await close()
+    }
+  })
+
+  it('accounts.google.com : indice « compte Google lui-même », sso refusé (aucun bouton à cliquer)', async () => {
+    const { vault, save, pending, close } = await setup({ origin: 'https://accounts.google.com' })
+    try {
+      const answer = save()
+      const request = await pending()
+      expect(request.sso).toEqual({ provider: 'google', providers: ['google'], hasPasswordField: false, accountPage: true })
+      await expect(vault.respond(request.id, { action: 'sso', provider: 'google' })).rejects.toThrow('invalid_action')
+      await vault.respond(request.id, { action: 'cancel' })
+      expect((await answer).body.status).toBe('cancelled')
+    } finally {
+      await close()
+    }
+  })
+
+  it('sso réservé à une demande save', async () => {
+    const { vault, pending, close } = await setup()
+    try {
+      const answer = fetch(`http://127.0.0.1:${vault.server.address().port}/v1/code`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot: 'orion', target: 'onglet' }),
+      }).then((response) => response.json())
+      const request = await pending()
+      await expect(vault.respond(request.id, { action: 'sso', provider: 'google' })).rejects.toThrow('invalid_action')
+      await vault.respond(request.id, { action: 'cancel' })
+      expect((await answer).status).toBe('cancelled')
     } finally {
       await close()
     }

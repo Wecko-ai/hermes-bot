@@ -270,6 +270,16 @@
     "pill": "{{bot}} attend : {{what}} pour {{site}}",
     "pillNoSite": "{{bot}} attend : {{what}}"
   },
+  "vaultSso": {
+    "offered": "Ce site propose « Continuer avec {{providers}} ».",
+    "noPasswordField": "La page n’affiche aucun champ de mot de passe.",
+    "accountPage": "C’est la page de connexion du compte {{provider}} lui-même ({{host}}) : l’identifiant et le mot de passe demandés sont ceux de ton compte {{provider}}.",
+    "question": "Pas de mot de passe pour ce site ?",
+    "useWith": "Je me connecte avec",
+    "useOne": "Je me connecte avec {{provider}}",
+    "buttonTitle": "Le bot cliquera sur « Continuer avec {{provider}} » du site, sans mot de passe. Rien n’est rangé.",
+    "steerFailed": "Demande refusée, mais {{bot}} n’a pas reçu la raison ({{provider}}) : dis-lui dans le chat de cliquer sur « Continuer avec {{provider}} »."
+  },
   "browserVault": {
     "errors": {
       "request_not_found": "Cette demande a expiré.",

@@ -5,6 +5,7 @@ import { BrowserVaultRequests } from './requests.mjs'
 import { BrowserVaultCdp } from './cdp.mjs'
 import { BrowserVaultError, vaultError } from './errors.mjs'
 import { generatePassword } from './password.mjs'
+import { accountPageProvider, ssoProvider, useSsoResult } from './sso.mjs'
 
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 const TARGET_ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -110,9 +111,12 @@ export function createBrowserVault(options = {}) {
     // Sign-up: the login the bot registers (an e-mail, a username), never a password.
     const identifier = action === 'signup' ? validIdentifier(body.identifier) : undefined
     let origin = ''
+    // `save` only: the page's "Continue with Google" (Apple, Microsoft), a hint for the card. Never blocks.
+    let sso = null
     try {
       if ((action === 'save' || action === 'signup') && !store.available) throw new BrowserVaultError('vault_unavailable', 503)
-      origin = await cdpFor(bot).activeOrigin(targetId)
+      if (action === 'save') ({ origin, sso } = await cdpFor(bot).inspectLogin(targetId))
+      else origin = await cdpFor(bot).activeOrigin(targetId)
       if (action === 'fill') {
         const known = await store.find(origin)
         if (!known) throw new BrowserVaultError('origin_not_found', 404)
@@ -133,7 +137,7 @@ export function createBrowserVault(options = {}) {
       }
 
       const kind = action === 'save' ? 'save' : 'code'
-      const result = await requests.create({ kind, bot, origin, targetId }, kind === 'save' ? saveTimeout : codeTimeout)
+      const result = await requests.create({ kind, bot, origin, targetId, ...(sso ? { sso } : {}) }, kind === 'save' ? saveTimeout : codeTimeout)
       audit(action, bot, origin, result.status)
       return result
     } catch (error) {
@@ -174,7 +178,13 @@ export function createBrowserVault(options = {}) {
     if (request.busy) throw new BrowserVaultError('request_busy', 409)
     requests.setBusy(id, true)
     try {
-      if (request.kind === 'save') {
+      if (request.kind === 'save' && body.action === 'sso') {
+        // The user signs in to this site with Google (Apple, Microsoft): nothing is stored, the bot
+        // is told to use the site's button. Not on the provider's own sign-in page: no such button there.
+        const provider = ssoProvider(body.provider)
+        if (accountPageProvider(request.origin)) throw new BrowserVaultError('invalid_action', 400)
+        requests.complete(id, useSsoResult(request.origin, provider))
+      } else if (request.kind === 'save') {
         if (body.action !== 'save') throw new BrowserVaultError('invalid_action', 400)
         // The requesting bot is added to the bots already authorized for this site.
         const existing = await store.find(request.origin)

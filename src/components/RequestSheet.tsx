@@ -22,6 +22,8 @@ interface DockedRequestSheetProps {
   askValues?: Record<string, string>
   /** Plain-text excerpt of the bot's latest finished reply. */
   context?: string
+  /** Shown right under the title (the site offers "Continue with Google"…). */
+  banner?: ReactNode
   className?: string
   scrimClassName?: string
   onDecline: () => void
@@ -33,7 +35,7 @@ interface DockedRequestSheetProps {
  * Vault requests: a sheet docked at the bottom right, without a backdrop, so the conversation behind
  * stays readable, scrollable and clickable. Minimizing only hides the body: what was typed stays.
  */
-export function DockedRequestSheet({ title, label, botName, site, ask, askValues, context, className = '', scrimClassName = '', onDecline, onSubmit, children }: DockedRequestSheetProps) {
+export function DockedRequestSheet({ title, label, botName, site, ask, askValues, context, banner, className = '', scrimClassName = '', onDecline, onSubmit, children }: DockedRequestSheetProps) {
   const { t } = useTranslation()
   const [minimized, setMinimized] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -62,6 +64,7 @@ export function DockedRequestSheet({ title, label, botName, site, ask, askValues
             <button type="button" className="request-minimize" onClick={() => setMinimized(true)}><Minus size={14} aria-hidden="true" />{t('vaultSheet.minimize')}</button>
           </div>
           <h2>{title}</h2>
+          {banner}
           <dl className="request-context">
             <div><dt>{t('vaultSheet.bot')}</dt><dd>{botName}</dd></div>
             {site && <div><dt>{t('vaultSheet.site')}</dt><dd className="request-origin">{site}</dd></div>}

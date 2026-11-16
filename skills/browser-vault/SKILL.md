@@ -23,6 +23,7 @@ node <path to HermesBot>/scripts/browser-vault.mjs <list|save|fill|code|signup> 
 - Each team of bots has its own Chrome. Take your turn first, as for any access to that Chrome (`browser-turn prendre --owner <your profile>`, which also gives its CDP address; `browser-turn cdp --owner <your profile>` gives it again), and give it back afterwards.
 - Never type, read, copy or display a password: no `eval` on a `password` field, no `.value`, no screenshot of a filled-in form sent in a message.
 - Never ask the user for a password in the chat: the vault opens a secure window for them in HermesBot.
+- Before `save`: if the page offers "Continue with Google" (or Apple, Microsoft) and the account could be one the user opens that way, try that button first and pick the account already signed in in this Chrome. Run `save` only if that does not work. If `save` answers `use_sso`, follow its `next`.
 - Never use Hermes's own `browser_vault` tool in your team's Chrome: that one stores passwords elsewhere. Only this vault.
 - Only the five commands above. Never call the vault's `/admin` API, read its token, or look for a password in the keychain (`security`): that is reserved for the user and the HermesBot app.
 - In a scheduled task (cron): never `save`, `code` or `signup`, nobody is there to answer. If `fill` is not enough, stop and report it.
@@ -35,7 +36,9 @@ node <path to HermesBot>/scripts/browser-vault.mjs <list|save|fill|code|signup> 
 3. If the origin is listed: `fill --bot <profile> --target <targetId>`. Response `{"status":"filled","fields":["identifier","password"]}`. Then click the login button yourself.
 4. Otherwise: `save --bot <profile> --target <targetId>`. The user receives "<bot> needs your credentials" in HermesBot. The command waits up to 6 minutes.
    - `{"status":"saved"}`: run `fill` again.
+   - `{"status":"use_sso","provider":"google","next":"…"}`: the user signs in to this site with that provider (`google`, `apple` or `microsoft`), not with a password. Do what `next` says: click the site's "Continue with <Provider>" button and pick the account already signed in in this Chrome. Nothing was stored; do not run `save` again for this site.
    - `{"status":"cancelled"}`: the user answered "Later". Do not ask again during this turn; say so in your reply.
+   - On the provider's own sign-in page (`accounts.google.com`, `appleid.apple.com`, `login.live.com`, `login.microsoftonline.com`), the user is asked for that provider account's own credentials: `use_sso` is not offered there.
 5. Verification code:
    - received by email: read it in your mailbox and type it yourself (a one-time code is not a password);
    - otherwise: `code --bot <profile> --target <targetId>`. The user types the code into HermesBot and the vault injects it into the page.

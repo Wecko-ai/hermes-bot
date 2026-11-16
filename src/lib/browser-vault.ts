@@ -1,4 +1,5 @@
 import { i18n } from '../i18n'
+import type { SsoHint } from './sso'
 
 export interface BrowserVaultRequest {
   id: string
@@ -7,6 +8,8 @@ export interface BrowserVaultRequest {
   origin: string
   /** Sign-up only: the login the bot registers (never a password). */
   identifier?: string
+  /** Login only: the page offers "Continue with Google" (Apple, Microsoft), or is that provider's own page. */
+  sso?: SsoHint
   busy: boolean
   createdAt: string
 }

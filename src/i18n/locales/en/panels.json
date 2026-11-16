@@ -270,6 +270,16 @@
     "pill": "{{bot}} is waiting: {{what}} for {{site}}",
     "pillNoSite": "{{bot}} is waiting: {{what}}"
   },
+  "vaultSso": {
+    "offered": "This site offers “Continue with {{providers}}”.",
+    "noPasswordField": "The page shows no password field.",
+    "accountPage": "This is the {{provider}} account sign-in page itself ({{host}}): the username and password asked for are those of your {{provider}} account.",
+    "question": "No password for this site?",
+    "useWith": "I sign in with",
+    "useOne": "I sign in with {{provider}}",
+    "buttonTitle": "The bot will click the site’s “Continue with {{provider}}” button, without a password. Nothing is stored.",
+    "steerFailed": "Request declined, but {{bot}} didn’t get the reason ({{provider}}): tell them in the chat to click “Continue with {{provider}}”."
+  },
   "browserVault": {
     "errors": {
       "request_not_found": "This request has expired.",

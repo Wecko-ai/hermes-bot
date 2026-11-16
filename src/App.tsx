@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
-import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
@@ -30,6 +30,7 @@ import { LocalChatView } from './components/LocalChatView'
 import { ServerRequestDialog } from './components/ServerRequestDialog'
 import { BrowserVaultDialog } from './components/BrowserVaultDialog'
 import { respondBrowserVault, subscribeBrowserVaultRequests } from './lib/browser-vault'
+import { SSO_NAMES, ssoSteerText, type SsoProvider } from './lib/sso'
 import { requestContext } from './lib/request-context'
 import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
 import { withMentionNote } from './lib/mentions'
@@ -1458,6 +1459,25 @@ export default function App() {
     }
   }
 
+  /**
+   * `vault.save_login` answered "I sign in with Google": the protocol only allows declining. The reason
+   * goes to the bot first, in its running turn (`session.steer`, delivered right after the tool's result),
+   * then the request is declined. Nothing is stored.
+   */
+  const answerServerRequestSso = async (request: ServerRequest, provider: SsoProvider) => {
+    const sessionId = typeof request.params.session_id === 'string' ? request.params.session_id : ''
+    const bot = sessionId ? useRosterStore.getState().bots.find((item) => item.sessionId === sessionId) : undefined
+    const site = typeof request.params.origin === 'string' && request.params.origin ? request.params.origin : typeof request.params.site === 'string' ? request.params.site : undefined
+    const open = useChatStore.getState().activeChat
+    const profile = bot?.slug || (open?.sessionId === sessionId ? open.profile : undefined)
+    let steered = false
+    if (sessionId) {
+      try { steered = await steerSession(client, { profile, sessionId }, ssoSteerText(provider, site)) === 'queued' } catch { steered = false }
+    }
+    answerServerRequest(request.id, { value: '' })
+    if (!steered) setNotice(i18n.t('vaultSso.steerFailed', { provider: SSO_NAMES[provider], bot: bot?.name || selectedBot?.name || '' }))
+  }
+
   /** Rejects if the gateway refuses: the card stays open to try again. */
   const answerPendingPrompt = async (prompt: PendingPrompt, answer: string) => {
     const chat = useChatStore.getState().activeChat
@@ -1653,7 +1673,7 @@ export default function App() {
           onClose={() => setDetailsOpen(false)}
         />
       )}
-      {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={openRequestBot?.name || selectedBot.name} context={openRequestContext} onAnswer={answerServerRequest} />}
+      {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={openRequestBot?.name || selectedBot.name} context={openRequestContext} onAnswer={answerServerRequest} onSso={(request, provider) => void answerServerRequestSso(request, provider)} />}
       {openBrowserVaultRequest && <BrowserVaultDialog key={openBrowserVaultRequest.id} request={openBrowserVaultRequest} botName={bots.find((bot) => bot.slug === openBrowserVaultRequest.bot)?.name || openBrowserVaultRequest.bot} context={browserVaultContext} onRespond={answerBrowserVault} />}
       {paletteOpen && <CommandPalette bots={rosterBots} onSelect={(bot) => { setPaletteOpen(false); selectBot(bot) }} onClose={() => setPaletteOpen(false)} />}
       {settingsTab && (

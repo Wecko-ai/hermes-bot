@@ -99,6 +99,8 @@ let pingCalls = 0
 let silentPings = false
 // Requests from the gateway to the app (vault, approvals) and replies received.
 const clientResponses = new Map()
+// Order of `session.steer` calls and request answers: the reason must reach the bot before the decline.
+const gatewayOrder = []
 let capabilityCalls = 0
 let openRequests = []
 // Questions (`clarify`): answers received by the fake gateway, and open questions returned on resume.
@@ -408,7 +410,7 @@ wss.on('connection', (socket) => {
   socket.on('message', (raw) => {
     const frame = JSON.parse(String(raw))
     if (!frame.id) return
-    if (frame.method === undefined) { clientResponses.set(frame.id, frame); return }
+    if (frame.method === undefined) { gatewayOrder.push(`answer:${frame.id}`); clientResponses.set(frame.id, frame); return }
     const held = heldReplies.get(frame.method)
     const reply = (result) => { const answer = () => send(socket, { jsonrpc: '2.0', id: frame.id, result }); if (held) void held.then(answer); else answer() }
     if (frame.method === 'client.capabilities') {
@@ -630,6 +632,7 @@ wss.on('connection', (socket) => {
     }
     if (frame.method === 'session.steer') {
       steerCalls.push(frame.params)
+      gatewayOrder.push('steer')
       return reply({ text: frame.params.text, ...steerVerdict })
     }
     if (frame.method === 'file.attach') {
@@ -836,6 +839,8 @@ const cdpExpressions = []
 const cdpInjections = []
 // Password fields the simulated sign-up page shows (password and confirmation).
 let cdpSignupPasswords = 2
+// What the federated sign-in lookup finds on the simulated page (`FEDERATED_SIGNIN`).
+let cdpSso = { providers: [], hasPasswordField: true }
 const cdpMock = http.createServer((request, response) => {
   if (request.url !== '/json/list') { response.statusCode = 404; return response.end() }
   response.setHeader('Content-Type', 'application/json')
@@ -855,6 +860,7 @@ cdpWss.on('connection', (socket, request) => {
       if (params.expression === 'window.location.origin') {
         return send(socket, { id, result: { result: { type: 'string', value: new URL(cdpUrl).origin } } })
       }
+      if (params.expression.includes('federated sign-in')) return send(socket, { id, result: { result: { type: 'object', value: cdpSso } } })
       return send(socket, { id, result: { result: { type: 'object', objectId: 'champs-actifs' } } })
     }
     if (method === 'Runtime.callFunctionOn' && !params.arguments) {
@@ -1760,6 +1766,28 @@ try {
   await sheet.waitFor({ state: 'detached', timeout: 2_000 })
   if (await page.getByText('mot-de-passe-test').count()) throw new Error('Le mot de passe est resté affiché.')
   if (await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }).includes('mot-de-passe-test'))) throw new Error('Le mot de passe a été stocké dans le navigateur.')
+  // Hermes vault, site reached with "Continue with Google": the protocol only allows declining, so the
+  // bot first gets the reason in its turn (`session.steer`), then the decline.
+  const steersBeforeSso = steerCalls.length
+  ask('srq-sso', 'vault.save_login', { origin: 'https://login.exemple.test', site: 'login.exemple.test' })
+  const hermesSso = sheet.locator('.request-sso')
+  await hermesSso.getByText('Pas de mot de passe pour ce site ?').waitFor({ timeout: 3_000 })
+  for (const name of ['Google', 'Apple', 'Microsoft']) await hermesSso.getByRole('button', { name: `Je me connecte avec ${name}` }).waitFor()
+  await hermesSso.getByRole('button', { name: 'Je me connecte avec Google' }).click()
+  if ((await answerOf('srq-sso')).result.value !== '') throw new Error('« Je me connecte avec Google » doit refuser la demande de Hermes.')
+  await sheet.waitFor({ state: 'detached', timeout: 2_000 })
+  const ssoSteer = steerCalls.at(-1)
+  if (steerCalls.length !== steersBeforeSso + 1 || ssoSteer.session_id !== 'chat-orion' || ssoSteer.profile !== 'orion') throw new Error(`Consigne SSO mal adressée : ${JSON.stringify(steerCalls.slice(steersBeforeSso))}`)
+  if (!ssoSteer.text.includes("Click the site's 'Continue with Google' button") || !ssoSteer.text.includes('https://login.exemple.test') || !ssoSteer.text.includes('Do not ask me for a password')) throw new Error(`Consigne SSO incorrecte : ${ssoSteer.text}`)
+  if (gatewayOrder.lastIndexOf('steer') > gatewayOrder.indexOf('answer:srq-sso')) throw new Error(`La consigne SSO arrive après le refus : ${gatewayOrder.join(', ')}`)
+  // The provider's own page: its account's credentials, no federated button.
+  ask('srq-google', 'vault.save_login', { origin: 'https://accounts.google.com', site: 'accounts.google.com' })
+  await sheet.getByText('C’est la page de connexion du compte Google lui-même (accounts.google.com)', { exact: false }).waitFor({ timeout: 3_000 })
+  if (await sheet.locator('.request-sso-button').count()) throw new Error('Bouton fédéré proposé sur accounts.google.com.')
+  await sheet.getByRole('button', { name: 'Plus tard' }).click()
+  if ((await answerOf('srq-google')).result.value !== '') throw new Error('Plus tard doit refuser la demande.')
+  if (steerCalls.length !== steersBeforeSso + 1) throw new Error('Plus tard ne doit rien dire au bot.')
+  await sheet.waitFor({ state: 'detached', timeout: 2_000 })
   ask('srq-code', 'vault.code', { site: 'exemple.test', hint: 'Code reçu par SMS' })
   await sheet.getByText('Code reçu par SMS').waitFor({ timeout: 3_000 })
   await sheet.getByRole('button', { name: 'Passer' }).click()
@@ -1934,6 +1962,34 @@ try {
   await browserSheet.getByRole('button', { name: 'Plus tard' }).waitFor({ timeout: 3_000 })
   await browserSheet.getByRole('button', { name: 'Plus tard' }).click()
   if ((await cancellingBrowser).body.status !== 'cancelled') throw new Error('Annulation du coffre CDP incorrecte.')
+
+  // Chrome vault, page with "Continue with Google": the card says so at the top, and the user answers
+  // "I sign in with Google". The bot gets use_sso and what to do; nothing is stored.
+  cdpUrl = 'https://app.exemple-sso.test/login'
+  cdpSso = { providers: ['google'], hasPasswordField: false }
+  const keychainBeforeSso = (await execFileAsync('/usr/bin/security', ['dump-keychain', BROWSER_VAULT_KEYCHAIN])).stdout
+  const ssoBrowser = vaultCall('save')
+  await browserSheet.locator('.request-sso-banner').getByText('Ce site propose « Continuer avec Google ». La page n’affiche aucun champ de mot de passe.', { exact: true }).waitFor({ timeout: 5_000 })
+  const ssoButton = browserSheet.getByRole('button', { name: 'Je me connecte avec Google' })
+  await ssoButton.waitFor()
+  if (await browserSheet.locator('.request-sso-button').count() !== 1) throw new Error('Un seul bouton fédéré attendu quand Google est repéré.')
+  const bannerFirst = await browserSheet.evaluate((element) => {
+    const banner = element.querySelector('.request-sso-banner')
+    const context = element.querySelector('.request-context')
+    return Boolean(banner && context && banner.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+  if (!bannerFirst) throw new Error('Le bandeau « Continuer avec Google » n’est pas en haut de la carte.')
+  await delay(350)
+  await page.screenshot({ path: `${SCREENSHOTS}vault-sso.png` })
+  await ssoButton.click()
+  const ssoAnswer = await ssoBrowser
+  if (ssoAnswer.httpStatus !== 200 || ssoAnswer.body.status !== 'use_sso' || ssoAnswer.body.provider !== 'google' || ssoAnswer.body.origin !== 'https://app.exemple-sso.test') throw new Error(`Réponse SSO du coffre incorrecte : ${ssoAnswer.raw}`)
+  if (ssoAnswer.body.next !== "The user signs in to this site with Google: click the site's 'Continue with Google' button and pick the account already signed in in this Chrome. Do not ask for a password.") throw new Error(`Consigne SSO du coffre incorrecte : ${ssoAnswer.body.next}`)
+  await browserSheet.waitFor({ state: 'detached', timeout: 2_000 })
+  if ((await execFileAsync('/usr/bin/security', ['dump-keychain', BROWSER_VAULT_KEYCHAIN])).stdout !== keychainBeforeSso) throw new Error('« Je me connecte avec Google » a rangé quelque chose au trousseau.')
+  const ssoAudit = readFileSync(BROWSER_VAULT_AUDIT, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((line) => line.origin === 'https://app.exemple-sso.test')
+  if (ssoAudit.length !== 1 || ssoAudit[0].action !== 'save' || ssoAudit[0].result !== 'use_sso' || ssoAudit[0].bot !== 'orion') throw new Error(`Journal SSO incorrect : ${JSON.stringify(ssoAudit)}`)
+  cdpSso = { providers: [], hasPasswordField: true }
 
   // Sign-up in one action: the vault draws the password, stores it, then types it in both fields.
   // The bot, its CLI output and the vault log never see it.

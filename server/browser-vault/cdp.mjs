@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws'
 import { BrowserVaultError } from './errors.mjs'
 import { normalizeOrigin } from './store.mjs'
+import { federatedSignIn } from './sso.mjs'
 
 const loopback = (hostname) => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostname)
 
@@ -47,14 +48,14 @@ class CdpConnection {
     this.pending.clear()
   }
 
-  call(method, params = {}) {
+  call(method, params = {}, timeoutMs = 5000) {
     if (this.socket?.readyState !== WebSocket.OPEN) throw new BrowserVaultError('cdp_unavailable', 503)
     const id = ++this.sequence
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new BrowserVaultError('cdp_timeout', 504))
-      }, 5000)
+      }, timeoutMs)
       timer.unref()
       this.pending.set(id, { resolve, reject, timer })
       this.socket.send(JSON.stringify({ id, method, params }))
@@ -170,6 +171,53 @@ export const COUNT_SIGNUP_FIELDS = `function() {
   return { identifier: Boolean(this[0]), passwords: Math.max(0, this.length - 1) }
 }`
 
+// Federated sign-in buttons of the page ("Continue with Google", Apple, Microsoft): their text or label,
+// the providers' scripts, iframes and links, in open shadow roots and same-origin iframes. Also says
+// whether a visible password field is there. Reads no value; returns plain data.
+export const FEDERATED_SIGNIN = String.raw`(() => {
+  /* federated sign-in */
+  const providers = []
+  let hasPasswordField = false
+  const add = (provider) => { if (provider && !providers.includes(provider)) providers.push(provider) }
+  const byText = (text) => {
+    const match = /(?:continue|sign\s*in|sign\s*up|log\s*in|login|connect|continuer|connecter|connexion|inscrire|inscription|identifier)\s*(?:with|using|via|through|avec|par)(?:\s+(?:a|an|your|my|votre|ton|mon|un|une|le|compte|account))*\s*(google|apple|microsoft)\b/i.exec(String(text || '').replace(/\s+/g, ' '))
+    return match ? match[1].toLowerCase() : null
+  }
+  const bySource = (value) => {
+    const url = String(value || '')
+    if (/^https:\/\/accounts\.google\.com\/(?:gsi\/|o\/oauth2|signin\/oauth|v3\/signin)/i.test(url)) return 'google'
+    if (/^https:\/\/(?:appleid\.apple\.com\/auth\/|appleid\.cdn-apple\.com\/appleauth\/)/i.test(url)) return 'apple'
+    if (/^https:\/\/login\.(?:microsoftonline\.com|live\.com|microsoft\.com)\//i.test(url)) return 'microsoft'
+    return null
+  }
+  const attribute = (element, name) => (typeof element.getAttribute === 'function' ? element.getAttribute(name) : null) || ''
+  const seen = new Set()
+  const walk = (root, depth) => {
+    if (!root || typeof root.querySelectorAll !== 'function' || seen.has(root) || depth > 3) return
+    seen.add(root)
+    for (const element of root.querySelectorAll('*')) {
+      const tag = String(element.tagName || '').toUpperCase()
+      if (tag === 'INPUT' && element.type === 'password' && !element.disabled
+        && typeof element.getClientRects === 'function' && element.getClientRects().length > 0) hasPasswordField = true
+      if (tag === 'IFRAME' || tag === 'SCRIPT') add(bySource(element.src))
+      if (tag === 'A') add(bySource(element.href))
+      if (tag === 'FORM') add(bySource(element.action))
+      if (tag === 'BUTTON' || tag === 'A' || attribute(element, 'role') === 'button') add(byText(element.textContent))
+      if (tag === 'INPUT' && (element.type === 'button' || element.type === 'submit')) add(byText(element.value))
+      for (const name of ['aria-label', 'title', 'alt']) add(byText(attribute(element, name)))
+      if (element.shadowRoot) walk(element.shadowRoot, depth)
+      if (tag === 'IFRAME') {
+        // A cross-origin frame gives null (or throws): only same-origin frames are read.
+        let inner = null
+        try { inner = element.contentDocument } catch { inner = null }
+        walk(inner, depth + 1)
+      }
+    }
+  }
+  walk(document, 0)
+  return { providers, hasPasswordField }
+})()`
+
 const FIELDS = { login: LOGIN_FIELDS, signup: SIGNUP_FIELDS, code: CODE_FIELD }
 const FILLERS = { login: FILL_LOGIN, signup: FILL_SIGNUP, code: FILL_CODE }
 const NOT_FOUND = { login: 'login_fields_not_found', signup: 'login_fields_not_found', code: 'code_field_not_found' }
@@ -222,6 +270,28 @@ export class BrowserVaultCdp {
 
   activeOrigin(targetId) {
     return this.withConnection(targetId, (connection) => this.readOrigin(connection))
+  }
+
+  /** The page's federated sign-in buttons, or null. Never fails: it only adds a hint to the card. */
+  async pageFederatedSignIn(connection) {
+    try {
+      const result = await connection.call('Runtime.evaluate', {
+        expression: FEDERATED_SIGNIN, returnByValue: true, awaitPromise: false,
+      }, 2000)
+      if (result.exceptionDetails) return null
+      const value = result.result?.value
+      return value && typeof value === 'object' ? value : null
+    } catch {
+      return null
+    }
+  }
+
+  /** `save`: the tab's origin and, as a hint for the card only, its federated sign-in (`sso.mjs`). */
+  inspectLogin(targetId) {
+    return this.withConnection(targetId, async (connection) => {
+      const origin = await this.readOrigin(connection)
+      return { origin, sso: federatedSignIn(origin, await this.pageFederatedSignIn(connection)) }
+    })
   }
 
   /**

@@ -616,6 +616,20 @@ export async function attachFile(client: HermesClient, chat: ActiveChat, name: s
   return result.ref_text as string
 }
 
+/**
+ * `session.steer`: a few words for the bot inside its running turn, without interrupting it. The gateway
+ * delivers them as a user message right after the latest tool results. `queued` means accepted;
+ * `rejected` means no turn is running (the text is not kept).
+ */
+export async function steerSession(client: HermesClient, target: { profile?: string; sessionId: string }, text: string) {
+  const result = await client.request('session.steer', {
+    ...(target.profile ? { profile: target.profile } : {}),
+    session_id: target.sessionId,
+    text,
+  }, 8_000)
+  return asString(result?.status)
+}
+
 export async function interruptChat(client: HermesClient, chat: ActiveChat) {
   return client.request('session.interrupt', {
     profile: chat.profile,

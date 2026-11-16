@@ -780,6 +780,16 @@ body::before {
 .request-excerpt figcaption { color: var(--text-tertiary); font-size: 12px; }
 .request-excerpt blockquote { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
 .request-sheet p.request-lead { color: var(--text); }
+/* Federated sign-in: the site offers "Continue with Google", or is the provider's own page. */
+.request-sheet p.request-sso-banner { display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); font-size: 12.5px; line-height: 18px; }
+.request-sheet p.request-sso-banner svg { flex: none; margin-top: 2px; color: var(--accent); }
+.request-sso { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: .5px solid var(--border); }
+.request-sso-question { color: var(--text-tertiary); font-size: 12px; }
+.request-sso-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.request-sso-with { color: var(--text-secondary); font-size: 12.5px; margin-right: 2px; }
+.request-sso-button { height: 30px; padding: 0 12px; border-radius: 9px; background: var(--hover); color: var(--text); font-size: 12.5px; font-weight: 520; box-shadow: inset 0 0 0 .5px var(--border); }
+.request-sso-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, var(--hover)); }
+.request-sso-button:disabled { opacity: .55; }
 .request-pill { max-width: 100%; height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 15px; border-radius: 999px; background: var(--surface-raised); color: var(--text); font-size: 12.5px; font-weight: 560; box-shadow: var(--shadow), inset 0 0 0 .5px var(--border-strong); animation: sheet-in 200ms var(--spring) both; }
 .request-pill svg { flex: none; color: var(--accent); }
 .request-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
