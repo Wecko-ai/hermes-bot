@@ -218,3 +218,96 @@ export async function streamLocalChat(
     frames.forEach(onFrame)
   }
 }
+
+/** A saved conversation of the local chat, as listed (without its messages). */
+export interface LocalConversationSummary {
+  id: string
+  title: string
+  model: string
+  createdAt: string
+  updatedAt: string
+  count: number
+}
+
+export interface LocalHistory {
+  /** `false`: kept by the server until it stops (no encryption available). */
+  persistent: boolean
+  /** `false`: the saved file cannot be read now; nothing is written over it. */
+  readable: boolean
+  conversations: LocalConversationSummary[]
+}
+
+export interface LocalConversation {
+  id: string
+  model: string
+  messages: { id: string; role: 'user' | 'assistant'; content: string; createdAt: string }[]
+}
+
+export function parseLocalHistory(body: unknown): LocalHistory {
+  const value = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const conversations = (Array.isArray(value.conversations) ? value.conversations : [])
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>).id === 'string')
+    .map((entry) => ({
+      id: entry.id as string,
+      title: text(entry.title),
+      model: text(entry.model),
+      createdAt: text(entry.createdAt),
+      updatedAt: text(entry.updatedAt),
+      count: typeof entry.count === 'number' && Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 0,
+    }))
+  return { persistent: value.persistent === true, readable: value.readable !== false, conversations }
+}
+
+export async function loadLocalHistory(): Promise<LocalHistory | null> {
+  try {
+    const response = await fetch('/api/local-chat/history', { credentials: 'same-origin' })
+    return response.ok ? parseLocalHistory(await response.json()) : null
+  } catch {
+    return null
+  }
+}
+
+export async function readLocalConversation(id: string): Promise<LocalConversation | null> {
+  try {
+    const response = await fetch(`/api/local-chat/history/${encodeURIComponent(id)}`, { credentials: 'same-origin' })
+    if (!response.ok) return null
+    const body = await response.json()
+    const messages = (Array.isArray(body?.messages) ? body.messages : [])
+      .filter((message: unknown): message is LocalConversation['messages'][number] => {
+        const value = message as Record<string, unknown> | null
+        return !!value && typeof value.id === 'string' && (value.role === 'user' || value.role === 'assistant') && typeof value.content === 'string'
+      })
+    return { id, model: text(body?.model), messages }
+  } catch {
+    return null
+  }
+}
+
+/** Saves the whole conversation. Throws a readable message. */
+export async function saveLocalConversation(id: string, model: string, messages: LocalConversation['messages']) {
+  let response: Response
+  try {
+    response = await fetch(`/api/local-chat/history/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages }),
+    })
+  } catch {
+    throw new Error(i18n.t('localChat.historyNotSaved'))
+  }
+  if (!response.ok) {
+    const error = await response.json().then((body) => text(body?.error)).catch(() => '')
+    throw new Error(i18n.t(error === 'history_unreadable' ? 'localChat.historyUnreadable' : error === 'history_full' || error === 'conversation_too_large' ? 'localChat.historyFull' : 'localChat.historyNotSaved'))
+  }
+}
+
+export async function deleteLocalConversation(id: string) {
+  const response = await fetch(`/api/local-chat/history/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null)
+  if (!response?.ok) throw new Error(i18n.t('localChat.deleteFailed'))
+}
+
+/** A new conversation ID, accepted by the server. */
+export function newLocalConversationId() {
+  return `local-${crypto.randomUUID()}`
+}

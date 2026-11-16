@@ -224,7 +224,6 @@
   "localChat": {
     "replying": "Répond",
     "subtitle": "Local, sans outils",
-    "clear": "Effacer la conversation locale",
     "loadingModel": "Chargement du modèle…",
     "thinking": "Réfléchit…",
     "failed": "Le modèle local a échoué.",
@@ -250,7 +249,22 @@
     "loadFailed": "Le chargement du modèle a échoué.",
     "unloadFailed": "Le déchargement du modèle a échoué.",
     "gigabytes": "{{size}} Go",
-    "megabytes": "{{size}} Mo"
+    "megabytes": "{{size}} Mo",
+    "history": "Historique des conversations",
+    "historyTitle": "Conversations enregistrées",
+    "newConversation": "Nouvelle conversation",
+    "noHistory": "Aucune conversation enregistrée.",
+    "untitled": "Conversation sans titre",
+    "messages_one": "{{count}} message",
+    "messages_other": "{{count}} messages",
+    "deleteConversation": "Supprimer la conversation",
+    "confirmDelete": "Supprimer ?",
+    "deleteFailed": "La conversation n’a pas pu être supprimée.",
+    "historyNotSaved": "La conversation n’a pas pu être enregistrée.",
+    "historyFull": "Historique plein : supprime d’anciennes conversations pour enregistrer celle-ci.",
+    "historyUnreadable": "Historique illisible pour l’instant (Trousseau ?) : rien n’est écrit par-dessus.",
+    "historyMemoryOnly": "Chiffrement indisponible : conversations gardées jusqu’à la fermeture de l’app.",
+    "openFailed": "La conversation n’a pas pu être ouverte."
   },
   "time": {
     "now": "maintenant",

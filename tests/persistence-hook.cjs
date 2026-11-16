@@ -18,3 +18,10 @@ globalThis.__hermesBotCredentialStore = {
   save: (json) => fs.writeFileSync(credentials, json, { mode: 0o600 }),
   clear: () => fs.rmSync(credentials, { force: true }),
 }
+
+// Local chat conversations, in clear text here only as well.
+const localChat = `${file}.local-chat`
+globalThis.__hermesBotLocalChatStore = {
+  load: () => (fs.existsSync(localChat) ? fs.readFileSync(localChat, 'utf8') : null),
+  save: (json) => fs.writeFileSync(localChat, json, { mode: 0o600 }),
+}

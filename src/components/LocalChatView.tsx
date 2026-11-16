@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, MemoryStick, Menu, RotateCcw } from 'lucide-react'
+import { Loader2, MemoryStick, Menu, SquarePen } from 'lucide-react'
 import type { Bot, ChatMessage } from '../types'
-import { formatBytes, loadLocalMemory, setLocalModelLoaded, streamLocalChat, visibleAnswer, type LocalMemory, type LocalModels } from '../lib/local-chat'
+import { deleteLocalConversation, formatBytes, loadLocalHistory, loadLocalMemory, newLocalConversationId, readLocalConversation, saveLocalConversation, setLocalModelLoaded, streamLocalChat, visibleAnswer, type LocalHistory, type LocalMemory, type LocalModels } from '../lib/local-chat'
 import { updateSettings } from '../lib/settings'
 import { LiveAvatar } from './LiveAvatar'
+import { LocalHistoryMenu } from './LocalHistoryMenu'
 import { LocalModelMenu } from './LocalModelMenu'
 import { MessageList } from './MessageList'
 import { Composer } from './Composer'
@@ -83,6 +84,73 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
     updateSettings({ localModel: model })
   }
 
+  // Saved conversations (encrypted on this Mac by the app). The last one reopens at the first display.
+  const [history, setHistory] = useState<LocalHistory | null>(null)
+  const [conversationId, setConversationIdState] = useState(newLocalConversationId)
+  const conversationRef = useRef(conversationId)
+  const setConversationId = (id: string) => {
+    conversationRef.current = id
+    setConversationIdState(id)
+  }
+  const refreshHistory = useCallback(async () => {
+    if (demo) return
+    const next = await loadLocalHistory()
+    if (next) setHistory(next)
+  }, [demo])
+  const restored = useRef(false)
+  useEffect(() => {
+    if (demo || restored.current) return
+    restored.current = true
+    void (async () => {
+      const next = await loadLocalHistory()
+      if (!next) return
+      setHistory(next)
+      const latest = next.conversations[0]
+      // Something already typed before the list came back: that conversation stays on screen.
+      if (!latest || messagesRef.current.length) return
+      const conversation = await readLocalConversation(latest.id)
+      if (!conversation || messagesRef.current.length) return
+      setConversationId(conversation.id)
+      commit(conversation.messages)
+    })()
+  }, [demo])
+  // One write at a time, in order: the question saved at sending never lands after the full exchange.
+  const saveChain = useRef(Promise.resolve())
+  const persist = (id: string, next: ChatMessage[]) => {
+    if (demo || !next.length) return
+    const model = bot.model
+    const messages = next.map(({ id: messageId, role, content, createdAt }) => ({ id: messageId, role: role as 'user' | 'assistant', content, createdAt: createdAt || new Date().toISOString() }))
+    saveChain.current = saveChain.current.then(async () => {
+      try {
+        await saveLocalConversation(id, model, messages)
+      } catch (error) {
+        onNotice(error instanceof Error ? error.message : i18n.t('localChat.historyNotSaved'))
+      }
+      await refreshHistory()
+    })
+  }
+  const newConversation = () => {
+    stop()
+    commit([])
+    setConversationId(newLocalConversationId())
+  }
+  const openConversation = async (id: string) => {
+    if (running) return
+    const conversation = await readLocalConversation(id)
+    if (!conversation) return onNotice(i18n.t('localChat.openFailed'))
+    setConversationId(conversation.id)
+    commit(conversation.messages)
+  }
+  const removeConversation = async (id: string) => {
+    try {
+      await deleteLocalConversation(id)
+      if (id === conversationRef.current) newConversation()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : i18n.t('localChat.deleteFailed'))
+    }
+    void refreshHistory()
+  }
+
   const setRunning = (value: boolean) => {
     setRunningState(value)
     onRunningChange(value)
@@ -101,6 +169,8 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
       return true
     }
     const key = `local-answer-${Date.now()}`
+    const conversation = conversationRef.current
+    persist(conversation, history)
     const controller = new AbortController()
     controllerRef.current = controller
     setStreamKey(key)
@@ -122,6 +192,8 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
     }
     const answer = visibleAnswer(raw).trim()
     if (answer) commit([...messagesRef.current, { id: key, role: 'assistant', content: answer, createdAt: new Date().toISOString() }])
+    // Saved once the reply is over, even without one: the question stays in the history.
+    if (conversation === conversationRef.current) persist(conversation, messagesRef.current)
     setStreaming('')
     setStreamKey('')
     setActivity('')
@@ -130,10 +202,6 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
   }
 
   const stop = () => controllerRef.current?.abort()
-  const reset = () => {
-    stop()
-    commit([])
-  }
   const suggestion = useCallback((text: string) => { void send(text) }, [running])
   const until = loaded ? unloadTime(loaded.expiresAt) : ''
   const size = loaded ? formatBytes(loaded.size) : ''
@@ -163,7 +231,8 @@ export function LocalChatView({ bot, active, focusSignal, onOpenMobile, onNotice
               <span>{t(loaded ? 'localChat.unload' : 'localChat.load')}</span>
             </button>
           )}
-          <button className="plain-icon" aria-label={t('localChat.clear')} disabled={!messages.length && !running} onClick={reset}><RotateCcw size={16} /></button>
+          {!demo && <LocalHistoryMenu history={history} current={conversationId} disabled={running} onOpen={() => void refreshHistory()} onSelect={(id) => void openConversation(id)} onNew={newConversation} onDelete={(id) => void removeConversation(id)} />}
+          <button className="plain-icon" aria-label={t('localChat.newConversation')} title={t('localChat.newConversation')} disabled={!messages.length && !running} onClick={newConversation}><SquarePen size={16} /></button>
         </div>
       </header>
       <MessageList bot={bot} bots={[]} messages={messages} streaming={streaming} streamKey={streamKey} running={running} activity={activity} workText="" streamReply loading={false} onSuggestion={suggestion} onOpenDocument={noop} onOpenBot={noop} />

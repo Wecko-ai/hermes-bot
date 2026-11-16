@@ -10,6 +10,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
 import configModule from './config.cjs'
 import { createLocalGateway } from './local-gateway.mjs'
+import { LOCAL_HISTORY_LIMITS, createLocalChatHistory } from './local-chat-history.mjs'
 import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, parseSharedSettings, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
 
 const CONFIG = configModule.loadConfig()
@@ -682,6 +683,34 @@ async function handleLocalChat(request, response) {
   })
 }
 
+// Saved conversations of the local chat: encrypted on this Mac by the app, never sent anywhere else.
+const localChatHistory = createLocalChatHistory(globalThis.__hermesBotLocalChatStore || null)
+const LOCAL_HISTORY_PATH = /^\/api\/local-chat\/history\/([A-Za-z0-9_-]{8,64})$/
+const HISTORY_ERRORS = {
+  invalid_conversation: 400, invalid_messages: 400, conversation_too_large: 413, history_full: 507,
+  history_unreadable: 503, history_unwritable: 503,
+}
+
+async function handleLocalHistory(request, response, url) {
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (url.pathname === '/api/local-chat/history') {
+    if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
+    return json(response, 200, { persistent: localChatHistory.persistent, ...localChatHistory.list() })
+  }
+  const id = LOCAL_HISTORY_PATH.exec(url.pathname)?.[1]
+  if (!id) return json(response, 404, { error: 'not_found' })
+  if (request.method === 'GET') {
+    const conversation = localChatHistory.get(id)
+    return conversation ? json(response, 200, conversation) : json(response, 404, { error: 'conversation_missing' })
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  let error
+  if (request.method === 'PUT') error = localChatHistory.save(id, await bodyJson(request, LOCAL_HISTORY_LIMITS.conversationBytes + 65_536))
+  else if (request.method === 'DELETE') error = localChatHistory.remove(id)
+  else return json(response, 405, { error: 'method_not_allowed' })
+  return error ? json(response, HISTORY_ERRORS[error] || 400, { error }) : json(response, 200, { ok: true })
+}
+
 /** Call to the vault admin API. Service absent: 503 `vault_service_unavailable`. */
 async function vaultAdmin(pathname, body, hermesCookie = '') {
   try {
@@ -923,6 +952,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/local-chat/models' && request.method === 'GET') {
       return await handleLocalModels(request, response)
+    }
+    if (url.pathname === '/api/local-chat/history' || url.pathname.startsWith('/api/local-chat/history/')) {
+      return await handleLocalHistory(request, response, url)
     }
     if (url.pathname === '/api/local-chat/status' && request.method === 'GET') {
       return await handleLocalStatus(request, response)

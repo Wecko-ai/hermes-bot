@@ -224,7 +224,6 @@
   "localChat": {
     "replying": "Replying",
     "subtitle": "Local, no tools",
-    "clear": "Clear the local conversation",
     "loadingModel": "Loading the model…",
     "thinking": "Thinking…",
     "failed": "The local model failed.",
@@ -250,7 +249,22 @@
     "loadFailed": "Loading the model failed.",
     "unloadFailed": "Unloading the model failed.",
     "gigabytes": "{{size}} GB",
-    "megabytes": "{{size}} MB"
+    "megabytes": "{{size}} MB",
+    "history": "Conversation history",
+    "historyTitle": "Saved conversations",
+    "newConversation": "New conversation",
+    "noHistory": "No saved conversation.",
+    "untitled": "Untitled conversation",
+    "messages_one": "{{count}} message",
+    "messages_other": "{{count}} messages",
+    "deleteConversation": "Delete the conversation",
+    "confirmDelete": "Delete?",
+    "deleteFailed": "The conversation could not be deleted.",
+    "historyNotSaved": "The conversation could not be saved.",
+    "historyFull": "History full: delete old conversations to save this one.",
+    "historyUnreadable": "History unreadable for now (Keychain?): nothing is written over it.",
+    "historyMemoryOnly": "Encryption unavailable: conversations are kept until the app quits.",
+    "openFailed": "The conversation could not be opened."
   },
   "time": {
     "now": "now",

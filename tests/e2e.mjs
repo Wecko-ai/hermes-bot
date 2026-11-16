@@ -23,6 +23,8 @@ const BROWSER_VAULT_SETTINGS = path.join(os.tmpdir(), `hermesbot-e2e-${process.p
 const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (fake test password)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
+const LOCAL_HISTORY_FILE = `${SESSION_FILE}.local-chat`
+rmSync(LOCAL_HISTORY_FILE, { force: true })
 rmSync(BROWSER_VAULT_AUDIT, { force: true })
 rmSync(BROWSER_VAULT_SETTINGS, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
@@ -3403,8 +3405,55 @@ try {
   await page.locator('.toast').getByText('pas encore installé').waitFor({ timeout: 5_000 })
   localModelMissing = false
   await page.locator('.toast button').click()
-  await page.getByRole('button', { name: 'Effacer la conversation locale' }).click()
-  if (await page.locator('.local-chat .message-assistant').count()) throw new Error('Conversation locale non effacée.')
+  // Saved conversations: each exchange is written (encrypted in the app, in clear text in this test), even a failed one.
+  const savedHistory = await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())
+  const firstSaved = savedHistory.conversations?.[0]
+  if (savedHistory.conversations?.length !== 1 || firstSaved.title !== 'Bonjour local' || firstSaved.count !== 7 || firstSaved.model !== 'modele-local:7b') throw new Error(`Historique local : ${JSON.stringify(savedHistory)}`)
+  if (!readFileSync(LOCAL_HISTORY_FILE, 'utf8').includes('Après chargement')) throw new Error('La conversation locale n’est pas écrite sur disque.')
+  await page.getByRole('button', { name: 'Nouvelle conversation', exact: true }).click()
+  if (await page.locator('.local-chat .message-assistant').count()) throw new Error('Nouvelle conversation locale non vide.')
+  await localBox.fill('Deuxième conversation')
+  await localBox.press('Enter')
+  await page.locator('.local-chat .message-assistant').first().waitFor({ timeout: 5_000 })
+  if (localChatRequests.at(-1).messages.length !== 1) throw new Error('La nouvelle conversation a reçu l’ancienne.')
+  const historyButton = page.getByRole('button', { name: 'Historique des conversations' })
+  const historyMenu = page.getByRole('menu', { name: 'Conversations enregistrées' })
+  await historyButton.click()
+  await historyMenu.getByRole('menuitemradio', { name: /Deuxième conversation/ }).waitFor({ timeout: 5_000 })
+  const historyRows = await historyMenu.getByRole('menuitemradio').allTextContents()
+  if (historyRows.length !== 2 || !historyRows[0].includes('Deuxième conversation') || !historyRows[1].includes('7 messages')) throw new Error(`Liste de l’historique : ${JSON.stringify(historyRows)}`)
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.local-history-popover')).opacity === '1')
+  await page.screenshot({ path: `${SCREENSHOTS}local-history.png` })
+  await historyMenu.getByRole('menuitemradio', { name: /Bonjour local/ }).click()
+  await page.locator('.local-chat .message-user').getByText('Après chargement').waitFor({ timeout: 3_000 })
+  if (await page.locator('.local-chat .message-assistant').count() !== 3) throw new Error('Conversation locale mal rouverte.')
+  // Another message goes into the reopened conversation, with its history.
+  await localBox.fill('On reprend')
+  await localBox.press('Enter')
+  await page.locator('.local-chat .message-assistant').nth(3).waitFor({ timeout: 5_000 })
+  if (localChatRequests.at(-1).messages.length !== 8) throw new Error(`Reprise de conversation : ${localChatRequests.at(-1).messages.length} messages envoyés.`)
+  // The app opened again: the last conversation comes back.
+  await page.waitForFunction(async () => (await (await fetch('/api/local-chat/history')).json()).conversations[0]?.count === 9, null, { timeout: 5_000, polling: 100 })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.locator('[data-bot="local:ollama"]').click()
+  await page.locator('.local-chat .message-user').getByText('On reprend').waitFor({ timeout: 5_000 })
+  // Delete: a second click confirms; deleting the open conversation starts a new one.
+  await historyButton.click()
+  await historyMenu.locator('.local-history-item', { hasText: 'Bonjour local' }).getByRole('button', { name: 'Supprimer la conversation' }).click()
+  if ((await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())).conversations.length !== 2) throw new Error('Une conversation a été supprimée sans confirmation.')
+  await historyMenu.getByRole('button', { name: 'Supprimer ?' }).click()
+  await page.locator('.local-chat .message-user').first().waitFor({ state: 'detached', timeout: 3_000 })
+  const afterDelete = await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())
+  if (afterDelete.conversations.length !== 1 || afterDelete.conversations[0].title !== 'Deuxième conversation') throw new Error(`Suppression : ${JSON.stringify(afterDelete)}`)
+  // The routes: a session, the page's origin, and messages of the local chat only.
+  if ((await fetch('http://127.0.0.1:4332/api/local-chat/history')).status !== 401) throw new Error('/api/local-chat/history répond sans session.')
+  const historyId = afterDelete.conversations[0].id
+  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'http://127.0.0.1:4332' } })).status !== 401) throw new Error('Suppression sans session.')
+  if ((await fetch(`http://127.0.0.1:4332/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'https://exemple.test' } })).status !== 403) throw new Error('Suppression depuis une autre origine.')
+  const historyStatus = (id, body) => page.evaluate(async ([id, body]) => (await fetch(`/api/local-chat/history/${id}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, [id, body])
+  if (await historyStatus('court', { messages: [{ id: 'm', role: 'user', content: 'x' }] }) !== 404) throw new Error('Identifiant de conversation invalide accepté.')
+  if (await historyStatus('local-conversation-test', { messages: [{ id: 'm', role: 'system', content: 'x' }] }) !== 400) throw new Error('Rôle system accepté dans l’historique.')
+  await page.evaluate(async (id) => fetch(`/api/local-chat/history/${id}`, { method: 'DELETE', credentials: 'same-origin' }), historyId)
   await page.locator('[data-bot=nova]').click()
 
   // A truly empty list keeps its message once loading is done.

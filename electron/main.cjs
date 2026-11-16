@@ -73,6 +73,18 @@ function configureSessionPersistence() {
     },
     clear: () => fs.rmSync(credentials, { force: true }),
   }
+  // Local chat conversations. `null`: no file yet. An unreadable file throws: the server then refuses to write over it.
+  const localChat = path.join(directory, 'local-chat.bin')
+  globalThis.__hermesBotLocalChatStore = {
+    load: () => {
+      if (!fs.existsSync(localChat)) return null
+      return safeStorage.decryptString(fs.readFileSync(localChat))
+    },
+    save: (json) => {
+      fs.writeFileSync(`${localChat}.tmp`, safeStorage.encryptString(json), { mode: 0o600 })
+      fs.renameSync(`${localChat}.tmp`, localChat)
+    },
+  }
 }
 
 function hermesReady() {
