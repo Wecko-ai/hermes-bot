@@ -52,4 +52,5 @@ jobs:
       - name: Swift tests (dictation helper and native core)
         run: |
           swift test --package-path native/dictation
-          swift test --package-path swift
+          # The native core (swift/) is not in every checkout of this repository.
+          if [ -d swift ]; then swift test --package-path swift; fi
