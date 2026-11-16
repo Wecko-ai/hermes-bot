@@ -289,12 +289,14 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     if (!element || !mention) return
     const caret = element.selectionStart ?? text.length
     const inserted = `@${option.tag} `
-    setText(`${text.slice(0, mention.start)}${inserted}${text.slice(caret)}`)
+    const next = `${text.slice(0, mention.start)}${inserted}${text.slice(caret)}`
+    setText(next)
     setMention(null)
     const position = mention.start + inserted.length
     requestAnimationFrame(() => {
       element.focus()
-      element.setSelectionRange(position, position)
+      // Typed during that frame already: the caret is after those letters, moving it would split the text.
+      if (element.value === next) element.setSelectionRange(position, position)
     })
   }
 

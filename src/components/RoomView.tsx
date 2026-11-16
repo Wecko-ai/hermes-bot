@@ -126,8 +126,11 @@ export function RoomView(props: RoomViewProps) {
     const position = token.start + insert.length
     updateDraft(next, position)
     requestAnimationFrame(() => {
-      textareaRef.current?.focus()
-      textareaRef.current?.setSelectionRange(position, position)
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      // Typed during that frame already: the caret is after those letters, moving it would split the text.
+      if (textarea.value === next) textarea.setSelectionRange(position, position)
     })
   }
 
