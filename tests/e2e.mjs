@@ -54,7 +54,9 @@ console.log(\`tour : \${owner} \${since} pid=123 depuis 1 min\\nen file : 0\`)
 const TEST_DATA = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-e2e-'))
 const TEST_CONFIG = path.join(TEST_DATA, 'config.json')
 const TEST_ANIMATIONS = path.join(TEST_DATA, 'animations')
-writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' } }))
+writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' }, modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` } }))
+// Models the simulated proxy answered (tiny live check before a switch).
+const modelProbeCalls = []
 mkdirSync(TEST_ANIMATIONS)
 const TINY_WEBP = Buffer.from('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', 'base64')
 for (const slug of ['nova', 'orion']) for (const phase of ['working', 'done']) writeFileSync(path.join(TEST_ANIMATIONS, `${slug}-${phase}.webp`), TINY_WEBP)
@@ -199,6 +201,18 @@ const mock = http.createServer((request, response) => {
   const authenticated = localMode
     ? request.headers['x-hermes-session-token'] === LOCAL_TOKEN
     : Number(/hermes_session=test-(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || 0) > expiredBefore
+  if (url.pathname === '/v1/responses' && request.method === 'POST') {
+    let raw = ''
+    request.on('data', (chunk) => { raw += chunk })
+    request.on('end', () => {
+      const body = JSON.parse(raw || '{}')
+      modelProbeCalls.push({ model: body.model, authorization: request.headers.authorization || '' })
+      response.end(JSON.stringify(body.model === 'cursor/claude-sonnet-5-5'
+        ? { status: 'failed', error: { code: 'rate_limit_exceeded', type: 'rate_limit_error', message: 'Cursor rate limit exceeded' } }
+        : { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }] }))
+    })
+    return
+  }
   if (url.pathname === '/api/status' && localMode) {
     return response.end(JSON.stringify({ auth_required: false, auth_providers: [], auth_flows: [] }))
   }
@@ -650,6 +664,7 @@ wss.on('connection', (socket) => {
           { slug: 'hidden-provider', name: 'Fournisseur masqué', authenticated: true, models: ['hidden-model'] },
           { slug: 'custom:omlx', name: 'Qwen local (oMLX)', authenticated: true, models: ['qwen-local-27b'] },
           { slug: 'lmstudio', name: 'LM Studio', authenticated: true, models: ['gemma-local'] },
+          { slug: 'custom:cursor', name: 'Cursor (abo)', authenticated: true, models: ['cursor/claude-sonnet-5-5'] },
           { slug: 'absent', name: 'Non connecté', authenticated: false, models: ['modele-interdit'] },
         ],
       })
@@ -2569,10 +2584,10 @@ try {
   const anthropicGroup = page.locator('.model-group', { hasText: 'Anthropic' })
   if (!await anthropicGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Le groupe du modèle actif doit être ouvert.')
   if (await kimiGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Les autres fournisseurs doivent être pliés.')
-  // The real logos pass the app's CSP; all local servers form a single group with no brand logo.
+  // The real logos (Anthropic, Kimi, Cursor) pass the app’s CSP; all local servers form a single group with no brand logo.
   await page.waitForFunction(() => {
     const logos = [...document.querySelectorAll('.model-group-tile.has-logo img')]
-    return logos.length === 2 && logos.every((logo) => logo.complete && logo.naturalWidth > 0)
+    return logos.length === 3 && logos.every((logo) => logo.complete && logo.naturalWidth > 0)
   }, null, { timeout: 5_000 })
   const localGroup = page.locator('.model-group', { hasText: 'Local LLM' })
   if (await localGroup.count() !== 1) throw new Error('Les modèles locaux doivent être réunis sous Local LLM.')
@@ -2618,6 +2633,19 @@ try {
   if (!String(routeMessage).includes('No usable credentials found for lmstudio.')) throw new Error(`Avertissement de route inattendu: ${routeMessage}`)
   await page.waitForTimeout(300)
   if (modelMutations.length !== 2) throw new Error('Un changement refusé vers une route sans clé a été envoyé.')
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
+  await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
+
+  // A model its provider refuses for quota is not switched to: the live check answers first, no credential sent.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('/model cursor')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await page.locator('.model-option[data-model="cursor/claude-sonnet-5-5"]').click()
+  await page.getByText('quota épuisé', { exact: false }).waitFor({ timeout: 5_000 })
+  await page.waitForTimeout(300)
+  if (modelMutations.length !== 2) throw new Error('Un modèle refusé pour quota a été envoyé à la gateway.')
+  if (!modelProbeCalls.some((call) => call.model === 'cursor/claude-sonnet-5-5')) throw new Error(`Le modèle Cursor n’a pas été essayé avant le changement : ${JSON.stringify(modelProbeCalls)}`)
+  if (modelProbeCalls.some((call) => call.authorization)) throw new Error('La sonde de modèle ne doit envoyer aucun identifiant.')
+  if (modelProbeCalls.some((call) => !String(call.model).startsWith('cursor/'))) throw new Error(`Un modèle hors des préfixes configurés a été sondé : ${JSON.stringify(modelProbeCalls)}`)
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
 

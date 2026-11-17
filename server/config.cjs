@@ -67,6 +67,28 @@ function command(value) {
   return argv.length && path.isAbsolute(argv[0]) ? argv : null
 }
 
+/**
+ * Models checked by a tiny live request before the app switches a chat to them: model-id prefix to the
+ * base URL of an OpenAI Responses-compatible endpoint on this machine (a local proxy, keyless). A provider
+ * that refuses a model for quota still lists it; only an answer tells. A remote base needs the remote opt-in.
+ */
+function modelProbes(value, allowRemote) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return Object.entries(value).slice(0, 16).flatMap(([prefix, base]) => {
+    const cleanPrefix = text(prefix, 64)
+    const raw = text(base, 512)
+    if (!cleanPrefix || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(cleanPrefix) || !raw) return []
+    try {
+      const url = new URL(raw)
+      if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.search || url.hash || url.username || url.password) return []
+      if (!allowRemote && !isLoopbackOrigin(url.origin)) return []
+      return [{ prefix: cleanPrefix, base: `${url.origin}${url.pathname.replace(/\/+$/, '')}` }]
+    } catch {
+      return []
+    }
+  })
+}
+
 function merge(...layers) {
   const result = {}
   for (const layer of layers) {
@@ -118,6 +140,7 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       user: env.BROWSER_TOUR_COMMAND ? '' : text(browserTurn.user, 64),
       remoteCommand: env.BROWSER_TOUR_COMMAND ? null : command(browserTurn.remoteCommand),
     },
+    modelProbes: modelProbes(raw.modelProbes, allowRemoteGateway),
     animationsDir: text(env.HERMESBOT_ANIMATIONS, 4096) || text(raw.animationsDir, 4096)
       || (usePrivate && fs.existsSync(defaultAnimations) ? defaultAnimations : path.join(dataDir, 'animations')),
     // Interface preferences, sent as is to the window by /api/app-config.
@@ -132,4 +155,4 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
   }
 }
 
-module.exports = { loadConfig, dataDirectory }
+module.exports = { loadConfig, dataDirectory, modelProbes }

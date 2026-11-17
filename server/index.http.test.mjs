@@ -93,6 +93,7 @@ describe('local routes require a real session', () => {
       ['/api/local-chat/status', 'GET'],
       ['/api/local-chat', 'POST'],
       ['/api/local-chat/load', 'POST'],
+      ['/api/model-probe', 'POST'],
       ['/api/local-chat/unload', 'POST'],
       ['/api/browser-turn', 'GET'],
     ]

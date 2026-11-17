@@ -14,6 +14,7 @@ import { DOCUMENT_TEXT_MAX_BYTES, IMAGE_MAX_BYTES, createByteCap, forwardRequest
 import { createLocalGateway } from './local-gateway.mjs'
 import { LOCAL_HISTORY_LIMITS, createLocalChatHistory } from './local-chat-history.mjs'
 import { LOCAL_CHAT_IDLE, LOCAL_CHAT_KEEP, LOCAL_CHAT_OPTIONS, createLocalMemory } from './local-memory.mjs'
+import { createModelProbe } from './model-probe.mjs'
 import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
 import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
@@ -512,6 +513,7 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
 // Isolated local chat, with an Ollama model installed on the machine. Only messages are sent, never a tool:
 // the model cannot execute anything. From another Mac, 127.0.0.1:11434 may be a tunnel to the Ollama machine.
 const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
+const modelProbe = createModelProbe({ probes: CONFIG.modelProbes })
 const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
 const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
 let ollamaModelsCache = { at: 0, entries: null }
@@ -582,6 +584,17 @@ async function handleLocalStatus(request, response) {
  * Load (`keep_alive` 30 min) or unload (`keep_alive` 0) an installed model, without a prompt: Ollama only moves
  * the weights. An unload waits for a reply in progress, even another program’s, before freeing the memory.
  */
+/** Before a switch: does this model answer now? Only for the prefixes of `modelProbes`. */
+async function handleModelProbe(request, response) {
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  let body
+  try { body = await bodyJson(request, 4_096) } catch { return json(response, 400, { error: 'invalid_body' }) }
+  const result = await modelProbe.check(body?.model)
+  if (result.invalid) return json(response, 400, { error: 'invalid_model' })
+  return json(response, 200, result)
+}
+
 async function handleLocalMemory(request, response, action) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
@@ -928,6 +941,9 @@ const server = http.createServer(async (request, response) => {
     }
     if ((url.pathname === '/api/local-chat/load' || url.pathname === '/api/local-chat/unload') && request.method === 'POST') {
       return await handleLocalMemory(request, response, url.pathname.endsWith('/load') ? 'load' : 'unload')
+    }
+    if (url.pathname === '/api/model-probe' && request.method === 'POST') {
+      return await handleModelProbe(request, response)
     }
     if (url.pathname === '/api/browser-turn' && request.method === 'GET') {
       if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })

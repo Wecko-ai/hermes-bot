@@ -38,6 +38,7 @@ import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
+import { probeModel } from './lib/model-probe'
 import { pullSharedSettingsSoon, syncSharedSettings } from './lib/shared-settings'
 import { botActionError, runBotAction, type BotAction } from './lib/bot-actions'
 import { createBot, createdBotEntry, loadProfileNames, withCreatedBot, type BotDraft } from './lib/bot-create'
@@ -1633,6 +1634,16 @@ export default function App() {
       if (issue) {
         setRouteIssues((value) => ({ profile: chat.profile, issues: { ...(value.profile === chat.profile ? value.issues : {}), [option.provider]: issue.error } }))
         if (!window.confirm(i18n.t('app.modelRouteUnusable', { provider: option.providerName, error: issue.error }))) return
+      }
+      // A key is not enough: a provider out of quota still lists the model, and Hermes would only find out
+      // on the next turn, then answer with the profile's fallback. A model refused for quota is not offered.
+      const probe = await probeModel(option.model)
+      if (probe.checked && !probe.ok) {
+        if (probe.reason === 'quota') {
+          setModelsError(i18n.t('app.modelQuotaRefused', { model: modelLabel(option.model), error: probe.message }))
+          return
+        }
+        if (!window.confirm(i18n.t('app.modelProbeFailed', { model: modelLabel(option.model), error: probe.message }))) return
       }
       let result = await switchModel(client, chat, option)
       if (result?.confirm_required && typeof result.confirm === 'string') {
