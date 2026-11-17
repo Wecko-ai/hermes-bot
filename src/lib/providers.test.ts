@@ -9,6 +9,7 @@ describe('logos des fournisseurs', () => {
     ['openai-codex', 'ChatGPT or Codex Subscription', 'openai'],
     ['openai-api', 'OpenAI API', 'openai'],
     ['custom:opencodex', 'ChatGPT abo (opencodex)', 'openai'],
+    ['cursor', 'Cursor (opencodex)', 'cursor'],
     ['copilot', 'GitHub Copilot', 'githubcopilot'],
     ['nous', 'Nous Portal', 'nousresearch'],
     ['kimi-coding', 'Kimi / Kimi Coding Plan', 'kimi'],

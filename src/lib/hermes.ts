@@ -9,6 +9,7 @@ import { isRemovedProfile } from './bot-manage'
 import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
 import { UNASSIGNED_SECTION_ID, UNASSIGNED_SECTION_NAME } from './roster-groups'
 import { i18n } from '../i18n'
+import { readModelMemory, withRememberedModels, writeModelMemory } from './model-memory'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -701,19 +702,23 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
   const result = await client.request('model.options', { profile, ...(sessionId ? { session_id: sessionId } : {}) })
   const options: ModelOption[] = []
   const hiddenProviders = new Set(getAppConfig().ui.hiddenProviders)
+  // A model listed lately stays offered when the gateway answers with its built-in list (see model-memory.ts).
+  const memory = readModelMemory()
+  const now = Date.now()
   for (const value of Array.isArray(result?.providers) ? result.providers : []) {
     const provider = asObject(value)
     if (provider.authenticated === false) continue
     const slug = asString(provider.slug)
     if (hiddenProviders.has(slug)) continue
-    const unavailable = new Set(Array.isArray(provider.unavailable_models) ? provider.unavailable_models : [])
+    const unavailable = new Set<string>((Array.isArray(provider.unavailable_models) ? provider.unavailable_models : []).filter((model: unknown): model is string => typeof model === 'string'))
     const pricing = asObject(provider.pricing)
-    const listed = Array.isArray(provider.models) ? provider.models : []
+    const listed = (Array.isArray(provider.models) ? provider.models : []).filter((model: unknown): model is string => typeof model === 'string' && !unavailable.has(model))
+    const kept = withRememberedModels(listed, memory[slug], now, unavailable)
+    memory[slug] = kept.memory
     for (const model of PLAN_MODELS[slug] ?? []) {
-      if (!listed.includes(model) && !unavailable.has(model)) options.push({ model, provider: slug, providerName: asString(provider.name, slug), tag: i18n.t('hermes.planTag') })
+      if (!kept.models.includes(model) && !unavailable.has(model)) options.push({ model, provider: slug, providerName: asString(provider.name, slug), tag: i18n.t('hermes.planTag') })
     }
-    for (const model of listed) {
-      if (typeof model !== 'string' || unavailable.has(model)) continue
+    for (const model of kept.models) {
       const price = asObject(pricing[model])
       options.push({
         model,
@@ -724,6 +729,7 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
       })
     }
   }
+  writeModelMemory(memory)
   return { options, current: asString(result?.model) }
 }
 

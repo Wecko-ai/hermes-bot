@@ -2674,6 +2674,22 @@ try {
   await settingsSearch.fill('sonnet')
   await settingsDialog.locator('.settings-model[data-model="claude-sonnet-5-5"] input').uncheck()
   await settingsSearch.fill('')
+  // Nothing leaves before Save: the boxes only change a draft.
+  const sharedHiddenNow = () => JSON.parse(sharedSettingsFile).hiddenModels
+  await page.waitForTimeout(600)
+  if (sharedHiddenNow().some((key) => key.endsWith(':kimi-k3'))) throw new Error(`Un choix de modèle est parti avant Enregistrer : ${sharedSettingsFile}`)
+  await settingsDialog.locator('.settings-footer-status', { hasText: 'Changements non enregistrés.' }).waitFor({ timeout: 2_000 })
+  // Closing with an unsaved choice asks first; declining keeps the dialog and the draft.
+  page.once('dialog', (dialog) => void dialog.dismiss())
+  await settingsDialog.press('Escape')
+  await page.waitForTimeout(250)
+  if (!(await settingsDialog.isVisible())) throw new Error('Les réglages se ferment sans demander, avec un choix de modèle non enregistré.')
+  // Another app hides a model meanwhile: the save keeps it, and sends only this window's edits.
+  sharedSettingsFile = JSON.stringify({ version: 1, hiddenModels: [...sharedHiddenNow(), 'custom:omlx:qwen-ailleurs'] })
+  await settingsDialog.getByRole('button', { name: 'Enregistrer', exact: true }).click()
+  await settingsDialog.locator('.settings-footer-status', { hasText: 'Enregistré.' }).waitFor({ timeout: 3_000 })
+  if (!sharedHiddenNow().includes('custom:omlx:qwen-ailleurs') || !sharedHiddenNow().some((key) => key.endsWith(':kimi-k3'))) throw new Error(`Enregistrement mal fusionné : ${sharedSettingsFile}`)
+  sharedSettingsFile = JSON.stringify({ version: 1, hiddenModels: sharedHiddenNow().filter((key) => key !== 'custom:omlx:qwen-ailleurs') })
   await settingsDialog.press('Escape')
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
   await page.getByRole('button', { name: 'Choisir le modèle' }).click()
@@ -2691,11 +2707,11 @@ try {
   await page.waitForTimeout(400)
   await page.screenshot({ path: `${SCREENSHOTS}settings-models-dark.png` })
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
-  // Every change goes to the gateway's shared file, read by the iPhone app.
+  // A saved change is in the gateway's shared file, read by the iPhone app.
   const sharedHidden = () => JSON.parse(sharedSettingsFile).hiddenModels
-  for (let wait = 0; wait < 20 && !sharedHidden().some((key) => key.endsWith(':kimi-k3')); wait++) await page.waitForTimeout(100)
   if (!sharedHidden().some((key) => key.endsWith(':kimi-k3')) || !sharedHidden().includes('custom:omlx:qwen-masque')) throw new Error(`Modèles masqués non partagés : ${sharedSettingsFile}`)
   await settingsDialog.getByRole('button', { name: 'Tout afficher' }).click()
+  await settingsDialog.getByRole('button', { name: 'Enregistrer', exact: true }).click()
   // Only the listed models come back: a model hidden elsewhere and absent here stays hidden.
   const onlyForeign = () => sharedHidden().length === 1 && sharedHidden()[0] === 'custom:omlx:qwen-masque'
   for (let wait = 0; wait < 20 && !onlyForeign(); wait++) await page.waitForTimeout(100)

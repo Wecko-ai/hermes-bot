@@ -17,6 +17,7 @@ const LOCAL_SERVER = /(?:^|[^a-z])(?:local|localhost|omlx|mlx|ollama|lm[- ]?stud
 const BRANDS: Array<[RegExp, string]> = [
   [/anthropic|claude/, 'anthropic'],
   [/openrouter/, 'openrouter-color'],
+  [/cursor/, 'cursor'],
   [/openai|chatgpt|codex/, 'openai'],
   [/copilot/, 'githubcopilot'],
   [/\bnous\b/, 'nousresearch'],

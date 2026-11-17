@@ -1,0 +1,77 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from './shared-settings'
+import { getSettings, updateSettings } from './settings'
+
+describe('modèles masqués partagés', () => {
+  it('n’envoie que les changements de cette fenêtre, sur la copie la plus récente', () => {
+    // This window started from [a, b]; meanwhile the other Mac showed b and hid c.
+    const remote = ['a', 'c']
+    // Here: a shown, d hidden. b was not touched here, so it stays shown.
+    expect(mergeHiddenModels(remote, ['a', 'b'], ['b', 'd'])).toEqual(['c', 'd'])
+  })
+
+  it('ne remasque pas un modèle réaffiché ailleurs quand on touche à un autre', () => {
+    // The old bug: a window with an old list hid Sonnet again when any other model was changed.
+    const remote = ['anthropic:claude-opus-4-8']
+    const staleBaseline = ['anthropic:claude-opus-4-8', 'anthropic:claude-sonnet-5-5']
+    const draft = [...staleBaseline, 'kimi-coding:kimi-k3']
+    expect(mergeHiddenModels(remote, staleBaseline, draft)).toEqual(['anthropic:claude-opus-4-8', 'kimi-coding:kimi-k3'])
+  })
+
+  it('n’ajoute pas deux fois la même clé', () => {
+    expect(mergeHiddenModels(['x'], [], ['x', 'y', 'y'])).toEqual(['x', 'y'])
+  })
+})
+
+describe('enregistrement des modèles masqués', () => {
+  const calls: Array<{ method: string; body?: unknown }> = []
+  let remote: { exists: boolean; settings: { hiddenModels: string[] } } = { exists: true, settings: { hiddenModels: [] } }
+  let putOk = true
+
+  beforeEach(() => {
+    calls.length = 0
+    putOk = true
+    updateSettings({ hiddenModels: [] })
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const method = init?.method || 'GET'
+      calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      if (method === 'PUT') return { ok: putOk, json: async () => ({ ok: putOk }) }
+      return { ok: true, json: async () => remote }
+    }))
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('lit la copie de la gateway avant d’écrire, et garde le résultat dans la fenêtre', async () => {
+    remote = { exists: true, settings: { hiddenModels: ['p:other'] } }
+    const result = await saveHiddenModels([], ['p:mine'])
+    expect(result).toEqual({ ok: true, hiddenModels: ['p:other', 'p:mine'] })
+    expect(calls.map((call) => call.method)).toEqual(['GET', 'PUT'])
+    expect(calls[1].body).toEqual({ hiddenModels: ['p:other', 'p:mine'] })
+    expect(getSettings().hiddenModels).toEqual(['p:other', 'p:mine'])
+  })
+
+  it('garde le brouillon si la gateway refuse : rien n’est changé dans la fenêtre', async () => {
+    updateSettings({ hiddenModels: ['p:saved'] })
+    putOk = false
+    const result = await saveHiddenModels(['p:saved'], [])
+    expect(result.ok).toBe(false)
+    expect(getSettings().hiddenModels).toEqual(['p:saved'])
+  })
+
+  it('n’écrit rien quand on change un autre réglage', async () => {
+    remote = { exists: true, settings: { hiddenModels: ['p:a'] } }
+    await syncSharedSettings()
+    calls.length = 0
+    updateSettings({ theme: 'dark' })
+    updateSettings({ hiddenModels: ['p:a', 'p:b'] })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(calls).toEqual([])
+  })
+
+  it('en démo, enregistre dans la fenêtre seulement', async () => {
+    const result = await saveHiddenModels([], ['p:demo'], { local: true })
+    expect(result.ok).toBe(true)
+    expect(calls).toEqual([])
+    expect(getSettings().hiddenModels).toEqual(['p:demo'])
+  })
+})

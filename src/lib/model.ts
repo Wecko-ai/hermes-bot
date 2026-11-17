@@ -11,6 +11,11 @@ export function modelLabel(model: string) {
   return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
 }
 
+/** The composer's chip: a model served through the Cursor subscription says so, next to the same model's API route. */
+export function chipModelLabel(model: string) {
+  return /^cursor\//i.test(model) ? `${modelLabel(model)} · Cursor` : modelLabel(model)
+}
+
 export function compactNumber(value: number) {
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`
   if (value >= 1_000) return `${Math.round(value / 1_000)}k`

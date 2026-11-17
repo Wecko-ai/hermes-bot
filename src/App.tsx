@@ -13,7 +13,7 @@ import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel } from './store'
 import { createRoom, listRooms, loadRoomCapabilities, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
-import { modelLabel } from './lib/model'
+import { chipModelLabel, modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
@@ -38,7 +38,7 @@ import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
-import { syncSharedSettings } from './lib/shared-settings'
+import { pullSharedSettingsSoon, syncSharedSettings } from './lib/shared-settings'
 import { botActionError, runBotAction, type BotAction } from './lib/bot-actions'
 import { createBot, createdBotEntry, loadProfileNames, withCreatedBot, type BotDraft } from './lib/bot-create'
 import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboarding'
@@ -485,7 +485,12 @@ export default function App() {
       if (state.connected || state.reconnecting) return
       if (previous.connected || previous.reconnecting) reconnector.schedule()
     })
-    const retryNow = () => { if (!useRosterStore.getState().connected && !document.hidden) reconnector.now() }
+    // Back on the window: a hidden-models list saved from the other Mac or the iPhone is read here too.
+    const retryNow = () => {
+      if (document.hidden) return
+      if (useRosterStore.getState().connected) pullSharedSettingsSoon()
+      else reconnector.now()
+    }
     const onVisible = () => { if (!document.hidden) retryNow() }
     window.addEventListener('online', retryNow)
     window.addEventListener('focus', retryNow)
@@ -1838,7 +1843,7 @@ export default function App() {
         onNotice={setNotice}
         onOpenDocument={openDocument}
         onOpenBot={openBot}
-        modelLabel={modelLabel(chatModel || selectedBot.model)}
+        modelLabel={chipModelLabel(chatModel || selectedBot.model)}
         onOpenModels={openModels}
         usage={usage}
         showUsage={showUsage}
@@ -1918,6 +1923,7 @@ export default function App() {
           onClose={() => setSettingsTab(null)}
           onChooseTheme={chooseTheme}
           localModels={DEMO ? localModels : undefined}
+          demo={DEMO}
           models={modelOptions}
           bots={bots}
           modelsLoading={modelsLoading}

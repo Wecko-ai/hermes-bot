@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatUsage, modelLabel } from './model'
+import { chipModelLabel, formatUsage, modelLabel } from './model'
 
 describe('modèles et usage', () => {
   it('raccourcit les noms de modèles', () => {
@@ -11,6 +11,14 @@ describe('modèles et usage', () => {
     expect(modelLabel('deepseek/deepseek-v4-flash')).toBe('deepseek-v4-flash')
     expect(modelLabel('kimi-k3')).toBe('kimi-k3')
     expect(modelLabel('k3.1-pro')).toBe('K3.1 Pro')
+  })
+
+  it('dit Cursor dans la pastille du champ, pas dans les lignes du sélecteur', () => {
+    expect(modelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5')
+    expect(chipModelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5 · Cursor')
+    expect(chipModelLabel('cursor/gpt-5.6-sol')).toBe('gpt-5.6-sol · Cursor')
+    expect(chipModelLabel('claude-sonnet-5-5')).toBe('Sonnet 5.5')
+    expect(chipModelLabel('openrouter/anthropic/claude-sonnet-5.5')).toBe('Sonnet 5.5')
   })
 
   it('affiche le contexte et le débit, ou des tirets sans donnée', () => {

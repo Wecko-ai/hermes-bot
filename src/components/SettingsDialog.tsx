@@ -8,6 +8,7 @@ import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
+import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from '../lib/shared-settings'
 import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
@@ -39,6 +40,8 @@ interface SettingsDialogProps {
   bots: Bot[]
   /** Local models already known (the visual demo): the Conversations tab then reads no list. */
   localModels?: LocalModels | null
+  /** Visual demo: no gateway to share the hidden models with, the save stays in this window. */
+  demo?: boolean
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -184,16 +187,75 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
   )
 }
 
-function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<SettingsDialogProps, 'models' | 'modelsLoading' | 'modelsError' | 'onLoadModels'>) {
-  const { t } = useTranslation()
+const sameKeys = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false
+  const keys = new Set(a)
+  return b.every((key) => keys.has(key))
+}
+
+type SaveStatus = '' | 'saved' | 'failed'
+
+/**
+ * The hidden-models editor's draft. Checkboxes only change the draft; the Save button writes it (merged
+ * onto the gateway's latest copy). Held by the dialog: switching tabs keeps unsaved edits.
+ */
+function useHiddenModelsDraft(demo: boolean) {
   const { hiddenModels } = useSettings()
+  const [baseline, setBaseline] = useState(hiddenModels)
+  const [draft, setDraft] = useState(hiddenModels)
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState<SaveStatus>('')
+  const dirty = !sameKeys(baseline, draft)
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
+
+  // The saved list changed (read back from the gateway): an untouched draft follows it.
+  useEffect(() => {
+    if (dirtyRef.current) return
+    setBaseline(hiddenModels)
+    setDraft(hiddenModels)
+  }, [hiddenModels])
+
+  const setVisible = (options: ModelOption[], visible: boolean) => {
+    setDraft((current) => withModelsVisible(current, options, visible))
+    setStatus('')
+  }
+  const discard = () => {
+    setDraft(baseline)
+    setStatus('')
+  }
+  const save = async () => {
+    if (saving || !dirty) return
+    setSaving(true)
+    const sent = draft
+    const result = await saveHiddenModels(baseline, sent, { local: demo })
+    setSaving(false)
+    if (!result.ok) {
+      setStatus('failed')
+      return
+    }
+    setBaseline(result.hiddenModels)
+    // A box ticked while the save was on its way stays a change to save.
+    setDraft((current) => current === sent ? result.hiddenModels : mergeHiddenModels(result.hiddenModels, sent, current))
+    setStatus('saved')
+  }
+  return { draft, dirty, dirtyRef, saving, status, setVisible, discard, save }
+}
+
+type ModelsDraft = ReturnType<typeof useHiddenModelsDraft>
+
+function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, draft: editor }: Pick<SettingsDialogProps, 'models' | 'modelsLoading' | 'modelsError' | 'onLoadModels'> & { demo: boolean; draft: ModelsDraft }) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
-  // A single read when the tab opens: the list comes from the gateway.
+  // A single read when the tab opens: the models from the gateway, the hidden list from its shared file.
   const loadRef = useRef(onLoadModels)
-  useEffect(() => { loadRef.current() }, [])
+  useEffect(() => {
+    loadRef.current()
+    if (!demo) void syncSharedSettings()
+  }, [demo])
 
-  const hidden = useMemo(() => new Set(hiddenModels), [hiddenModels])
+  const hidden = useMemo(() => new Set(editor.draft), [editor.draft])
   const searching = query.trim().length > 0
   const filtered = useMemo(() => {
     const words = query.toLocaleLowerCase('fr').split(/[\s/_-]+/).filter(Boolean)
@@ -205,7 +267,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<Se
   const groups = useMemo(() => groupModels(filtered), [filtered])
   const visibleCount = models.filter((option) => !hidden.has(hiddenModelKey(option))).length
 
-  const setVisible = (options: ModelOption[], visible: boolean) => updateSettings({ hiddenModels: withModelsVisible(hiddenModels, options, visible) })
+  const setVisible = editor.setVisible
   const toggleGroup = (slug: string) => setOpenGroups((current) => {
     const next = new Set(current)
     if (!next.delete(slug)) next.add(slug)
@@ -267,6 +329,22 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels }: Pick<Se
   )
 }
 
+/** Save and discard of the model choices. Shown on every tab while an edit is unsaved. */
+function ModelsSaveBar({ draft }: { draft: ModelsDraft }) {
+  const { t } = useTranslation()
+  const message = draft.saving ? t('settings.modelsSaving')
+    : draft.status === 'failed' ? t('settings.modelsSaveFailed')
+      : draft.dirty ? t('settings.modelsUnsaved')
+        : draft.status === 'saved' ? t('settings.modelsSaved') : ''
+  return (
+    <footer className="settings-footer">
+      <span className={`settings-footer-status ${draft.status === 'failed' ? 'is-error' : ''}`} role="status">{message}</span>
+      <button type="button" className="settings-button" disabled={!draft.dirty || draft.saving} onClick={draft.discard}>{t('settings.modelsDiscard')}</button>
+      <button type="button" className="settings-button is-primary" disabled={!draft.dirty || draft.saving} onClick={() => void draft.save()}>{t('settings.modelsSave')}</button>
+    </footer>
+  )
+}
+
 function AccountTab({ connected, reconnecting, onReconnect, onLogout }: Pick<SettingsDialogProps, 'connected' | 'reconnecting' | 'onReconnect' | 'onLogout'>) {
   const { t } = useTranslation()
   return (
@@ -285,7 +363,14 @@ function AccountTab({ connected, reconnecting, onReconnect, onLogout }: Pick<Set
 /** App settings, specific to this Mac. Nothing here writes to a Hermes profile. */
 export function SettingsDialog(props: SettingsDialogProps) {
   const { t } = useTranslation()
-  const { tab, onSelectTab, onClose } = props
+  const { tab, onSelectTab } = props
+  const demo = props.demo === true
+  const modelsDraft = useHiddenModelsDraft(demo)
+  // Unsaved model choices are never dropped without asking.
+  const onClose = () => {
+    if (modelsDraft.dirtyRef.current && !window.confirm(t('settings.modelsDiscardConfirm'))) return
+    props.onClose()
+  }
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement && document.activeElement !== dialogRef.current ? document.activeElement : null
@@ -335,10 +420,11 @@ export function SettingsDialog(props: SettingsDialogProps) {
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
             {tab === 'chat' && <ChatTab localModels={props.localModels} />}
-            {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} />}
+            {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} demo={demo} draft={modelsDraft} />}
             {tab === 'vault' && <VaultTab bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}
           </div>
+          {(tab === 'models' || modelsDraft.dirty) && <ModelsSaveBar draft={modelsDraft} />}
         </section>
       </div>
     </div>
