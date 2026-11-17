@@ -2783,6 +2783,16 @@ try {
   const jumpedAtBottom = await page.locator('.messages-scroll').evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
   if (jumpedAtBottom > 40) throw new Error(`Le bouton du bas n’a pas amené tout en bas, instantanément (reste ${jumpedAtBottom} px).`)
   if (await page.locator('.jump-latest').count()) throw new Error('Le bouton du bas doit disparaître une fois en bas.')
+  // No gesture, no detach: a taller window and a scroll upward made by the layout keep the last line in view.
+  const viewportBefore = page.viewportSize()
+  await page.setViewportSize({ width: viewportBefore.width, height: viewportBefore.height + 240 })
+  await page.locator('.messages-scroll').evaluate((element) => { element.scrollTop -= 400 })
+  await delay(150)
+  const layoutGap = await page.locator('.messages-scroll').evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+  await page.setViewportSize(viewportBefore)
+  if (layoutGap > 40) throw new Error(`Un défilement sans geste a décollé le fil du bas (reste ${layoutGap} px).`)
+  if (await page.locator('.jump-latest').count()) throw new Error('Sans geste, le bouton du bas ne doit pas apparaître.')
+  await delay(150)
 
   // Abrupt gateway cut (code 1006): the server must survive, then sending must resume.
   for (const client of wss.clients) client.terminate()

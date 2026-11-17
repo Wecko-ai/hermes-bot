@@ -7,6 +7,7 @@ import { roomTimeline, type Room, type RoomDriverStatus, type RoomEvent, type Ro
 import { mentionIndex, mentionOptions, mentionTokenAt, resolveMentions } from '../lib/mentions'
 import { mentionKeyAction } from '../lib/room-mention'
 import { nextStick, roomSendSettled, roomStopStillCurrent } from '../lib/room-scroll'
+import { useScrollIntent } from '../lib/use-scroll-intent'
 import { toolLabel } from '../lib/work-summary'
 import { messageDay, shortTime } from '../lib/time'
 import { BotAvatar, avatarColor } from './BotAvatar'
@@ -74,6 +75,8 @@ export function RoomView(props: RoomViewProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const lastScrollTop = useRef(0)
+  // A scroll upward without a gesture is the layout: it must not detach the room from its bottom.
+  const intent = useScrollIntent()
   // The room on screen now. A send started in another room must not clear this one's draft.
   const shownRoomId = useRef(room.room_id)
   shownRoomId.current = room.room_id
@@ -254,12 +257,17 @@ export function RoomView(props: RoomViewProps) {
         <div
           className="messages-scroll room-scroll"
           ref={scrollRef}
-          onWheel={(event) => { if (event.deltaY < 0) commitStick(event.deltaY) }}
+          {...intent.handlers}
+          onWheel={(event) => { intent.noteIntent(); if (event.deltaY < 0) commitStick(event.deltaY) }}
           onScroll={() => {
             const element = scrollRef.current
             if (!element) return
             const delta = element.scrollTop - lastScrollTop.current
             lastScrollTop.current = element.scrollTop
+            if (delta < 0 && !intent.userScrolling()) {
+              if (stickRef.current) endRef.current?.scrollIntoView({ block: 'end', behavior: 'instant' })
+              return
+            }
             commitStick(delta)
           }}
         >
@@ -316,7 +324,7 @@ export function RoomView(props: RoomViewProps) {
             </div>
           </MentionContext.Provider>
         </div>
-        {showJump && <button className="jump-latest" aria-label={t('room.latest')} onClick={() => { stickRef.current = true; setShowJump(false); endRef.current?.scrollIntoView({ behavior: 'instant' }); if (scrollRef.current) lastScrollTop.current = scrollRef.current.scrollTop }}><ArrowDown size={18} /></button>}
+        {showJump && <button className="jump-latest" aria-label={t('room.latest')} onClick={() => { stickRef.current = true; intent.clear(); setShowJump(false); endRef.current?.scrollIntoView({ behavior: 'instant' }); if (scrollRef.current) lastScrollTop.current = scrollRef.current.scrollTop }}><ArrowDown size={18} /></button>}
       </div>
 
       <div className="composer-wrap room-composer-wrap">

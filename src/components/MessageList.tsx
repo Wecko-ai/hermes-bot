@@ -19,6 +19,7 @@ import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
 import { replyAnnouncement } from '../lib/local-chat-turn'
 import { nextStick } from '../lib/scroll-stick'
+import { useScrollIntent } from '../lib/use-scroll-intent'
 import { stepIds } from '../lib/turns'
 import { mayBecomeSilent } from '../lib/hermes'
 import { messageDay, shortTime } from '../lib/time'
@@ -365,6 +366,8 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   // near-bottom scroll event cannot pin the thread again on its own.
   const wheelDeltaRef = useRef(0)
   const scrollTopRef = useRef(0)
+  // A scroll upward without a gesture is the layout: it must not detach the thread from the bottom.
+  const intent = useScrollIntent()
   const [showJump, setShowJump] = useState(false)
   const [announcement, setAnnouncement] = useState('')
   const wasStreamingRef = useRef(false)
@@ -413,6 +416,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const scrollToBottom = (smooth = false) => {
     stickToBottomRef.current = true
     wheelDeltaRef.current = 0
+    intent.clear()
     setShowJump(false)
     endRef.current?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'instant' })
   }
@@ -485,13 +489,16 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     if (stickToBottomRef.current) followBottom()
   }, [count, streaming, running, loading])
   // An image or video that finishes loading makes the thread taller: we stay at the bottom only if the user was there.
+  // The viewport too: a window that opens taller or a composer that grows must keep the last line in view.
   useEffect(() => {
     const column = columnRef.current
-    if (!column || typeof ResizeObserver === 'undefined') return
+    const viewport = scrollRef.current
+    if (!column || !viewport || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
       if (stickToBottomRef.current) followBottom()
     })
     observer.observe(column)
+    observer.observe(viewport)
     return () => observer.disconnect()
   }, [])
 
@@ -501,7 +508,9 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
       <div
         className="messages-scroll"
         ref={scrollRef}
+        {...intent.handlers}
         onWheel={(event) => {
+          intent.noteIntent()
           wheelDeltaRef.current = event.deltaY
           applyStick(event.deltaY)
         }}
@@ -510,6 +519,11 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           if (!element) return
           const moved = element.scrollTop - scrollTopRef.current
           scrollTopRef.current = element.scrollTop
+          // Upward with no gesture: the layout clamped scrollTop. A pinned thread stays at the bottom.
+          if (moved < 0 && !intent.userScrolling()) {
+            if (stickToBottomRef.current) followBottom()
+            return
+          }
           // A wheel-up wins until the user actually scrolls down. Near the bottom is not enough.
           const deltaY = wheelDeltaRef.current < 0 && moved <= 0 ? wheelDeltaRef.current : moved
           if (moved > 0) wheelDeltaRef.current = 0
