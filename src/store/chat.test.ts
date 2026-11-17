@@ -207,8 +207,9 @@ describe('store de conversation', () => {
     expect(ids).toHaveLength(CHAT_CACHE_LIMIT)
     expect(ids[0]).toBe('m2')
     expect(ids.at(-1)).toBe('tail')
+    // The thread on screen keeps the whole history: only the stored cache is capped.
     s.setMessages(many)
-    expect(useChatStore.getState().messages).toHaveLength(CHAT_CACHE_LIMIT)
+    expect(useChatStore.getState().messages).toHaveLength(CHAT_CACHE_LIMIT + 1)
   })
 
   it('applySyncedChat laisse le streaming d’un tour encore en cours', () => {
@@ -216,5 +217,27 @@ describe('store de conversation', () => {
     s.setStreaming('en cours')
     s.applySyncedChat('a', { chat: chat('a', { running: true }), messages: [], routines: [] }, { preserveLive: false, resumed: true })
     expect(useChatStore.getState().streaming).toBe('en cours')
+  })
+})
+
+describe('resolveSyncedMessages on a long history', () => {
+  it('stays linear: 500 cached rows against 5000 server rows in well under a second', () => {
+    const body = 'Lorem ipsum dolor sit amet, '.repeat(80)
+    const server = Array.from({ length: 5000 }, (_, index) => ({
+      id: `s${index}`, role: index % 2 ? 'assistant' : 'user', content: `${body} ${index}`, createdAt: '2026-11-16T00:00:00Z',
+    })) as ChatMessage[]
+    const cached = server.slice(-500).map((message, index) => ({ ...message, id: `live-${index}` }))
+    cached.push({ id: 'live-new', role: 'user', content: 'pas encore sur le serveur', createdAt: '2026-11-16T00:00:01Z' })
+    const started = performance.now()
+    const merged = resolveSyncedMessages({ chat: {} as ActiveChat, messages: cached, routines: [] }, server, false)
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(merged).toHaveLength(5001)
+    expect(merged.at(-1)?.id).toBe('live-new')
+  })
+
+  it('accepts a row without text content', () => {
+    const server = [{ id: 'a', role: 'tool', content: undefined as unknown as string, createdAt: '2026-11-16T00:00:00Z' }] as ChatMessage[]
+    const cached = [{ id: 'b', role: 'tool', content: undefined as unknown as string, createdAt: '2026-11-16T00:00:00Z' }] as ChatMessage[]
+    expect(() => resolveSyncedMessages({ chat: {} as ActiveChat, messages: cached, routines: [] }, server, false)).not.toThrow()
   })
 })

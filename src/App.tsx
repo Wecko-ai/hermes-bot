@@ -95,7 +95,7 @@ if (DEMO) {
 const { setBots, updateBot, setSelected, setRosterLoaded, setConnected, setReconnecting, applyWork, publishWork, getWorkSeq, setWorkSeq, clearDoneTimer, markDone } = useRosterStore.getState()
 const {
   setActiveChat, setChatModel, setMessages, setRoutines, setRoutinesLoading, setChatLoading, setStreaming, setStreamKey, setRunning, setActivity, setUsage,
-  getCached, updateCachedChat, appendCachedMessage, appendCachedNotes, markCachedFailed, stopAllCachedRuns,
+  getCached, setCached, updateCachedChat, appendCachedMessage, appendCachedNotes, markCachedFailed, stopAllCachedRuns,
   showProfileFromList, enterProfile, applySyncedChat,
 } = useChatStore.getState()
 const { addPrompt, settlePrompt, removePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest, removeServerRequest, setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
@@ -1130,10 +1130,22 @@ export default function App() {
     const requestId = ++chatRequestRef.current
     const cached = getCached(profile)
     const bot = useRosterStore.getState().bots.find((item) => item.slug === profile)
-    return Promise.allSettled([
-      openChat(client, profile, cached?.chat.sessionId || bot?.sessionId),
-      loadRoutines(profile),
-    ]).then(([chatResult, routineResult]) => {
+    // Routines come over the gateway's HTTP side, which can stall while its WebSocket answers:
+    // the chat never waits for them. They fill in on their own when they arrive.
+    void loadRoutines(profile).then((routines) => {
+      if (requestId !== chatRequestRef.current) return
+      setRoutines(routines)
+      const entry = getCached(profile)
+      if (entry) setCached(profile, { ...entry, routines })
+    }, () => {
+      if (requestId === chatRequestRef.current && !getCached(profile)?.routines.length) setRoutines([])
+    }).finally(() => {
+      if (requestId === chatRequestRef.current) setRoutinesLoading(false)
+    })
+    return openChat(client, profile, cached?.chat.sessionId || bot?.sessionId).then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason: unknown) => ({ status: 'rejected' as const, reason }),
+    ).then((chatResult) => {
       if (requestId !== chatRequestRef.current) return
       // After a disconnection, the turn may have ended without us: only the recency test then protects the cache.
       // The cache as it is now: a message sent while the history was loading must not vanish.
@@ -1141,7 +1153,7 @@ export default function App() {
       const preserveLive = !resumed && Boolean(latest && (useChatStore.getState().activeChat?.running || useChatStore.getState().streaming))
       if (chatResult.status === 'fulfilled') {
         const nextMessages = resolveSyncedMessages(latest, chatResult.value.messages, preserveLive)
-        const nextRoutines = routineResult.status === 'fulfilled' ? routineResult.value : cached?.routines || []
+        const nextRoutines = getCached(profile)?.routines || cached?.routines || []
         applySyncedChat(profile, { chat: chatResult.value.chat, messages: nextMessages, routines: nextRoutines }, { preserveLive, resumed })
         const openPrompts = chatResult.value.prompts
         replaceSessionPrompts(chatResult.value.chat.sessionId, openPrompts)
@@ -1164,10 +1176,7 @@ export default function App() {
       } else if (!cached) {
         setNotice(chatResult.reason instanceof Error ? chatResult.reason.message : i18n.t('app.chatOpenFailed'))
       }
-      if (routineResult.status === 'fulfilled') setRoutines(routineResult.value)
-      else if (!cached) setRoutines([])
       setChatLoading(false)
-      setRoutinesLoading(false)
     })
   }
 

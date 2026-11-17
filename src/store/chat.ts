@@ -21,13 +21,12 @@ export function trimCachedMessages(messages: ChatMessage[]) {
   return messages.length > CHAT_CACHE_LIMIT ? messages.slice(-CHAT_CACHE_LIMIT) : messages
 }
 
-function normalizedText(text: string) {
-  return text.replace(/\s+/g, ' ').trim()
+function normalizedText(text: unknown) {
+  return typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : ''
 }
 
-function rowsMatch(cached: ChatMessage, server: ChatMessage) {
-  if (cached.id && server.id && cached.id === server.id) return true
-  return cached.role === server.role && normalizedText(cached.content) === normalizedText(server.content)
+function textKey(message: ChatMessage) {
+  return `${message.role}\u0000${normalizedText(message.content)}`
 }
 
 /**
@@ -38,15 +37,43 @@ function rowsMatch(cached: ChatMessage, server: ChatMessage) {
  * cached row are appended: they are the live tail not persisted yet.
  * Clocks are not compared. `preserveLive` keeps the cached object for a row that
  * shares an id, so a turn on screen is not swapped for a different server body.
+ * Linear time: server rows are indexed once (a long history has thousands of rows,
+ * and this runs on the interface's thread while the chat opens).
  */
 export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server: ChatMessage[], preserveLive: boolean) {
   if (!cached) return server
   const cacheRows = cached.messages
+  const byId = new Map<string, number[]>()
+  const byText = new Map<string, number[]>()
+  const serverKeys = server.map(textKey)
+  server.forEach((row, index) => {
+    if (row.id) {
+      const ids = byId.get(row.id)
+      if (ids) ids.push(index)
+      else byId.set(row.id, [index])
+    }
+    const key = serverKeys[index]
+    const texts = byText.get(key)
+    if (texts) texts.push(index)
+    else byText.set(key, [index])
+  })
   const used = new Set<number>()
+  const cursors = new Map<number[], number>()
+  /** First server index of `list` not taken yet. */
+  const takeFirst = (list: number[] | undefined) => {
+    if (!list) return -1
+    let at = cursors.get(list) ?? 0
+    while (at < list.length && used.has(list[at])) at += 1
+    cursors.set(list, at)
+    if (at >= list.length) return -1
+    used.add(list[at])
+    cursors.set(list, at + 1)
+    return list[at]
+  }
   const matchAt = cacheRows.map((row) => {
-    const serverIndex = server.findIndex((candidate, index) => !used.has(index) && rowsMatch(row, candidate))
-    if (serverIndex >= 0) used.add(serverIndex)
-    return serverIndex
+    const byIdIndex = row.id ? takeFirst(byId.get(row.id)) : -1
+    if (byIdIndex >= 0) return byIdIndex
+    return takeFirst(byText.get(textKey(row)))
   })
   let lastMatched = -1
   matchAt.forEach((serverIndex, index) => {
@@ -58,7 +85,7 @@ export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server
     if (serverIndex < 0) return
     const serverRow = server[serverIndex]
     const sameId = Boolean(row.id && serverRow.id === row.id)
-    const textDiffers = normalizedText(row.content) !== normalizedText(serverRow.content)
+    const textDiffers = textKey(row) !== serverKeys[serverIndex]
     if (sameId && (textDiffers || preserveLive)) keepCacheBody.set(serverIndex, row)
   })
   const tail: ChatMessage[] = []
@@ -152,7 +179,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setActiveChat: (activeChat) => set({ activeChat }),
   setChatModel: (value) => set((state) => ({ chatModel: resolveUpdater(value, state.chatModel) })),
-  setMessages: (value) => set((state) => ({ messages: trimCachedMessages(resolveUpdater(value, state.messages)) })),
+  // The open thread keeps its whole history (the user scrolls it); only stored cache entries are capped.
+  setMessages: (value) => set((state) => ({ messages: resolveUpdater(value, state.messages) })),
   setRoutines: (routines) => set({ routines }),
   setRoutinesLoading: (routinesLoading) => set({ routinesLoading }),
   setChatLoading: (chatLoading) => set({ chatLoading }),
@@ -246,7 +274,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       activeChat: synced.chat,
       chatModel: synced.chat.model || '',
       running: synced.chat.running,
-      ...(preserveLive ? {} : { messages }),
+      ...(preserveLive ? {} : { messages: synced.messages }),
       ...(!synced.chat.running && resumed ? { streaming: '', streamKey: '', activity: '' } : {}),
     })
   },
