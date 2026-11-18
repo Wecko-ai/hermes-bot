@@ -1,4 +1,5 @@
 import { getSettings, updateSettings } from './settings'
+import { settingsFromBody, type CompactionSettingsCopy } from './compaction'
 
 /**
  * Settings every HermesBot app of this gateway shares (the iPhone app reads the same file): today the
@@ -12,15 +13,15 @@ const ROUTE = '/api/shared-settings'
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((item, index) => item === b[index])
 
-type SharedCopy = { exists: boolean; hiddenModels: string[] }
+type SharedCopy = { exists: boolean; hiddenModels: string[]; compaction: CompactionSettingsCopy | null }
 
 async function readShared(): Promise<SharedCopy | null> {
   try {
     const response = await fetch(ROUTE, { credentials: 'same-origin', cache: 'no-store' })
     if (!response.ok) return null
-    const body = await response.json() as { exists?: boolean; settings?: { hiddenModels?: unknown } }
+    const body = await response.json() as { exists?: boolean; settings?: { hiddenModels?: unknown; compaction?: unknown } }
     const list = Array.isArray(body.settings?.hiddenModels) ? body.settings.hiddenModels.filter((key): key is string => typeof key === 'string') : []
-    return { exists: body.exists === true, hiddenModels: list }
+    return { exists: body.exists === true, hiddenModels: list, compaction: settingsFromBody(body.settings?.compaction) }
   } catch {
     return null
   }
@@ -67,6 +68,10 @@ export function mergeHiddenModels(remote: string[], baseline: string[], draft: s
 export async function syncSharedSettings() {
   const shared = await readShared()
   if (!shared) return
+  if (shared.compaction) {
+    const { mode, gauge } = shared.compaction
+    if (mode !== getSettings().compactionMode || gauge !== getSettings().compactionGauge) updateSettings({ compactionMode: mode, compactionGauge: gauge })
+  }
   if (shared.exists) applyLocal(shared.hiddenModels)
   else if (getSettings().hiddenModels.length) await writeShared(getSettings().hiddenModels)
 }

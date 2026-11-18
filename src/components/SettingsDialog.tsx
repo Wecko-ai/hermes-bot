@@ -17,6 +17,7 @@ import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
+import { CompactionSetting } from './CompactionSetting'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
@@ -47,6 +48,8 @@ interface SettingsDialogProps {
   localModels?: LocalModels | null
   /** Visual demo: no gateway to share the hidden models with, the save stays in this window. */
   demo?: boolean
+  /** The open bot's model window and name: says what the compaction gauge means in tokens. */
+  compactionContext?: { contextMax: number; modelName: string } | null
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -158,7 +161,7 @@ function NotificationTest() {
   )
 }
 
-function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
+function ChatTab({ localModels, bots, demo, compactionContext }: { localModels?: LocalModels | null; bots: Bot[]; demo: boolean; compactionContext?: SettingsDialogProps['compactionContext'] }) {
   const { t } = useTranslation()
   const settings = useSettings()
   const [loaded, setLoaded] = useState<LocalModels | null>(null)
@@ -176,6 +179,7 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
       <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />
+      <CompactionSetting slugs={bots.map((bot) => bot.slug)} context={compactionContext} demo={demo} />
       <VoiceSettings />
       <Row label={t('settings.sortBots')}>
         <Segments<'groups' | 'activity'> label={t('settings.sortBots')} value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: t('settings.sortOptions.groups') }, { id: 'activity', label: t('settings.sortOptions.activity') }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
@@ -479,7 +483,7 @@ function AccountTab({ connected, reconnecting, onReconnect, onLogout }: Pick<Set
   )
 }
 
-/** App settings, specific to this Mac. Nothing here writes to a Hermes profile. */
+/** App settings, specific to this Mac. Only the compaction block writes into the Hermes profiles, on its Save button. */
 export function SettingsDialog(props: SettingsDialogProps) {
   const { t } = useTranslation()
   const { tab, onSelectTab } = props
@@ -538,7 +542,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
           </header>
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
-            {tab === 'chat' && <ChatTab localModels={props.localModels} />}
+            {tab === 'chat' && <ChatTab localModels={props.localModels} bots={props.bots} demo={demo} compactionContext={props.compactionContext} />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} demo={demo} draft={modelsDraft} />}
             {tab === 'vault' && <VaultTab bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}

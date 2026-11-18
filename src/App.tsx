@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
-import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
@@ -11,9 +11,10 @@ import { subagentHistory } from './lib/subagent-history'
 import type { AgentProcess } from './lib/agent-process'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
+import { autoCompactionPoint, blocksSending, compactingTokens, evaluateGuard, limitTokens, parseCompressResult, readCompaction, type CompressionValues } from './lib/compaction'
 import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband } from './store'
 import { createRoom, disbandRoom, listRooms, loadRoomCapabilities, renameRoom, roomActionErrorKey, roomCanDisband, roomCanRename, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
-import { chipModelLabel, modelLabel } from './lib/model'
+import { chipModelLabel, compactNumber, modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
@@ -223,6 +224,15 @@ export default function App() {
   }, [language])
   const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
+  // Context compaction: Manual mode guards the open chat against the user's own limit.
+  const guard = useMemo(() => evaluateGuard(settings.compactionMode, settings.compactionGauge, usage), [settings.compactionMode, settings.compactionGauge, usage])
+  const guardRef = useRef(guard)
+  guardRef.current = guard
+  const [compacting, setCompacting] = useState(false)
+  const compactingRef = useRef(false)
+  // Hermes compacts on its own during a turn: its notice shows in the status line until the text resumes.
+  const [compactionLabel, setCompactionLabel] = useState('')
+  const [compressionValues, setCompressionValues] = useState<Record<string, CompressionValues>>({})
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
@@ -428,6 +438,19 @@ export default function App() {
         if (text) setStreaming((value) => value + text)
         setRunning(true)
       }
+      // Hermes compacts the context on its own before a turn: say so while it works.
+      if (event.type === 'status.update' && (payload.kind === 'compacting' || payload.kind === 'compacted')) {
+        if (payload.kind === 'compacting') {
+          const tokens = compactingTokens(payload.text)
+          const label = tokens ? i18n.t('compaction.activity', { tokens: compactNumber(tokens) }) : i18n.t('compaction.activityBare')
+          setCompactionLabel(label)
+          setActivity(label)
+        } else {
+          setCompactionLabel('')
+          setActivity('')
+        }
+      }
+      if (event.type === 'message.delta') setCompactionLabel('')
       if (event.type === 'tool.start') {
         setActivity(typeof payload.name === 'string' && payload.name ? toolLabel(payload.name) : i18n.t('app.toolRunning'))
       }
@@ -478,6 +501,7 @@ export default function App() {
         setRunning(false)
         updateCachedChat(current.profile, { running: false })
         setActivity('')
+        setCompactionLabel('')
         noteTurnSilence(current.profile, finalText)
         noteTurnReply(current.profile, finalText)
         markDone(current.profile)
@@ -835,11 +859,27 @@ export default function App() {
   const headerUsageSession = activeChat?.sessionId
   useEffect(() => {
     const chat = useChatStore.getState().activeChat
-    if (!showUsage || !chat || DEMO || chat.sessionId !== headerUsageSession) return
+    if (!(showUsage || settings.compactionMode === 'manual') || !chat || DEMO || chat.sessionId !== headerUsageSession) return
     loadUsage(client, chat).then((next) => {
       if (useChatStore.getState().activeChat?.sessionId === chat.sessionId) setUsage(next)
     }).catch(() => setUsage(null))
-  }, [showUsage, selected, chatLoading, client, headerUsageSession])
+  }, [showUsage, settings.compactionMode, selected, chatLoading, client, headerUsageSession])
+
+  // What Hermes does on its own for the open bot (usage readout tooltip): read again when the setting changes.
+  useEffect(() => {
+    if (DEMO || auth !== 'ready' || !selected) return
+    let current = true
+    void readCompaction([selected]).then((result) => {
+      if (current && result?.profiles[selected]) setCompressionValues((values) => ({ ...values, [selected]: result.profiles[selected] }))
+    })
+    return () => { current = false }
+  }, [auth, selected, settings.compactionMode, settings.compactionGauge])
+  const compactionTooltip = settings.compactionMode === 'manual'
+    ? (usage?.contextMax ? i18n.t('compaction.yourLimit', { limit: compactNumber(limitTokens(usage.contextMax, settings.compactionGauge)), percent: Math.round(settings.compactionGauge * 100) }) : '')
+    : (() => {
+        const point = autoCompactionPoint(compressionValues[selected], usage?.contextMax ?? 0)
+        return point ? i18n.t('compaction.autoPoint', { point: compactNumber(point) }) : ''
+      })()
 
   const publishDemoRoom = (room: Room, events: RoomEvent[], driver: RoomDriverStatus) => {
     const latestSeq = events.at(-1)?.seq || 0
@@ -1388,6 +1428,11 @@ export default function App() {
     let chat = useChatStore.getState().activeChat
     const profile = chat?.profile
     if (!chat || !profile || !stillOnProfile(useRosterStore.getState().selected, profile)) return false
+    // Manual compaction: the user's context limit is reached, compacting comes first.
+    if (blocksSending(guardRef.current)) {
+      setNotice(i18n.t('compaction.fullShort'))
+      return false
+    }
     if (!claimSend(sendsInFlight.current, profile)) return false
     const onScreen = () => stillOnProfile(useRosterStore.getState().selected, profile)
     try {
@@ -1573,6 +1618,56 @@ export default function App() {
       usage: usageResult.status === 'fulfilled' ? usageResult.value : null,
       context: contextResult.status === 'fulfilled' ? contextResult.value : null,
       history: historyResult.status === 'fulfilled' ? historyResult.value : null,
+    }
+  }
+
+  /** Manual compaction of the open conversation (`session.compress`): idle session only, about 20 seconds. */
+  const compactNow = async () => {
+    const chat = useChatStore.getState().activeChat
+    if (!chat || compactingRef.current) return
+    const bot = useRosterStore.getState().bots.find((item) => item.slug === chat.profile)
+    if (useChatStore.getState().running) {
+      setNotice(i18n.t('compaction.busy', { name: bot?.name || chat.profile }))
+      return
+    }
+    compactingRef.current = true
+    setCompacting(true)
+    const stillHere = () => useChatStore.getState().activeChat?.sessionId === chat.sessionId
+    try {
+      if (DEMO) {
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        const before = useChatStore.getState().usage
+        if (before && stillHere()) setUsage({ ...before, contextUsed: Math.round(before.contextMax * 0.12), contextPercent: 12, compressions: (before.compressions ?? 0) + 1 })
+        setNotice(i18n.t('compaction.done', { before: compactNumber(before?.contextUsed ?? 0), after: compactNumber(Math.round((before?.contextMax ?? 0) * 0.12)) }))
+        return
+      }
+      const result = parseCompressResult(await client.request('session.compress', { profile: chat.profile, session_id: chat.sessionId }, 300_000))
+      if (result.status === 'failed') {
+        setNotice(result.message ? i18n.t('compaction.failed', { reason: result.message }) : i18n.t('compaction.failedBare'))
+        return
+      }
+      if (result.status === 'aborted') {
+        setNotice(i18n.t('compaction.aborted'))
+        return
+      }
+      if (stillHere()) {
+        setUsage((value) => {
+          const next = mergeUsage(value, result.usage) ?? value
+          if (!next) return next
+          // The count may be missing from the result: one more than before.
+          const compressions = result.usage?.compressions ?? (value?.compressions ?? 0) + 1
+          return { ...next, compressions }
+        })
+      }
+      setNotice(result.before && result.after
+        ? i18n.t('compaction.done', { before: compactNumber(result.before), after: compactNumber(result.after) })
+        : i18n.t('compaction.doneBare'))
+    } catch (error) {
+      if (error instanceof HermesRpcError && error.code === 4009) setNotice(i18n.t('compaction.busy', { name: bot?.name || chat.profile }))
+      else setNotice(error instanceof Error && error.message ? i18n.t('compaction.failed', { reason: error.message }) : i18n.t('compaction.failedBare'))
+    } finally {
+      compactingRef.current = false
+      setCompacting(false)
     }
   }
 
@@ -1994,7 +2089,7 @@ export default function App() {
         onStop={stop}
         onNotice={setNotice}
         voiceOverlay={voice && voice.profile === selectedBot.slug ? (
-          <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} handsFreeAvailable={Boolean(voiceConversation())} />
+          <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} handsFreeAvailable={Boolean(voiceConversation())} contextFull={blocksSending(guard)} />
         ) : undefined}
         onVoice={speechEngine ? openVoice : undefined}
         onOpenDocument={openDocument}
@@ -2010,6 +2105,15 @@ export default function App() {
         processes={openProcesses}
         onLoadSubagentTail={loadOpenSubagentTail}
         onOpenSubagentHistory={openSubagentHistory}
+        compactionLabel={compactionLabel}
+        compaction={{
+          guard,
+          compacting,
+          compressions: usage?.compressions,
+          onCompact: () => void compactNow(),
+          onOpenSettings: () => setSettingsTab('chat'),
+          tooltip: compactionTooltip,
+        }}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
             options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
@@ -2083,6 +2187,7 @@ export default function App() {
           demo={DEMO}
           models={modelOptions}
           bots={bots}
+          compactionContext={usage?.contextMax ? { contextMax: usage.contextMax, modelName: chipModelLabel(chatModel || selectedBot.model) } : null}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           onLoadModels={refreshModels}

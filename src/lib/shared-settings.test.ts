@@ -68,6 +68,14 @@ describe('enregistrement des modèles masqués', () => {
     expect(calls).toEqual([])
   })
 
+  it('suit la compaction du contexte enregistrée sur la gateway, sans rien écrire', async () => {
+    updateSettings({ compactionMode: 'auto', compactionGauge: 1 })
+    remote = { exists: true, settings: { hiddenModels: [], compaction: { mode: 'manual', gauge: 0.4 } } } as typeof remote
+    await syncSharedSettings()
+    expect(getSettings()).toMatchObject({ compactionMode: 'manual', compactionGauge: 0.4 })
+    expect(calls.map((call) => call.method)).toEqual(['GET'])
+  })
+
   it('en démo, enregistre dans la fenêtre seulement', async () => {
     const result = await saveHiddenModels([], ['p:demo'], { local: true })
     expect(result.ok).toBe(true)

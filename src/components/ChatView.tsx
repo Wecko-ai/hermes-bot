@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ComponentProps, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Menu, PanelRight, Search, Upload, X } from 'lucide-react'
 import type { Bot, ChatMessage, SessionUsage } from '../types'
@@ -56,6 +56,10 @@ interface ChatViewProps {
   onLoadSubagentTail: (subagentId: string) => Promise<SubagentTail>
   /** Opens the Subagents tab of the details panel. */
   onOpenSubagentHistory: () => void
+  /** Manual compaction mode (see Composer). */
+  compaction?: ComponentProps<typeof Composer>['compaction']
+  /** Hermes is compacting this conversation on its own: shown in the status line while it lasts. */
+  compactionLabel?: string
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
@@ -71,7 +75,7 @@ export function ChatView(props: ChatViewProps) {
   const status = t(`status.${waiting ? 'waiting' : phase}`)
   // Standing by: what still runs, on hover.
   const standby = !waiting && phase === 'standby' ? backgroundSummary(liveBot.background) : ''
-  const detail = phase === 'working' ? props.workText || props.activity : ''
+  const detail = phase === 'working' ? props.compactionLabel || props.workText || props.activity : ''
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   // Matches counted by the message list, the current one (-1 before the first Enter) and a counter that makes each Enter scroll.
@@ -213,6 +217,7 @@ export function ChatView(props: ChatViewProps) {
         showUsage={props.showUsage}
         onToggleUsage={props.onToggleUsage}
         onVoice={props.onVoice}
+        compaction={props.compaction}
       />
       {dragging && <div className="drop-overlay" aria-hidden="true"><div><Upload size={22} /><strong>{t('chat.dropTo', { name: bot.name })}</strong><span>{t('chat.dropHint')}</span></div></div>}
     </main>

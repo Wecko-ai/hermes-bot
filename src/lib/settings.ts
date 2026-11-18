@@ -47,6 +47,10 @@ export interface AppSettings {
   voiceSteps: boolean
   /** Voice mode: hands-free (the microphone reopens after each reply) rather than push-to-talk. */
   voiceHandsFree: boolean
+  /** Context compaction (Settings > Conversations). Mirrors the gateway's shared copy, which wins. */
+  compactionMode: 'auto' | 'manual'
+  /** Manual mode: the user's limit, a share of the model's context window (0.1 to 1). */
+  compactionGauge: number
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -85,6 +89,8 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     voiceRate: typeof value.voiceRate === 'number' && Number.isFinite(value.voiceRate) ? Math.min(2, Math.max(0.5, value.voiceRate)) : 1,
     voiceSteps: flag(value.voiceSteps, true),
     voiceHandsFree: flag(value.voiceHandsFree, true),
+    compactionMode: value.compactionMode === 'manual' ? 'manual' : 'auto',
+    compactionGauge: typeof value.compactionGauge === 'number' && Number.isFinite(value.compactionGauge) ? Math.round(Math.min(1, Math.max(0.1, value.compactionGauge)) * 100) / 100 : 1,
   }
 }
 

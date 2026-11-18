@@ -25,6 +25,8 @@ interface VoiceOverlayProps {
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
   /** The hands-free switch is offered (the desktop app). */
   handsFreeAvailable: boolean
+  /** Context limit reached (manual compaction): nothing can be sent, Talk is off. */
+  contextFull?: boolean
 }
 
 const FALLBACK_ACCENT = 'rgb(79, 209, 255)'
@@ -45,7 +47,7 @@ function readableAccent(probe: HTMLElement | null) {
  * Voice mode over the chat: the bot's avatar inside a HUD that pulses with the voice, the state, the
  * caption and the controls. Talk: hold and release (push-to-talk), or tap and pause. Enter does the same.
  */
-export function VoiceOverlay({ session, bot, running, activity, onClose, onStopBot, prompt, onAnswerPrompt, handsFreeAvailable }: VoiceOverlayProps) {
+export function VoiceOverlay({ session, bot, running, activity, onClose, onStopBot, prompt, onAnswerPrompt, handsFreeAvailable, contextFull = false }: VoiceOverlayProps) {
   const { t } = useTranslation()
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const reducedMotion = useReducedMotion()
@@ -57,6 +59,8 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
   const reducedRef = useRef(reducedMotion)
   reducedRef.current = reducedMotion
   const [notice, setNotice] = useState<string | null>(null)
+  const fullRef = useRef(contextFull)
+  fullRef.current = contextFull
   const color = avatarColor(bot)
   const modeName = useAppConfig().ui.voiceModeName || t('voice.name')
 
@@ -119,7 +123,7 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
       if (target?.closest('button') && target !== talkRef.current) return
       event.preventDefault()
-      if (!event.repeat) session.pressTalk()
+      if (!event.repeat && !fullRef.current) session.pressTalk()
     }
     const up = (event: KeyboardEvent) => {
       if (event.key === 'Enter') session.releaseTalk()
@@ -150,6 +154,7 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
 
   const pressTalk = (event: React.PointerEvent) => {
     if (event.button !== 0) return
+    if (contextFull) { setNotice(t('compaction.fullShort')); return }
     session.pressTalk()
     const release = () => {
       window.removeEventListener('pointerup', release)
@@ -214,7 +219,7 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
       </div>
       <p className="voice-state" aria-live="polite">{state}</p>
       <p className={`voice-caption ${phase === 'thinking' ? 'is-quiet' : ''}`}>{caption}</p>
-      <p className="voice-notice" role="status">{notice ?? ''}</p>
+      <p className="voice-notice" role="status">{contextFull ? t('compaction.fullShort') : notice ?? ''}</p>
       {prompt && (
         <div className="voice-prompt">
           <PromptCard key={prompt.promptId} prompt={prompt} botName={bot.name} onAnswer={onAnswerPrompt} />
@@ -229,7 +234,7 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
           type="button"
           className={`voice-talk ${phase === 'listening' ? 'is-on' : ''}`}
           aria-pressed={phase === 'listening'}
-          aria-disabled={snapshot.blocked !== null || undefined}
+          aria-disabled={snapshot.blocked !== null || contextFull || undefined}
           title={t('voice.talkTitle')}
           onPointerDown={pressTalk}
           onClick={(event) => event.preventDefault()}

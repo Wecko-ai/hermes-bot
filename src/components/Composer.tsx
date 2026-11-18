@@ -14,6 +14,8 @@ import { isImeComposition } from '../lib/keyboard'
 import { createDictationEngine } from '../lib/dictation-engines'
 import { BotAvatar } from './BotAvatar'
 import { DictationPill } from './DictationPill'
+import { CompactionGuard } from './CompactionGuard'
+import { blocksSending, showsWarning, snoozeFor, type Guard, type Snooze } from '../lib/compaction'
 
 export interface ComposerHandle {
   addFiles: (files: File[]) => void
@@ -42,6 +44,17 @@ interface ComposerProps {
   onToggleUsage: () => void
   /** Opens the voice mode with this bot. Absent: nothing can speak here. */
   onVoice?: () => void
+  /** Manual compaction mode: where the context stands against the user's limit, and what the guard can do. */
+  compaction?: {
+    guard: Guard
+    compacting: boolean
+    /** Compactions done so far in this conversation: "Later" lasts until it moves. */
+    compressions?: number
+    onCompact: () => void
+    onOpenSettings: () => void
+    /** What the usage readout shows on hover. */
+    tooltip: string
+  }
 }
 
 interface Draft {
@@ -63,7 +76,7 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
-export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage, onVoice }: ComposerProps) {
+export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage, onVoice, compaction }: ComposerProps) {
   const { t, i18n: translation } = useTranslation()
   const { sendKey, dictationLanguage } = useSettings()
   const [text, setText] = useState(() => loadDraft(bot.slug))
@@ -79,6 +92,11 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   // Enter in Wait mode: nothing is sent, the selector flags itself (a toast would cover it).
   const [nudge, setNudge] = useState(0)
   const busy = running && !minimal
+  // Context limit reached: only sending is blocked, the draft stays editable.
+  const [snooze, setSnooze] = useState<Snooze | null>(null)
+  const guard = compaction?.guard
+  const blocked = Boolean(guard && blocksSending(guard))
+  const warning = Boolean(guard && showsWarning(guard, snooze, bot.slug, compaction?.compressions))
   const chooseMode = (next: ChatMode) => {
     const updated = { ...modes, [bot.slug]: next }
     setModes(updated)
@@ -255,6 +273,10 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
       return
     }
     if ((!text.trim() && attachments.length === 0) || disabled) return
+    if (blocked) {
+      onNotice(t('compaction.fullShort'))
+      return
+    }
     if (busy && delivery === 'wait') {
       setNudge((value) => value + 1)
       return
@@ -305,6 +327,17 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
 
   return (
     <div className="composer-wrap">
+      {compaction && guard && (warning || blocked) && (
+        <CompactionGuard
+          guard={guard}
+          botName={bot.name}
+          running={running}
+          compacting={compaction.compacting}
+          onCompact={compaction.onCompact}
+          onLater={() => setSnooze(snoozeFor(bot.slug, compaction.compressions))}
+          onOpenSettings={compaction.onOpenSettings}
+        />
+      )}
       {menuOpen && (
         <div className="mention-menu" id="mention-menu" role="listbox" aria-label={t('composer.mentionMenu')}>
           {options.map((option, index) => (
@@ -392,18 +425,18 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           }}
         />
         {onVoice && !minimal && !dictating && (
-          <button type="button" className="composer-mic composer-voice" aria-label={t('voice.open', { name: bot.name })} title={t('voice.open', { name: bot.name })} disabled={disabled} onClick={onVoice}>
+          <button type="button" className="composer-mic composer-voice" aria-label={t('voice.open', { name: bot.name })} title={t('voice.open', { name: bot.name })} disabled={disabled || blocked} onClick={onVoice}>
             <AudioLines size={17} />
           </button>
         )}
         {dictation && !running && !dictating && (
-          <button type="button" className={`composer-mic ${dictationBlocked ? 'is-blocked' : ''}`} aria-label={dictationBlocked ? t('composer.dictateBlocked') : t('composer.dictate')} aria-disabled={dictationBlocked || undefined} disabled={disabled} onClick={() => void dictation.start()}>
+          <button type="button" className={`composer-mic ${dictationBlocked ? 'is-blocked' : ''}`} aria-label={dictationBlocked ? t('composer.dictateBlocked') : t('composer.dictate')} aria-disabled={dictationBlocked || undefined} disabled={disabled || blocked} onClick={() => void dictation.start()}>
             {dictationBlocked ? <MicOff size={17} /> : <Mic size={17} />}
           </button>
         )}
         {dictation && dictating && <DictationPill controller={dictation} onStop={stopDictation} />}
         {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Pause size={14} fill="currentColor" /></button>}
-        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
+        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-hint">
         {!minimal && (
@@ -425,7 +458,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
           </div>
         )}
         {!minimal && <div className="composer-status">
-          {showUsage && <span className="usage-readout">{formatUsage(usage)}</span>}
+          {showUsage && <span className="usage-readout" title={compaction?.tooltip || undefined}>{formatUsage(usage)}</span>}
           <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label={t('composer.usageToggle')} aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={15} /></button>
           <button type="button" className="model-chip" aria-label={t('composer.chooseModel')} onClick={() => onOpenModels('')}>{modelLabel}<ChevronDown size={13} /></button>
         </div>}

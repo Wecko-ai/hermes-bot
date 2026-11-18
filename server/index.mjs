@@ -18,7 +18,8 @@ import { createModelProbe } from './model-probe.mjs'
 import { createModelScores } from './model-scores.mjs'
 import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
-import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
+import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction } from './shared-settings.mjs'
+import { COMPACTION_BODY_MAX_BYTES, applyCompaction, compactionFrom, compressionOfConfig, gaugeFrom, profilesFrom } from './compaction.mjs'
 import { postVaultLogout, reduceVaultPoll, selectVaultToken, vaultRequestHeaders } from './vault-client.mjs'
 
 const CONFIG = configModule.loadConfig()
@@ -312,6 +313,29 @@ async function handleLocalSignIn(request, response) {
   return json(response, 200, { ok: true }, { 'Set-Cookie': sessionCookie(session) })
 }
 
+/** The shared settings file as the gateway holds it; `null` when it cannot be read (a write must then stop). */
+async function readSharedFile(request) {
+  const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: SHARED_SETTINGS_PATH })}`)
+  try {
+    if (upstream.status === 404) return {}
+    if (!upstream.ok) return null
+    const body = await upstream.json().catch(() => ({}))
+    return parseSharedSettings(body.text)
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function writeSharedFile(request, settings) {
+  const upstream = await hermesFetch(request, '/api/fs/write-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: SHARED_SETTINGS_PATH, content: sharedSettingsText(settings) }),
+  })
+  await upstream.body?.cancel?.().catch(() => {})
+  return upstream.ok
+}
+
 async function handleSharedSettings(request, response) {
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   if (request.method === 'GET') {
@@ -320,7 +344,10 @@ async function handleSharedSettings(request, response) {
     return json(response, result.status, result.body)
   }
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  const settings = sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES))
+  // The compaction setting and its snapshots are only ever written by /api/compaction: kept as the file has them.
+  const existing = await readSharedFile(request)
+  if (!existing) return json(response, 502, { error: 'shared_settings_unreadable' })
+  const settings = withKeptCompaction(existing, sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES)))
   const upstream = await hermesFetch(request, '/api/fs/write-text', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -328,6 +355,65 @@ async function handleSharedSettings(request, response) {
   })
   const result = await relaySharedSettingsPut(upstream, settings)
   return json(response, result.status, result.body)
+}
+
+/** One profile's saved config, through Hermes's own REST route (raw: what the profile sets, no defaults). */
+async function readProfileConfig(request, slug) {
+  const upstream = await hermesFetch(request, `/api/config?${new URLSearchParams({ profile: slug, include_defaults: 'false' })}`)
+  try {
+    if (!upstream.ok) throw new Error(`config_${upstream.status}`)
+    return await upstream.json()
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function writeProfileConfig(request, slug, body) {
+  const upstream = await hermesFetch(request, `/api/config?${new URLSearchParams({ profile: slug })}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    timeout: 30_000,
+  })
+  await upstream.body?.cancel?.().catch(() => {})
+  if (!upstream.ok) throw new Error(`config_${upstream.status}`)
+}
+
+/**
+ * GET: the saved compaction values of the profiles named in `?profiles=a,b`, and the shared setting.
+ * PUT {mode, gauge, profiles}: saves the setting and writes the two compression keys of each profile.
+ */
+async function handleCompaction(request, response, url) {
+  // A real HermesBot session only: this route writes into the bots' profiles.
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (request.method === 'GET') {
+    const shared = await readSharedFile(request)
+    if (!shared) return json(response, 502, { error: 'shared_settings_unreadable' })
+    const values = {}
+    for (const slug of profilesFrom((url.searchParams.get('profiles') || '').split(',')).slice(0, 20)) {
+      try { values[slug] = compressionOfConfig(await readProfileConfig(request, slug)) } catch { /* that bot shows nothing */ }
+    }
+    const { mode, gauge } = shared.compaction ?? { mode: 'auto', gauge: 1 }
+    return json(response, 200, { exists: Boolean(shared.compaction), settings: { mode, gauge }, profiles: values })
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, COMPACTION_BODY_MAX_BYTES)
+  const gauge = gaugeFrom(body.gauge)
+  const profiles = profilesFrom(body.profiles)
+  if ((body.mode !== 'auto' && body.mode !== 'manual') || gauge === null || !profiles.length) return json(response, 400, { error: 'invalid_compaction' })
+  const existing = await readSharedFile(request)
+  if (!existing) return json(response, 502, { error: 'shared_settings_unreadable' })
+  const result = await applyCompaction({
+    mode: body.mode,
+    gauge,
+    profiles,
+    previous: existing.compaction ?? null,
+    hermes: { read: (slug) => readProfileConfig(request, slug), write: (slug, payload) => writeProfileConfig(request, slug, payload) },
+  })
+  // Every profile failed: nothing changed, the setting is not saved either.
+  if (!result.applied.length) return json(response, 502, { error: 'compaction_unwritable', failed: result.failed })
+  const saved = await writeSharedFile(request, { ...existing, compaction: compactionFrom(result.settings) })
+  return json(response, saved ? 200 : 502, { ok: saved, settings: { mode: result.settings.mode, gauge: result.settings.gauge }, applied: result.applied, failed: result.failed })
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
@@ -952,6 +1038,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/shared-settings' && (request.method === 'GET' || request.method === 'PUT')) {
       return await handleSharedSettings(request, response)
+    }
+    if (url.pathname === '/api/compaction' && (request.method === 'GET' || request.method === 'PUT')) {
+      return await handleCompaction(request, response, url)
     }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)

@@ -96,6 +96,8 @@ describe('local routes require a real session', () => {
       ['/api/model-probe', 'POST'],
       ['/api/local-chat/unload', 'POST'],
       ['/api/browser-turn', 'GET'],
+      ['/api/compaction', 'GET'],
+      ['/api/compaction', 'PUT'],
     ]
     for (const [pathname, method] of paths) {
       const response = await fetch(`http://127.0.0.1:${appPort}${pathname}`, { method, headers: forged })
@@ -105,6 +107,18 @@ describe('local routes require a real session', () => {
     expect(unknown.status).toBe(404)
     expect(unknown.headers.get('content-type')).toContain('application/json')
     expect(await unknown.json()).toEqual({ error: 'not_found' })
+  })
+
+  it('compaction writes: foreign origin refused, a malformed setting refused before any call to Hermes', async () => {
+    const origin = `http://127.0.0.1:${appPort}`
+    const headers = { cookie: `hermesbot_session=${SESSION_ID}`, 'content-type': 'application/json' }
+    const body = JSON.stringify({ mode: 'manual', gauge: 0.5, profiles: ['nova'] })
+    expect((await fetch(`${origin}/api/compaction`, { method: 'PUT', headers: { ...headers, origin: 'http://evil.example' }, body })).status).toBe(403)
+    const none = await fetch(`${origin}/api/compaction`, { method: 'PUT', headers: { ...headers, origin }, body })
+    expect(none.status).not.toBe(403)
+    for (const bad of [{ mode: 'x', gauge: 0.5, profiles: ['nova'] }, { mode: 'manual', gauge: 5, profiles: ['nova'] }, { mode: 'manual', gauge: 0.5, profiles: ['../x'] }]) {
+      expect((await fetch(`${origin}/api/compaction`, { method: 'PUT', headers: { ...headers, origin }, body: JSON.stringify(bad) })).status).toBe(400)
+    }
   })
 
   it('aborts an in-flight load when the client disconnects and refuses a second load', async () => {

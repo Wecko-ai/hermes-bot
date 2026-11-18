@@ -1245,3 +1245,29 @@ button.agent-note-name:hover { background: var(--hover); }
 .settings-inline .settings-select { max-width: 260px; }
 .settings-range { width: 150px; accent-color: var(--accent); }
 .settings-range-value { min-width: 46px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); text-align: right; }
+
+/* Context compaction (manual mode): the guard above the field, and its settings block. */
+.compaction-guard { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 8px; padding: 10px 12px; border-radius: 16px; background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-highlight), var(--glass-shadow); color: var(--text); font-size: 13px; line-height: 19px; }
+.compaction-guard.is-warn { position: absolute; left: 16px; right: 16px; bottom: calc(100% + 2px); z-index: 25; margin: 0; animation: message-in 200ms var(--ease-out) both; }
+.compaction-guard.is-full { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 55%, transparent), var(--glass-shadow); background: color-mix(in srgb, var(--warning) 10%, var(--glass-strong)); }
+.compaction-guard-icon { flex: none; display: inline-flex; margin-top: 2px; color: var(--accent); }
+.compaction-guard.is-full .compaction-guard-icon { color: var(--warning); }
+.compaction-guard p { flex: 1; min-width: 0; margin: 0; }
+.compaction-guard-note { color: var(--text-secondary); }
+.compaction-guard-actions { flex: none; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.compaction-guard-actions button { padding: 5px 11px; border-radius: 999px; background: var(--glass-soft); box-shadow: inset 0 0 0 .5px var(--glass-line); color: var(--text); font-size: 12px; font-weight: 540; }
+.compaction-guard-actions button:hover:not(:disabled) { background: var(--hover); }
+.compaction-guard-actions button:disabled { opacity: .55; cursor: default; }
+.compaction-guard-actions .compaction-guard-primary { background: var(--accent); box-shadow: none; color: var(--accent-contrast, #fff); }
+.compaction-guard-actions .compaction-guard-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+@media (max-width: 640px) { .compaction-guard { flex-wrap: wrap; } .compaction-guard.is-warn { left: 10px; right: 10px; } .compaction-guard-actions { width: 100%; justify-content: flex-start; } }
+.compaction-setting { flex-direction: column; align-items: stretch; gap: 12px; }
+.compaction-controls { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: 100%; }
+.compaction-controls .settings-segments { align-self: flex-start; }
+.compaction-explain { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 18px; }
+.compaction-gauge { display: flex; flex-direction: column; gap: 6px; }
+.compaction-gauge-label { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; }
+.compaction-gauge-label output { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.compaction-gauge input[type="range"] { width: 100%; accent-color: var(--accent); }
+.compaction-save { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.compaction-save .settings-footer-status { flex: 1; min-width: 0; font-size: 12px; }

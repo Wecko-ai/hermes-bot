@@ -161,6 +161,16 @@ let pilotageTurn = null
 let steerVerdict = { status: 'queued', execution_generation: 1, authority_epoch: 1 }
 const imageAttachCalls = []
 const analyticsProfiles = []
+// Context compaction: the context the fake session reports, the profiles' config (Hermes's REST `/api/config`),
+// the writes it received, `session.compress` calls, and a profile whose write is refused.
+let fakeContextTokens = 41_000
+const fakeProfileConfigs = {
+  nova: { compression: { threshold: 0.5, threshold_tokens: 200_000 } },
+  // Orion sets nothing: Hermes's own defaults apply to it.
+}
+const configWrites = []
+const compressCalls = []
+let configFailProfile = ''
 const remoteRequests = []
 
 function serveMediaFixture(request, response, url, route) {
@@ -317,6 +327,23 @@ const mock = http.createServer((request, response) => {
       totals: { total_input: 100_000, total_output: 5_000, total_cache_read: 1_000, total_reasoning: 0, total_estimated_cost: 0.5, total_actual_cost: 0, total_sessions: 2, total_api_calls: 9 },
       period_days: Number(url.searchParams.get('days')), skills: [], tools: [],
     }))
+  }
+  if (url.pathname === '/api/config') {
+    if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
+    const profile = url.searchParams.get('profile') || ''
+    if (!profiles.some((item) => item.name === profile)) { response.statusCode = 404; return response.end(JSON.stringify({ detail: 'profile not found' })) }
+    if (request.method === 'GET') return response.end(JSON.stringify({ model: 'claude-opus-5-5', model_context_length: 0, ...fakeProfileConfigs[profile] }))
+    let raw = ''
+    request.on('data', (chunk) => { raw += chunk })
+    request.on('end', () => {
+      if (configFailProfile === profile) { response.statusCode = 500; return response.end(JSON.stringify({ detail: 'Internal server error' })) }
+      const body = JSON.parse(raw || '{}')
+      configWrites.push({ profile, body, origin: request.headers.origin })
+      // Hermes deep-merges the body over the profile's config.
+      fakeProfileConfigs[profile] = { ...fakeProfileConfigs[profile], compression: { ...fakeProfileConfigs[profile]?.compression, ...body.config?.compression } }
+      response.end(JSON.stringify({ ok: true }))
+    })
+    return
   }
   if (url.pathname === '/api/cron/jobs') return response.end(JSON.stringify([{ id: 'routine-test', name: 'Nova: Routine test', enabled: true, schedule_display: '0 9 * * *', next_run_at: '2025-01-07T02:00:00Z' }]))
   // The settings file the Mac and iPhone apps share, on the gateway's machine.
@@ -733,7 +760,15 @@ wss.on('connection', (socket) => {
       return reply({ session_id: frame.params.session_id, operation: 'model', model: frame.params.payload.model, provider: frame.params.payload.provider, revision: frame.params.expected_revision + 1, execution_generation: frame.params.expected_generation })
     }
     if (frame.method === 'session.stats') {
-      return reply({ input_tokens: 120_000, output_tokens: 8_000, cache_read_tokens: 90_000, cache_write_tokens: 5_000, prompt_tokens: 120_000, completion_tokens: 8_000, total_tokens: 128_000, reasoning_tokens: 900, api_calls: 14, last_prompt_tokens: 41_000, context_tokens: 41_000, context_length: 1_000_000, context_source: 'provider_usage', compression_count: 1, avg_latency_s: 2.5, tokens_per_s: 62.6, last_turn_tokens: 300, active_subagents: 0, model: 'claude-opus-5-5', provider: 'anthropic' })
+      return reply({ input_tokens: 120_000, output_tokens: 8_000, cache_read_tokens: 90_000, cache_write_tokens: 5_000, prompt_tokens: 120_000, completion_tokens: 8_000, total_tokens: 128_000, reasoning_tokens: 900, api_calls: 14, last_prompt_tokens: fakeContextTokens, context_tokens: fakeContextTokens, context_length: 1_000_000, context_source: 'provider_usage', compression_count: 1, avg_latency_s: 2.5, tokens_per_s: 62.6, last_turn_tokens: 300, active_subagents: 0, model: 'claude-opus-5-5', provider: 'anthropic' })
+    }
+    if (frame.method === 'session.compress') {
+      compressCalls.push(frame.params)
+      const before = fakeContextTokens
+      fakeContextTokens = 120_000
+      // About 20 s on the real gateway: a short wait here, long enough to see the progress state.
+      setTimeout(() => reply({ status: 'compressed', removed: 40, before_tokens: before, after_tokens: 120_000, usage: { context_tokens: 120_000, context_length: 1_000_000, compression_count: 2 }, info: {}, messages: [] }), 700)
+      return
     }
     if (frame.method === 'session.context_breakdown') {
       return reply({ categories: [{ id: 'conversation', label: 'Conversation', tokens: 30_000, color: '#000' }, { id: 'system', label: 'Instructions', tokens: 11_000, color: '#111' }], context_max: 1_000_000, context_percent: 4.1, context_used: 41_000, estimated_total: 41_000, context_estimated: true, context_source: 'estimate', model: 'claude-opus-5-5', context_files: [{ label: 'SOUL.md', path: '/x/SOUL.md', chars: 100, est_tokens: 25, loaded: true, status: 'ok' }] })
@@ -780,6 +815,16 @@ wss.on('connection', (socket) => {
         at(80, 'message.delta', { turn_id: 'turn-media', text: 'Voici la vidéo :\n\nMEDIA:/Users/test/videos/video.mp4\n' })
         at(1800, 'message.delta', { turn_id: 'turn-media', text: '\nEt la suite du texte.' })
         at(2600, 'message.complete', { turn_id: 'turn-media', text: final, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test compaction') {
+        lastPromptText = frame.params.text
+        // Hermes compacts on its own before the turn: a live notice, then the answer.
+        at(30, 'message.start', { turn_id: 'turn-compaction' })
+        at(120, 'status.update', { kind: 'compacting', text: '📦 Preflight compression: ~61,760 tokens >= 60,000 threshold…' })
+        at(2200, 'status.update', { kind: 'compacted', text: '📦 Context compacted' })
+        at(2400, 'message.delta', { turn_id: 'turn-compaction', text: 'Reprise après compaction.' })
+        at(2700, 'message.complete', { turn_id: 'turn-compaction', text: 'Reprise après compaction.', status: 'complete' })
         return
       }
       if (frame.params.text === 'Test étapes') {
@@ -3171,6 +3216,120 @@ try {
   await setCaveman(false)
   await sendInMode('Test sans caveman')
   if (lastApiText !== undefined) throw new Error(`Mode caveman coupé : rien ne doit être ajouté : ${lastApiText}`)
+
+  // Context compaction. Auto is the default and writes nothing. Manual writes only the two compression keys into the
+  // profile of every bot, then guards the open chat: a warning at 90 % of the user's limit, sending blocked at 100 %.
+  // Auto again puts back what each profile had before.
+  const rosterSlugs = (await page.locator('[data-bot]').evaluateAll((rows) => rows.map((row) => row.dataset.bot))).filter((slug) => !slug.startsWith('local:')).sort()
+  if (!rosterSlugs.includes('nova') || !rosterSlugs.includes('orion') || rosterSlugs.includes('default')) throw new Error(`Compaction : roster ${rosterSlugs}`)
+  const compactionBlock = settingsDialog.locator('.compaction-setting')
+  const compactionBox = page.getByRole('textbox', { name: 'Message à Orion' })
+  const sharedBeforeCompaction = JSON.parse(sharedSettingsFile)
+  if (configWrites.length) throw new Error(`Auto par défaut : rien ne s’écrit dans les profils : ${JSON.stringify(configWrites)}`)
+  if (await page.locator('.compaction-guard').count()) throw new Error('Mode Auto : aucune garde de contexte ne doit s’afficher.')
+  await openSettings()
+  await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
+  await compactionBlock.waitFor({ timeout: 3_000 })
+  if (await compactionBlock.getByRole('radio', { name: 'Auto' }).getAttribute('aria-checked') !== 'true') throw new Error('Compaction : Auto doit être le mode par défaut.')
+  if (await compactionBlock.getByRole('slider').count()) throw new Error('Compaction : la jauge ne s’affiche qu’en mode Manuel.')
+  await compactionBlock.getByRole('radio', { name: 'Manuel' }).click()
+  await compactionBlock.getByRole('slider').fill('50')
+  await compactionBlock.getByText('50 % ·').waitFor({ timeout: 3_000 })
+  if (configWrites.length) throw new Error('Compaction : rien ne s’enregistre avant le bouton Enregistrer.')
+  await settingsDialog.locator('.settings-content').evaluate((element) => { element.scrollLeft = 0 })
+  await compactionBlock.evaluate((element) => element.scrollIntoView({ block: 'center' }))
+  await page.waitForTimeout(350)
+  await page.screenshot({ path: `${SCREENSHOTS}settings-compaction.png` })
+  // One profile refuses: the others are written, the failure is named, and Save stays available to go over it again.
+  configFailProfile = 'nova'
+  await compactionBlock.getByRole('button', { name: 'Enregistrer' }).click()
+  await compactionBlock.getByText('Échec pour : nova').waitFor({ timeout: 5_000 })
+  if (await compactionBlock.getByRole('button', { name: 'Enregistrer' }).isDisabled()) throw new Error('Compaction : après un échec partiel, Enregistrer doit rester disponible.')
+  configFailProfile = ''
+  await compactionBlock.getByRole('button', { name: 'Enregistrer' }).click()
+  await compactionBlock.getByText(`Appliqué à ${rosterSlugs.length} bots.`).waitFor({ timeout: 5_000 })
+  const manualWrites = configWrites.filter((write) => write.body.config.compression.threshold === 0.98)
+  if ([...new Set(manualWrites.map((write) => write.profile))].sort().join() !== rosterSlugs.join()) throw new Error(`Compaction Manuel : profils écrits ${JSON.stringify(configWrites.map((write) => write.profile))}, roster ${rosterSlugs}`)
+  for (const write of configWrites) {
+    if (JSON.stringify(write.body) !== '{"config":{"compression":{"threshold":0.98,"threshold_tokens":null}}}') throw new Error(`Compaction : seules les deux clés de compression partent : ${JSON.stringify(write.body)}`)
+    if (!write.origin) throw new Error('Compaction : le serveur parle à Hermes avec son Origin.')
+  }
+  if (configWrites.some((write) => write.profile === 'default')) throw new Error('Compaction : le profil par défaut n’est pas un bot du roster.')
+  if (fakeProfileConfigs.nova.compression.threshold !== 0.98 || fakeProfileConfigs.nova.compression.threshold_tokens !== null) throw new Error('Compaction : le profil de Nova n’a pas le filet de sécurité.')
+  const sharedManual = JSON.parse(sharedSettingsFile)
+  if (sharedManual.compaction?.mode !== 'manual' || sharedManual.compaction.gauge !== 0.5) throw new Error(`Compaction : réglage partagé ${sharedSettingsFile}`)
+  if (JSON.stringify(sharedManual.compaction.snapshot.nova) !== '{"threshold":0.5,"threshold_tokens":200000}' || JSON.stringify(sharedManual.compaction.snapshot.orion) !== '{"threshold":null,"threshold_tokens":null}') throw new Error(`Compaction : instantané des profils ${sharedSettingsFile}`)
+  if (JSON.stringify(sharedManual.hiddenModels) !== JSON.stringify(sharedBeforeCompaction.hiddenModels)) throw new Error('Compaction : les modèles masqués partagés ne doivent pas changer.')
+  await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+
+  // 460k of a 500k limit (50 % of a 1M window): the warning, once, until Later; then the limit.
+  fakeContextTokens = 460_000
+  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
+  await page.locator('.compaction-guard[data-guard=warn]').waitFor({ timeout: 5_000 })
+  await page.locator('.compaction-guard').getByText('Orion : contexte à 92 % de ta limite (460k / 500k)').waitFor({ timeout: 2_000 })
+  if (await page.locator('.usage-readout').getAttribute('title') !== 'Ta limite : 500k (50 % de la fenêtre)') throw new Error('Compaction : l’infobulle du contexte doit donner la limite.')
+  await page.waitForTimeout(350)
+  await page.screenshot({ path: `${SCREENSHOTS}compaction-warning.png` })
+  await page.locator('.compaction-guard').getByRole('button', { name: 'Plus tard' }).click()
+  await page.locator('.compaction-guard').waitFor({ state: 'detached', timeout: 2_000 })
+  // Past the limit: Later no longer hides anything, sending is blocked, the draft stays editable.
+  broadcast(event('chat-orion', 'session.usage', { context_tokens: 512_000, context_length: 1_000_000 }))
+  await page.locator('.compaction-guard[data-guard=full]').waitFor({ timeout: 5_000 })
+  await page.locator('.compaction-guard').getByText('Limite de contexte atteinte (512k / 500k)').waitFor({ timeout: 2_000 })
+  const promptsBeforeBlock = promptCalls
+  await compactionBox.fill('Message bloqué')
+  if (await compactionBox.inputValue() !== 'Message bloqué') throw new Error('Compaction : le brouillon doit rester modifiable à 100 %.')
+  await compactionBox.press('Enter')
+  await delay(300)
+  if (promptCalls !== promptsBeforeBlock) throw new Error('Compaction : un message est parti malgré la limite atteinte.')
+  if (!await page.locator('.composer-send[aria-label="Envoyer"]').isDisabled()) throw new Error('Compaction : le bouton Envoyer doit être grisé à 100 %.')
+  const voiceButton = page.getByRole('button', { name: /Mode voix/ })
+  if (await voiceButton.count() && !await voiceButton.first().isDisabled()) throw new Error('Compaction : le bouton vocal doit être grisé à 100 %.')
+  await page.waitForTimeout(350)
+  await page.screenshot({ path: `${SCREENSHOTS}compaction-blocked.png` })
+  await page.locator('.compaction-guard').getByRole('button', { name: 'Compacter maintenant' }).click()
+  await page.locator('.compaction-guard').getByRole('button', { name: 'Compaction…' }).waitFor({ timeout: 2_000 })
+  await page.locator('.compaction-guard').waitFor({ state: 'detached', timeout: 8_000 })
+  if (compressCalls.length !== 1 || compressCalls[0].profile !== 'orion' || compressCalls[0].session_id !== 'chat-orion') throw new Error(`Compaction : session.compress ${JSON.stringify(compressCalls)}`)
+  await page.getByText('Contexte compacté : 460k → 120k').waitFor({ timeout: 3_000 })
+  await page.locator('.usage-readout').getByText('Contexte 12 % (120k/1M)').waitFor({ timeout: 3_000 })
+  await compactionBox.press('Enter')
+  for (let attempt = 0; attempt < 60 && lastPromptText !== 'Message bloqué'; attempt += 1) await delay(25)
+  if (lastPromptText !== 'Message bloqué') throw new Error('Compaction : après la compaction, l’envoi doit repartir.')
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 10_000 })
+  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 5_000 })
+  await delay(500)
+
+  // Hermes compacting on its own during a turn: the status line says so, then the text resumes.
+  await compactionBox.fill('Test compaction')
+  await compactionBox.press('Enter')
+  await page.locator('.chat-status-detail').getByText('Compaction du contexte… (~62k tokens)').waitFor({ timeout: 3_000 })
+  await page.waitForTimeout(250)
+  await page.screenshot({ path: `${SCREENSHOTS}compaction-live-notice.png` })
+  await page.locator('.messages-scroll').getByText('Reprise après compaction.').waitFor({ timeout: 6_000 })
+  if (await page.locator('.chat-status-detail').getByText('Compaction du contexte').count()) throw new Error('Compaction : la ligne de travail doit s’effacer quand le texte reprend.')
+  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 5_000 })
+  await delay(500)
+  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
+
+  // Auto again: each profile gets back what it had before Manual, and the shared setting follows.
+  await openSettings()
+  await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
+  await compactionBlock.getByRole('radio', { name: 'Auto' }).click()
+  const writesBeforeAuto = configWrites.length
+  await compactionBlock.getByRole('button', { name: 'Enregistrer' }).click()
+  await compactionBlock.getByText(`Appliqué à ${rosterSlugs.length} bots.`).waitFor({ timeout: 5_000 })
+  const restored = configWrites.slice(writesBeforeAuto)
+  if (restored.map((write) => write.profile).sort().join() !== rosterSlugs.join()) throw new Error(`Compaction Auto : profils restaurés ${JSON.stringify(restored.map((write) => write.profile))}`)
+  if (JSON.stringify(fakeProfileConfigs.nova.compression) !== '{"threshold":0.5,"threshold_tokens":200000}') throw new Error(`Compaction Auto : valeurs d’avant ${JSON.stringify(fakeProfileConfigs)}`)
+  if (JSON.stringify(fakeProfileConfigs.orion.compression) !== '{"threshold":0.5,"threshold_tokens":null}') throw new Error(`Compaction Auto : sans valeur d’avant, les défauts de Hermes : ${JSON.stringify(fakeProfileConfigs.orion)}`)
+  const sharedAuto = JSON.parse(sharedSettingsFile)
+  if (sharedAuto.compaction?.mode !== 'auto' || Object.keys(sharedAuto.compaction.snapshot).length) throw new Error(`Compaction Auto : réglage partagé ${sharedSettingsFile}`)
+  if (JSON.stringify(sharedAuto.hiddenModels) !== JSON.stringify(sharedBeforeCompaction.hiddenModels)) throw new Error('Compaction : les modèles masqués partagés ont changé.')
+  await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  fakeContextTokens = 41_000
 
   // A real user gesture (wheel up) detaches the thread; a programmatic scroll would not.
   const scrollBox = await page.locator('.messages-scroll').boundingBox()
