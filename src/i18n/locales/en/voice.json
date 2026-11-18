@@ -1,0 +1,51 @@
+{
+  "voice": {
+    "name": "Voice mode",
+    "open": "Voice mode: talk with {{name}}",
+    "close": "End voice mode",
+    "talk": "Talk",
+    "talkTitle": "Hold to talk, release to send. Or tap, speak, and pause.",
+    "stopSpeaking": "Stop the voice",
+    "stopBot": "Stop {{name}}",
+    "phase": {
+      "idle": "Ready",
+      "listening": "Listening",
+      "thinking": "Thinking",
+      "speaking": "Speaking",
+      "asking": "Question"
+    },
+    "thinkingWith": "Thinking · {{activity}}",
+    "approval": "Approval needed: answer on screen.",
+    "question": "Answer by voice, or on the card.",
+    "idleCaption": "Hold Talk, or press Enter, and speak to {{name}}.",
+    "notice": {
+      "notSent": "Not sent. Try again.",
+      "noMatch": "Not understood: say the number of a choice.",
+      "cancelled": "Dropped.",
+      "speechFailed": "The voice could not speak. The reply is in the chat.",
+      "answerOnScreen": "Answer not sent: use the card on screen."
+    },
+    "spoken": {
+      "approval": "I need your approval. Look at the screen.",
+      "noMatch": "Sorry, I didn't catch that. Say the number of your choice.",
+      "multiSelect": "Answer on the screen: there are several choices."
+    },
+    "settings": {
+      "title": "Voice mode",
+      "voiceFr": "French voice",
+      "voiceEn": "English voice",
+      "systemVoice": "System voice",
+      "quality": {
+        "enhanced": "enhanced",
+        "premium": "premium"
+      },
+      "test": "Test",
+      "testFr": "Bonjour, je suis prêt.",
+      "testEn": "Hello. Ready when you are.",
+      "rate": "Speaking rate",
+      "steps": "Speak the steps",
+      "stepsHint": "The bot also says the short lines it writes before working (\"I'm looking it up…\").",
+      "voicesHint": "Better voices are free: System Settings > Accessibility > Read & Speak > System voice, then download a Premium voice."
+    }
+  }
+}

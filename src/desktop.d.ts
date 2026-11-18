@@ -16,5 +16,36 @@ interface Window {
       cancel: () => Promise<void>
       onEvent: (listener: (event: { type: 'words'; text: string; final: boolean } | { type: 'level'; value: number } | { type: 'audioEnd' } | { type: 'done' } | { type: 'error'; code: string }) => void) => () => void
     }
+    /**
+     * Speech output (voice mode) by the Mac's own voices, through the same native helper.
+     * The helper plays the audio itself and reports levels for the animation: no audio reaches the page.
+     * The microphone and the voice never run together: a `say` while dictation listens is refused,
+     * and a dictation start stops the voice first.
+     */
+    speech?: {
+      /** The French and English voices installed on this Mac. */
+      voices: () => Promise<HermesBotSpeechVoice[]>
+      /** Queues one utterance; `false` when refused (too long, dictation listening, helper missing). */
+      say: (utterance: { id: number; text: string; voice?: string; language: string; rate?: number }) => Promise<boolean>
+      /** Stops the voice now and drops the queue; the current utterance ends with `interrupted: true`. */
+      stop: () => Promise<void>
+      onEvent: (listener: (event: HermesBotSpeechEvent) => void) => () => void
+    }
   }
 }
+
+interface HermesBotSpeechVoice {
+  /** `AVSpeechSynthesisVoice.identifier`. */
+  id: string
+  name: string
+  /** BCP 47, e.g. `fr-FR`, `en-GB`. */
+  language: string
+  quality: 'default' | 'enhanced' | 'premium'
+}
+
+type HermesBotSpeechEvent =
+  | { type: 'start'; id: number }
+  /** About 30 per second while audio plays: overall level and 12 frequency bands, all 0..1. */
+  | { type: 'level'; id: number; rms: number; bands: number[] }
+  | { type: 'end'; id: number; interrupted: boolean }
+  | { type: 'error'; id?: number; code: string }

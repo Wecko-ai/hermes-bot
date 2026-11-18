@@ -18,7 +18,7 @@ export const avatarPhase = (bot: Bot): AvatarPhase => {
 const reducedMotionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
 
 /** macOS “Reduce motion” or the app setting: static avatar, the status stays written out. */
-function useReducedMotion() {
+export function useReducedMotion() {
   const { reduceMotion } = useSettings()
   const [reduced, setReduced] = useState(() => reducedMotionQuery?.matches ?? false)
   useEffect(() => {

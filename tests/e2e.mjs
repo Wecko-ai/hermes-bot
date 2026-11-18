@@ -781,6 +781,17 @@ wss.on('connection', (socket) => {
       }
       lastPromptText = frame.params.text
       lastApiText = frame.params.api_text
+      if (frame.params.text === 'Résume ma journée') {
+        at(30, 'message.start', { turn_id: 'turn-voice' })
+        at(120, 'message.interim', { turn_id: 'turn-voice', segment: 0, text: 'Je regarde ton agenda.' })
+        at(400, 'message.complete', { turn_id: 'turn-voice', text: '**Trois points** aujourd’hui.\n\n```js\nconst secret = 1\n```\n\nVoir [le document](https://example.com/doc). Le rendu est fini.', status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Choisis la version') {
+        at(30, 'message.start', { turn_id: 'turn-voice-choice' })
+        at(90, 'clarify.request', { kind: 'clarify', prompt_id: 'qv', execution_generation: 1, question: 'Quelle version ?', choices: ['Courte', 'Longue'], multi_select: false, timeout_s: 3600 })
+        return
+      }
       if (frame.params.text === 'Test question') {
         at(30, 'message.start', { turn_id: 'turn-question' })
         at(90, 'clarify.request', { kind: 'clarify', prompt_id: 'q1', execution_generation: 1, question: 'Pour quel post ?', choices: ['Post A', 'Post B'], multi_select: false, timeout_s: 3600 })
@@ -912,6 +923,7 @@ wss.on('connection', (socket) => {
       if (frame.params.prompt_id === 'q1') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q2', execution_generation: 1, question: 'Que doit montrer l’image ?', choices: ['Personnage', 'Accessoires', 'Décor'], multi_select: true })
       if (frame.params.prompt_id === 'q2') at(60, 'clarify.request', { kind: 'clarify', prompt_id: 'q3', execution_generation: 1, question: 'Une remarque ?', choices: [], multi_select: false })
       if (frame.params.prompt_id === 'q3') at(80, 'message.complete', { turn_id: 'turn-question', text: 'Images prêtes.', status: 'complete' })
+      if (frame.params.prompt_id === 'qv') at(80, 'message.complete', { turn_id: 'turn-voice-choice', text: 'Version longue lancée.', status: 'complete' })
       if (frame.params.prompt_id === 'q-reprise') at(80, 'message.complete', { turn_id: 'turn-reprise', text: 'Reprise terminée.', status: 'complete' })
       return
     }
@@ -1060,6 +1072,11 @@ try {
     const state = { access: 'granted', microphone: true, exists: true, onDevice: true, available: true, startResult: true, finalText: '' }
     const emit = (event) => listeners.forEach((listener) => listener(event))
     window.__dictation = { calls, state, emit }
+    const speechListeners = new Set()
+    const speechCalls = []
+    window.__speech = { calls: speechCalls, emit: (event) => speechListeners.forEach((listener) => listener(event)) }
+    // The media test below replaces then deletes the bridge: the voice test puts this one back.
+    queueMicrotask(() => { window.__fakeBridge = window.hermesBot })
     window.hermesBot = {
       platform: 'electron',
       restartTunnel: async () => {},
@@ -1077,6 +1094,13 @@ try {
         },
         cancel: async () => { calls.push({ method: 'cancel' }) },
         onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener) },
+      },
+      // Voice mode output: recorded, the test plays start / level / end itself.
+      speech: {
+        voices: async () => [{ id: 'test.fr-FR.thomas', name: 'Thomas', language: 'fr-FR', quality: 'enhanced' }, { id: 'test.en-GB.daniel', name: 'Daniel', language: 'en-GB', quality: 'premium' }],
+        say: async (utterance) => { speechCalls.push({ method: 'say', ...utterance }); return true },
+        stop: async () => { speechCalls.push({ method: 'stop' }) },
+        onEvent: (listener) => { speechListeners.add(listener); return () => speechListeners.delete(listener) },
       },
     }
   })
@@ -1766,6 +1790,111 @@ try {
   await pill.waitFor({ state: 'detached', timeout: 3_000 })
   await chooseDictationLanguage('Interface')
   if ((await page.evaluate(() => JSON.parse(localStorage.getItem('hermesbot-settings')))).dictationLanguage !== 'interface') throw new Error('La langue de la dictée doit revenir à celle de l’interface.')
+
+  // Voice mode (fake bridges): push-to-talk, the spoken message carries the voice note, the reply is spoken
+  // without markdown, levels move the HUD, a choice is answered by its number, silences are not spoken.
+  const speechSaid = () => page.evaluate(() => window.__speech.calls.filter((call) => call.method === 'say'))
+  const speechEmit = (event) => page.evaluate((payload) => window.__speech.emit(payload), event)
+  const voiceOverlay = page.locator('.voice-overlay')
+  const voiceTalk = voiceOverlay.locator('.voice-talk')
+  const voiceState = voiceOverlay.locator('.voice-state')
+  /** Plays every utterance asked so far to its end, as the native helper would. */
+  const speakAll = async () => {
+    for (let round = 0; round < 6; round += 1) {
+      const said = await speechSaid()
+      for (const call of said) {
+        const done = await page.evaluate((id) => (window.__speechEnded ??= new Set()).has(id), call.id)
+        if (done) continue
+        await speechEmit({ type: 'start', id: call.id })
+        await speechEmit({ type: 'level', id: call.id, rms: 0.7, bands: [0.2, 0.5, 0.8, 0.9, 0.7, 0.5, 0.4, 0.3, 0.3, 0.2, 0.1, 0.1] })
+        await speechEmit({ type: 'end', id: call.id, interrupted: false })
+        await page.evaluate((id) => window.__speechEnded.add(id), call.id)
+      }
+      await delay(80)
+      if ((await speechSaid()).length === said.length) return
+    }
+  }
+  /** Holds Talk while the fake recognition hears `text`, then releases it (push-to-talk). */
+  const voiceSay = async (text) => {
+    const starts = (await dictationCalls('start')).length
+    await dictationState({ finalText: text })
+    await voiceTalk.hover()
+    await page.mouse.down()
+    for (let attempt = 0; attempt < 80 && (await dictationCalls('start')).length === starts; attempt += 1) await delay(25)
+    if ((await dictationCalls('start')).length === starts) throw new Error(`Mode voix : Parler n’a pas ouvert le micro (état ${await voiceState.textContent()}).`)
+    await dictationEmit({ type: 'words', text, final: false })
+    await delay(550)
+    await page.mouse.up()
+  }
+  // The media test deleted the desktop bridge (browser mode): the voice mode opens its engines at open time.
+  await page.evaluate(() => { window.hermesBot = window.__fakeBridge })
+  await page.getByRole('button', { name: 'Mode voix : parler avec Orion' }).click()
+  await voiceOverlay.waitFor({ timeout: 3_000 })
+  if (await voiceOverlay.getAttribute('role') !== 'dialog') throw new Error('Le mode voix doit être un dialogue.')
+  await voiceState.getByText('Prêt').waitFor({ timeout: 2_000 })
+  const promptsBeforeVoice = promptCalls
+  await voiceSay('Résume ma journée')
+  for (let attempt = 0; attempt < 80 && promptCalls === promptsBeforeVoice; attempt += 1) await delay(25)
+  if (promptCalls !== promptsBeforeVoice + 1 || lastPromptText !== 'Résume ma journée') {
+    const seen = { state: await voiceState.textContent(), caption: await voiceOverlay.locator('.voice-caption').textContent(), notice: await voiceOverlay.locator('.voice-notice').textContent(), calls: (await page.evaluate(() => window.__dictation.calls.slice(-4))) }
+    throw new Error(`Mode voix : envoi ${promptCalls - promptsBeforeVoice}, « ${lastPromptText} » ${JSON.stringify(seen)} ${errors.join(' | ')}`)
+  }
+  if (!lastApiText?.startsWith('Résume ma journée\n\n[HermesBot voice mode. For this turn only')) throw new Error(`Mode voix : api_text ${lastApiText}`)
+  const voiceStart = (await dictationCalls('start')).at(-1)
+  if (voiceStart?.localeId !== 'fr-FR' || voiceStart.pauseForMs !== 1_600) throw new Error(`Mode voix : écoute ${JSON.stringify(voiceStart)}`)
+  for (let attempt = 0; attempt < 80 && (await speechSaid()).length < 2; attempt += 1) await delay(25)
+  await voiceState.getByText('Parle').waitFor({ timeout: 2_000 })
+  // The HUD draws while the voice plays.
+  await page.evaluate((id) => { window.__voiceLevels = setInterval(() => window.__speech.emit({ type: 'level', id, rms: 0.85, bands: [0.3, 0.6, 0.9, 1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.3, 0.2, 0.1] }), 30) }, (await speechSaid())[0].id)
+  await speechEmit({ type: 'start', id: (await speechSaid())[0].id })
+  await delay(400)
+  const hudPixels = await voiceOverlay.locator('canvas').evaluate((canvas) => {
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    let lit = 0
+    for (let index = 3; index < data.length; index += 4) if (data[index] > 40) lit += 1
+    return lit
+  })
+  if (hudPixels < 500) throw new Error(`Le HUD doit dessiner pendant que la voix parle (${hudPixels} pixels).`)
+  await voiceOverlay.screenshot({ path: `${SCREENSHOTS}voice-speaking.png` })
+  await page.evaluate(() => clearInterval(window.__voiceLevels))
+  await speakAll()
+  const spoken = (await speechSaid()).map((call) => call.text)
+  if (spoken[0] !== 'Je regarde ton agenda.') throw new Error(`Mode voix : l’étape doit être dite d’abord : ${JSON.stringify(spoken)}`)
+  const spokenReply = spoken.slice(1).join(' ')
+  if (!spokenReply.includes('Trois points') || !spokenReply.includes('Le rendu est fini') || /\*\*|```|https?:|const secret/.test(spokenReply)) throw new Error(`Mode voix : réponse dite ${JSON.stringify(spoken)}`)
+  if ((await speechSaid()).some((call) => call.language !== 'fr-FR')) throw new Error('Mode voix : la réponse en français doit partir en fr-FR.')
+  await voiceState.getByText('Prêt').waitFor({ timeout: 3_000 })
+  // A question with choices: spoken, its card stays on screen, answered by its number.
+  await voiceSay('Choisis la version')
+  await voiceOverlay.locator('.voice-prompt').getByText('Quelle version ?').waitFor({ timeout: 3_000 })
+  await speakAll()
+  if (!(await speechSaid()).some((call) => call.text.includes('Longue'))) throw new Error('Mode voix : les choix doivent être dits.')
+  const answersBeforeVoice = promptAnswers.length
+  await voiceSay('la deux')
+  for (let attempt = 0; attempt < 80 && promptAnswers.length === answersBeforeVoice; attempt += 1) await delay(25)
+  const voiceAnswer = promptAnswers.at(-1)
+  if (promptAnswers.length !== answersBeforeVoice + 1 || voiceAnswer.prompt_id !== 'qv' || !JSON.stringify(voiceAnswer).includes('Longue')) throw new Error(`Mode voix : réponse au choix ${JSON.stringify(voiceAnswer)}`)
+  for (let attempt = 0; attempt < 80 && !(await speechSaid()).some((call) => call.text === 'Version longue lancée.'); attempt += 1) await delay(25)
+  await speakAll()
+  // A silent reply is not spoken.
+  const saidBeforeSilence = (await speechSaid()).length
+  await voiceSay('Test silence')
+  await voiceState.getByText(/Réflexion/).waitFor({ timeout: 3_000 })
+  await voiceState.getByText('Prêt').waitFor({ timeout: 4_000 })
+  await delay(200)
+  if ((await speechSaid()).length !== saidBeforeSilence) throw new Error('Mode voix : un silence ne doit pas être dit.')
+  // A bare "stop" ends the mode without sending anything; Escape too.
+  const promptsBeforeStop = promptCalls
+  await voiceSay('Stop.')
+  await voiceOverlay.waitFor({ state: 'detached', timeout: 3_000 })
+  if (promptCalls !== promptsBeforeStop) throw new Error('« Stop » ne doit rien envoyer.')
+  await page.getByRole('button', { name: 'Mode voix : parler avec Orion' }).click()
+  await voiceOverlay.waitFor({ timeout: 3_000 })
+  await page.keyboard.press('Escape')
+  await voiceOverlay.waitFor({ state: 'detached', timeout: 3_000 })
+  await page.evaluate(() => { delete window.hermesBot })
+  // The later question tests count every answer from the start.
+  promptAnswers.splice(answersBeforeVoice)
 
   // Send button: black and white, flat, in both themes (the disc has the text colour, the arrow the background colour).
   await orionBox.fill('Un message')

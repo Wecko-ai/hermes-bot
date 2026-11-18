@@ -156,6 +156,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       // Providers paid by a flat subscription: the free mode keeps them, as they cost nothing more.
       subscriptionProviders: providers(ui.subscriptionProviders),
       contrastAvatars: slugs(ui.contrastAvatars),
+      // Name shown for the voice mode (empty: the interface's own name for it).
+      voiceModeName: text(ui.voiceModeName, 32),
     },
   }
 }

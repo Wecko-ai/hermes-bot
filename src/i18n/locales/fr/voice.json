@@ -1,0 +1,51 @@
+{
+  "voice": {
+    "name": "Mode voix",
+    "open": "Mode voix : parler avec {{name}}",
+    "close": "Quitter le mode voix",
+    "talk": "Parler",
+    "talkTitle": "Maintiens pour parler, relâche pour envoyer. Ou clique, parle, puis marque une pause.",
+    "stopSpeaking": "Couper la voix",
+    "stopBot": "Arrêter {{name}}",
+    "phase": {
+      "idle": "Prêt",
+      "listening": "À l’écoute",
+      "thinking": "Réflexion",
+      "speaking": "Parle",
+      "asking": "Question"
+    },
+    "thinkingWith": "Réflexion · {{activity}}",
+    "approval": "Accord demandé : réponds à l’écran.",
+    "question": "Réponds à voix haute, ou sur la carte.",
+    "idleCaption": "Maintiens Parler, ou appuie sur Entrée, et parle à {{name}}.",
+    "notice": {
+      "notSent": "Pas envoyé. Réessaie.",
+      "noMatch": "Pas compris : dis le numéro d’un choix.",
+      "cancelled": "Abandonné.",
+      "speechFailed": "La voix n’a pas pu parler. La réponse est dans le chat.",
+      "answerOnScreen": "Réponse non envoyée : utilise la carte à l’écran."
+    },
+    "spoken": {
+      "approval": "J’ai besoin de ton accord. Regarde l’écran.",
+      "noMatch": "Désolé, je n’ai pas compris. Dis le numéro de ton choix.",
+      "multiSelect": "Réponds à l’écran : il y a plusieurs choix."
+    },
+    "settings": {
+      "title": "Mode voix",
+      "voiceFr": "Voix française",
+      "voiceEn": "Voix anglaise",
+      "systemVoice": "Voix du système",
+      "quality": {
+        "enhanced": "améliorée",
+        "premium": "premium"
+      },
+      "test": "Essayer",
+      "testFr": "Bonjour, je suis prêt.",
+      "testEn": "Hello. Ready when you are.",
+      "rate": "Débit",
+      "steps": "Dire les étapes",
+      "stepsHint": "Le bot dit aussi les courtes lignes qu’il écrit avant de travailler (« Je regarde… »).",
+      "voicesHint": "De meilleures voix sont gratuites : Réglages Système > Accessibilité > Lire et énoncer > Voix du système, puis télécharge une voix Premium."
+    }
+  }
+}

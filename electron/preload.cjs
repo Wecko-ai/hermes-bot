@@ -18,4 +18,15 @@ contextBridge.exposeInMainWorld('hermesBot', Object.freeze({
       return () => { ipcRenderer.removeListener('hermes-bot:dictation-event', forward) }
     },
   }),
+  // Speech output with the Mac's voices (main.cjs, speech.cjs). No audio reaches the page.
+  speech: Object.freeze({
+    voices: () => ipcRenderer.invoke('hermes-bot:speech-voices'),
+    say: (utterance) => ipcRenderer.invoke('hermes-bot:speech-say', utterance),
+    stop: () => ipcRenderer.invoke('hermes-bot:speech-stop'),
+    onEvent: (listener) => {
+      const forward = (_event, payload) => listener(payload)
+      ipcRenderer.on('hermes-bot:speech-event', forward)
+      return () => { ipcRenderer.removeListener('hermes-bot:speech-event', forward) }
+    },
+  }),
 }))

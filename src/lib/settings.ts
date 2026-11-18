@@ -38,6 +38,13 @@ export interface AppSettings {
   localModel: string
   /** macOS notification when a bot finishes a turn or waits on an answer, unless its chat is in view. */
   notifications: boolean
+  /** Voice mode: the voice of each language (identifier of a Mac voice). Empty: the system voice. */
+  voiceFr: string
+  voiceEn: string
+  /** Voice mode: speaking rate, 0.5 to 2 times the normal rate. */
+  voiceRate: number
+  /** Voice mode: also speak the short steps a bot writes before its tools. */
+  voiceSteps: boolean
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -71,6 +78,10 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     freeMode: flag(value.freeMode, false),
     localModel: typeof value.localModel === 'string' ? value.localModel : '',
     notifications: flag(value.notifications, true),
+    voiceFr: typeof value.voiceFr === 'string' ? value.voiceFr.slice(0, 200) : '',
+    voiceEn: typeof value.voiceEn === 'string' ? value.voiceEn.slice(0, 200) : '',
+    voiceRate: typeof value.voiceRate === 'number' && Number.isFinite(value.voiceRate) ? Math.min(2, Math.max(0.5, value.voiceRate)) : 1,
+    voiceSteps: flag(value.voiceSteps, true),
   }
 }
 

@@ -1,0 +1,54 @@
+/* Voice mode: a dark glass stage over the chat, the same in light and dark themes (the HUD glows on dark). */
+.voice-overlay {
+  --voice-bg: rgb(7 10 17 / 90%);
+  --voice-text: #f2f5f9;
+  --voice-text-dim: rgb(242 245 249 / 64%);
+  --voice-line: rgb(255 255 255 / 12%);
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 16px 22px;
+  background:
+    radial-gradient(ellipse at 50% 42%, color-mix(in srgb, var(--voice-accent, #4fd1ff) 14%, transparent) 0%, transparent 62%),
+    var(--voice-bg);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+  color: var(--voice-text);
+  animation: voice-in 200ms var(--ease-out, ease-out);
+}
+
+@keyframes voice-in { from { opacity: 0; } to { opacity: 1; } }
+
+.voice-accent-probe { position: absolute; width: 0; height: 0; overflow: hidden; color: var(--voice-accent, #4fd1ff); }
+
+.voice-header { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; -webkit-app-region: no-drag; }
+.voice-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; letter-spacing: 0.02em; color: var(--voice-text-dim); }
+
+.voice-stage { position: relative; flex: 1 1 auto; width: 100%; max-width: 520px; min-height: 220px; max-height: 520px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; }
+.voice-hud { position: absolute; inset: 0; width: 100%; height: 100%; }
+.voice-avatar { position: relative; display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 0 18px color-mix(in srgb, var(--voice-accent, #4fd1ff) 45%, transparent)); }
+
+.voice-state { margin: 6px 0 0; min-height: 18px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--voice-accent, #4fd1ff) 70%, white); }
+.voice-overlay.is-asking .voice-state { color: rgb(245 185 66); }
+.voice-caption { margin: 10px 0 0; max-width: 620px; min-height: 52px; padding: 0 8px; text-align: center; font-size: 18px; line-height: 26px; font-weight: 450; color: var(--voice-text); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.voice-caption.is-quiet { color: var(--voice-text-dim); }
+.voice-notice { margin: 6px 0 0; min-height: 18px; max-width: 560px; text-align: center; font-size: 12px; line-height: 18px; color: rgb(255 214 140); }
+
+.voice-controls { margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 14px; min-height: 56px; }
+.voice-icon-button { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--voice-line); border-radius: 50%; background: rgb(255 255 255 / 6%); color: var(--voice-text); cursor: pointer; transition: background 140ms var(--ease-out, ease-out); }
+.voice-icon-button:hover { background: rgb(255 255 255 / 12%); }
+.voice-talk { height: 52px; min-width: 136px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 0 22px; border: 1px solid color-mix(in srgb, var(--voice-accent, #4fd1ff) 55%, transparent); border-radius: 9999px; background: color-mix(in srgb, var(--voice-accent, #4fd1ff) 16%, transparent); color: var(--voice-text); font-size: 15px; font-weight: 600; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; transition: background 140ms var(--ease-out, ease-out), box-shadow 140ms var(--ease-out, ease-out); }
+.voice-talk:hover { background: color-mix(in srgb, var(--voice-accent, #4fd1ff) 24%, transparent); }
+.voice-talk.is-on { background: color-mix(in srgb, var(--voice-accent, #4fd1ff) 34%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--voice-accent, #4fd1ff) 22%, transparent); }
+.voice-talk[aria-disabled='true'] { opacity: 0.55; }
+.voice-talk:focus-visible, .voice-icon-button:focus-visible { outline: 2px solid color-mix(in srgb, var(--voice-accent, #4fd1ff) 80%, white); outline-offset: 3px; }
+
+[data-motion='reduce'] .voice-overlay { animation: none; }
+@media (prefers-reduced-motion: reduce) { .voice-overlay { animation: none; } }
+@media (max-height: 560px) { .voice-stage { min-height: 160px; } .voice-caption { font-size: 16px; line-height: 23px; } }
+
+/* A bot question or approval: its usual card, kept readable on the dark stage. */
+.voice-prompt { width: min(560px, 100%); margin-top: 12px; color: var(--text); }

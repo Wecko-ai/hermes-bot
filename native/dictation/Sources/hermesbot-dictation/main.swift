@@ -14,6 +14,21 @@
 //       {"type":"words","text":"…","final":true}
 //       {"type":"done"}                            nothing more will come; exit 0
 //       {"type":"error","code":"error_…"}          instead of the final result; exit 1
+//   voices                     one JSON line, then exit 0: {"voices":[{"id","name","language","quality"}]}, French and English
+//                              system voices (novelty voices left out), best quality first.
+//   speak [--no-play] [--trace]   the voice mode's speaker. Prints {"type":"ready"}, then reads stdin, one JSON per line:
+//       {"op":"say","id":1,"text":"…","voice":"<identifier>","language":"fr-FR","rate":1.0}   system voice
+//       {"op":"pcm","id":2,"rate":24000,"data":"<base64 int16 LE mono>","last":false}        audio of another engine
+//       {"op":"stop"}                                  stop now; the current utterance ends interrupted, the queue is dropped
+//     id is 1...2147483647, text 1...4000 UTF-16 units, rate a multiplier 0.5...2.0 of the default speech rate.
+//     Utterances play in arrival order. stdout, one JSON per line:
+//       {"type":"start","id":1}                        its audio really starts
+//       {"type":"level","id":1,"rms":0.42,"bands":[12 numbers]}   about 30 per second, all 0...1
+//       {"type":"end","id":1,"interrupted":false}      after its last sample was played (or at once on stop)
+//       {"type":"error","id":1,"code":"error_…"}      bad_input, text_too_long, voice_unavailable, audio; no id if unreadable
+//     A bad line never ends the process. End of stdin: what is queued is spoken, then exit 0. SIGTERM: stop, exit 0.
+//     --no-play makes no sound (tests): the same events, as fast as the levels are computed.
+//     --trace prints event types and text lengths on stderr, never the text.
 //   While listening, a line "stop" on stdin (or SIGTERM) closes the microphone and lets the final result come;
 //   "cancel" (or SIGINT, or stdin closed) ends at once. Every path ends with "done" or "error", then exits.
 import AVFoundation
@@ -51,17 +66,20 @@ struct Options {
     var file: String?
     /// Diagnostics on stderr: each raw result of the recognizer, before the merge (never used by the app).
     var trace = false
+    /// `speak` only: no audio output at all.
+    var noPlay = false
 }
 
 func parseOptions(_ arguments: [String]) -> Options? {
     var options = Options()
     var rest = arguments[...]
-    guard let command = rest.popFirst(), ["probe", "authorize", "listen"].contains(command) else { return nil }
+    guard let command = rest.popFirst(), ["probe", "authorize", "listen", "voices", "speak"].contains(command) else { return nil }
     options.command = command
     while let flag = rest.popFirst() {
         switch flag {
         case "--on-device": options.onDevice = true
         case "--trace": options.trace = true
+        case "--no-play": options.noPlay = true
         case "--locale":
             // Same tag `electron/dictation.cjs` accepts (`LocaleTag` / `LOCALE`).
             guard let value = rest.popFirst(), LocaleTag.isValid(value) else { return nil }
@@ -501,7 +519,7 @@ func listen(_ options: Options) -> Never {
 // MARK: - Entry
 
 guard let options = parseOptions(Array(CommandLine.arguments.dropFirst())) else {
-    log("usage: hermesbot-dictation probe|authorize|listen --locale xx-XX [--on-device] [--listen-for-ms N] [--pause-for-ms N] [--file path]")
+    log("usage: hermesbot-dictation probe|authorize|listen|voices|speak --locale xx-XX [--on-device] [--listen-for-ms N] [--pause-for-ms N] [--file path]")
     emit(["type": "error", "code": "error_usage"])
     exit(2)
 }
@@ -510,6 +528,10 @@ case "probe":
     emit(probeLine(locale: options.locale))
 case "authorize":
     authorize(locale: options.locale)
+case "voices":
+    printVoices()
+case "speak":
+    runSpeak(options)
 default:
     listen(options)
 }

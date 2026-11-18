@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, ChevronDown, FileText, Film, Gauge, Mic, MicOff, Music, Pause, Plus, X } from 'lucide-react'
+import { ArrowUp, AudioLines, ChevronDown, FileText, Film, Gauge, Mic, MicOff, Music, Pause, Plus, X } from 'lucide-react'
 import type { Bot, SessionUsage } from '../types'
 import { formatUsage } from '../lib/model'
 import { defaultPrompt, filterAttachments, formatBytes, toAttachment, type PendingAttachment } from '../lib/attachments'
@@ -40,6 +40,8 @@ interface ComposerProps {
   usage: SessionUsage | null
   showUsage: boolean
   onToggleUsage: () => void
+  /** Opens the voice mode with this bot. Absent: nothing can speak here. */
+  onVoice?: () => void
 }
 
 interface Draft {
@@ -61,7 +63,7 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
-export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage }: ComposerProps) {
+export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage, onVoice }: ComposerProps) {
   const { t, i18n: translation } = useTranslation()
   const { sendKey, dictationLanguage } = useSettings()
   const [text, setText] = useState(() => loadDraft(bot.slug))
@@ -389,6 +391,11 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             }
           }}
         />
+        {onVoice && !minimal && !dictating && (
+          <button type="button" className="composer-mic composer-voice" aria-label={t('voice.open', { name: bot.name })} title={t('voice.open', { name: bot.name })} disabled={disabled} onClick={onVoice}>
+            <AudioLines size={17} />
+          </button>
+        )}
         {dictation && !running && !dictating && (
           <button type="button" className={`composer-mic ${dictationBlocked ? 'is-blocked' : ''}`} aria-label={dictationBlocked ? t('composer.dictateBlocked') : t('composer.dictate')} aria-disabled={dictationBlocked || undefined} disabled={disabled} onClick={() => void dictation.start()}>
             {dictationBlocked ? <MicOff size={17} /> : <Mic size={17} />}

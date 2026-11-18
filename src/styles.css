@@ -1229,3 +1229,10 @@ button.agent-note-name:hover { background: var(--hover); }
 @keyframes search-flash { 0%, 60% { background: rgb(255 204 0 / 30%); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .message.search-flash .message-content { animation: none; background: rgb(255 204 0 / 30%); } }
 .room-mention-menu button.is-active { background: var(--selected); }
+
+/* Settings > Conversations: voice mode block. */
+.settings-subheading { margin: 18px 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); }
+.settings-inline { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-inline .settings-select { max-width: 260px; }
+.settings-range { width: 150px; accent-color: var(--accent); }
+.settings-range-value { min-width: 46px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); text-align: right; }

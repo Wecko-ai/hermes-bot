@@ -14,6 +14,7 @@ import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from '../lib/
 import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
+import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
@@ -173,6 +174,7 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
       <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />
+      <VoiceSettings />
       <Row label={t('settings.sortBots')}>
         <Segments<'groups' | 'activity'> label={t('settings.sortBots')} value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: t('settings.sortOptions.groups') }, { id: 'activity', label: t('settings.sortOptions.activity') }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
       </Row>
@@ -185,6 +187,57 @@ function ChatTab({ localModels }: { localModels?: LocalModels | null }) {
         </Row>
       )}
       <ChatGuide />
+    </>
+  )
+}
+
+const DEMO_SETTINGS = new URLSearchParams(location.search).get('demo') === '1'
+
+/** Voice mode: the voice of each language, the rate, the steps. "Test" speaks locally (free). */
+function VoiceSettings() {
+  const { t } = useTranslation()
+  const settings = useSettings()
+  const engine = useMemo(() => createSpeechEngine({ demo: DEMO_SETTINGS }), [])
+  const [voices, setVoices] = useState<SpeechVoice[]>([])
+  const testId = useRef(1)
+  useEffect(() => { if (engine) void engine.voices().then(setVoices) }, [engine])
+  if (!engine) return null
+  const label = (voice: SpeechVoice) => {
+    const quality = voice.quality === 'default' ? '' : t(`voice.settings.quality.${voice.quality}`)
+    return `${voice.name} (${voice.language})${quality ? ` · ${quality}` : ''}`
+  }
+  const picker = (language: 'fr' | 'en') => {
+    const key = language === 'fr' ? 'voiceFr' : 'voiceEn'
+    const value = settings[key]
+    const choices = voices.filter((voice) => voice.language.toLowerCase().startsWith(language))
+    const test = () => {
+      const voice = choices.find((item) => item.id === value)
+      void engine.stop().then(() => engine.say({ id: testId.current++, text: t(language === 'fr' ? 'voice.settings.testFr' : 'voice.settings.testEn'), voice: value || undefined, language: voice?.language || (language === 'fr' ? 'fr-FR' : 'en-GB'), rate: settings.voiceRate }))
+    }
+    return (
+      <Row label={t(language === 'fr' ? 'voice.settings.voiceFr' : 'voice.settings.voiceEn')}>
+        <span className="settings-inline">
+          <select className="settings-select" aria-label={t(language === 'fr' ? 'voice.settings.voiceFr' : 'voice.settings.voiceEn')} value={value} onChange={(event) => updateSettings({ [key]: event.target.value })}>
+            <option value="">{t('voice.settings.systemVoice')}</option>
+            {choices.map((voice) => <option key={voice.id} value={voice.id}>{label(voice)}</option>)}
+          </select>
+          <button type="button" className="settings-button" onClick={test}>{t('voice.settings.test')}</button>
+        </span>
+      </Row>
+    )
+  }
+  return (
+    <>
+      <h3 className="settings-subheading">{t('voice.settings.title')}</h3>
+      {picker('fr')}
+      {picker('en')}
+      <Row label={t('voice.settings.rate')} hint={t('voice.settings.voicesHint')}>
+        <span className="settings-inline">
+          <input type="range" className="settings-range" aria-label={t('voice.settings.rate')} min={0.6} max={1.6} step={0.05} value={settings.voiceRate} onChange={(event) => updateSettings({ voiceRate: Number(event.target.value) })} />
+          <output className="settings-range-value">{settings.voiceRate.toFixed(2)}×</output>
+        </span>
+      </Row>
+      <Toggle label={t('voice.settings.steps')} hint={t('voice.settings.stepsHint')} checked={settings.voiceSteps} onChange={(voiceSteps) => updateSettings({ voiceSteps })} />
     </>
   )
 }

@@ -15,6 +15,8 @@ export interface AppConfig {
     subscriptionProviders: string[]
     /** Bots drawn in the contrast color (black in light theme) when their profile sets no color. */
     contrastAvatars: string[]
+    /** Name shown for the voice mode; empty: the interface's own name for it. */
+    voiceModeName: string
   }
   /** Bots with `<slug>-working.webp` and `<slug>-done.webp` animations. */
   animatedBots: string[]
@@ -22,7 +24,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [] },
+  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [], voiceModeName: '' },
   animatedBots: [],
   localChat: { name: '' },
 }
@@ -46,6 +48,7 @@ export function parseAppConfig(value: unknown): AppConfig {
       hiddenProviders: strings(ui.hiddenProviders),
       subscriptionProviders: strings(ui.subscriptionProviders),
       contrastAvatars: strings(ui.contrastAvatars),
+      voiceModeName: text(ui.voiceModeName).slice(0, 32),
     },
     animatedBots: strings(raw.animatedBots),
     localChat: { name: text(localChat.name) },

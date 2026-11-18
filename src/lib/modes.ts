@@ -41,6 +41,19 @@ export function cavemanApiText(text: string, modeText: string | undefined, enabl
   return enabled ? `${modeText ?? text}\n\n${CAVEMAN_NOTE}` : modeText
 }
 
+/**
+ * Voice mode: the user talks to the bot and hears the reply read aloud. Like caveman, a note read with
+ * the turn, never written into the bot's profile, and only for messages spoken in the voice overlay.
+ * It replaces the caveman note (both shape the length; the voice one also forbids what cannot be spoken).
+ */
+const VOICE_NOTE = '[HermesBot voice mode. For this turn only, the user is talking to you by voice in the app, and your reply will be read aloud by a speech synthesizer. Reply like a spoken conversation: 1 to 4 short sentences, under about 60 words, in the user\'s language. No markdown, headings, lists, tables, code, links or emoji in this reply: say it in plain words. If the answer needs something long (code, a document, a list, a link), do it as usual in a file or a message and say in one sentence what you did and where it is. Ask at most one short question at a time. Only your chat reply changes: your work, files, code, emails, posts and messages to others stay normal. Use full sentences for warnings and irreversible actions.]'
+const VOICE_CUT_NOTE = '[The user cut your previous spoken reply short: they did not hear the end of it.]'
+
+/** What the model reads for a spoken message: the mode text if there is one, then the voice note. */
+export function voiceApiText(text: string, modeText: string | undefined, cutShort = false) {
+  return `${modeText ?? text}\n\n${VOICE_NOTE}${cutShort ? `\n${VOICE_CUT_NOTE}` : ''}`
+}
+
 export function modePlaceholder(mode: ChatMode, botName: string) {
   return i18n.t(`modes.placeholder.${mode}`, { name: botName })
 }

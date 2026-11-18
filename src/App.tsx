@@ -35,7 +35,11 @@ import { requestContext } from './lib/request-context'
 import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/attachments'
 import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
-import { cavemanApiText, modeApiText, type ChatMode } from './lib/modes'
+import { cavemanApiText, loadModes, modeApiText, voiceApiText, type ChatMode } from './lib/modes'
+import { VoiceOverlay } from './components/VoiceOverlay'
+import { VoiceSession } from './lib/voice-session'
+import { createSpeechEngine } from './lib/speech-engines'
+import { createDictationEngine } from './lib/dictation-engines'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
 import { probeModel } from './lib/model-probe'
@@ -47,7 +51,7 @@ import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
 import { i18n, resolveLanguage } from './i18n'
-import { getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
+import { dictationLanguageCode, getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
 import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
@@ -57,6 +61,12 @@ import { appendSessionStream, completedText, interruptGenerationForPriority, int
 const MemoSidebar = memo(Sidebar)
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
+
+/** How a turn is worded for the model: caveman from the composer, the voice note from the voice mode. */
+type TurnStyle = { caveman: boolean; voice?: { cutShort: boolean } }
+const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle) => style.voice
+  ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
+  : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
 const DEMO_ROOM = DEMO && new URLSearchParams(location.search).get('room') === '1'
 const DEMO_ROOM_CAPABILITIES: RoomCapabilities = {
   protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'demo',
@@ -137,6 +147,8 @@ export default function App() {
   const backgroundStreams = useRef(new Map<string, string>())
   /** Profiles with a send between the click and the last await. Checked before any await. */
   const sendsInFlight = useRef(new Set<string>())
+  /** The open voice mode, read by the gateway event handler. */
+  const voiceRef = useRef<{ session: VoiceSession; profile: string } | null>(null)
   /** Latest Stop per session, so a finished stop does not clear a newer one. */
   const stopTickets = useRef(new Map<string, number>())
   /** Latest model-list request. A late answer for another bot is dropped. */
@@ -289,6 +301,7 @@ export default function App() {
         const prompt = parsePendingPrompt(event.session_id, payload)
         if (prompt) {
           addPrompt(prompt)
+          if (isCurrent && current && voiceRef.current?.profile === current.profile) voiceRef.current.session.prompt(prompt)
           const owner = isCurrent && current ? current.profile : useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)?.slug
           if (owner) {
             clearDoneTimer(owner)
@@ -300,6 +313,7 @@ export default function App() {
       if ((event.type === 'clarify.settled' || event.type === 'approval.settled') && event.session_id) {
         const promptId = asText(payload.prompt_id)
         settlePrompt(event.session_id, promptId)
+        if (isCurrent && current && voiceRef.current?.profile === current.profile) voiceRef.current.session.promptSettled(promptId)
         const owner = useRosterStore.getState().bots.find((bot) => isCurrent && current ? bot.slug === current.profile : bot.sessionId === event.session_id)
         // Answer given here or elsewhere: the bot resumes its turn. Reading the turns corrects it if a question remains.
         if (owner?.status === 'waiting') updateBot(owner.slug, { status: 'working' })
@@ -408,6 +422,8 @@ export default function App() {
       if (event.type === 'tool.complete') setActivity('')
       // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
       if (event.type === 'message.interim') {
+        const step = typeof payload.text === 'string' ? withoutSilentMarkers(payload.text) : ''
+        if (step && !isSilentMessage(step) && voiceRef.current?.profile === current.profile) voiceRef.current.session.turnStep(step)
         setStreaming('')
         if (current.sessionId) backgroundStreams.current.set(current.sessionId, '')
       }
@@ -419,6 +435,7 @@ export default function App() {
         const finalText = completedText(payload.text, useChatStore.getState().streaming || buffered)
         const visibleText = withoutSilentMarkers(finalText)
         const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
+        if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: visibleText, meaningful })
         if (meaningful) {
           const message: ChatMessage = {
             id: useChatStore.getState().streamKey || `live-${Date.now()}`,
@@ -1337,9 +1354,11 @@ export default function App() {
 
   // Without an explicit mode (email card, suggestions), the turn is a normal turn with nothing added,
   // not even the caveman note: an approved email must go out as it was approved.
-  const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode): Promise<boolean> => {
+  /** `voice`: spoken in the voice mode (the voice note replaces caveman). */
+  const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode, voice?: { cutShort: boolean }): Promise<boolean> => {
     const mode = sentMode ?? 'exec'
-    const caveman = sentMode !== undefined && getSettings().caveman
+    const caveman = sentMode !== undefined && !voice && getSettings().caveman
+    const style = { caveman, voice }
     const now = new Date().toISOString()
     if (DEMO) {
       // During a turn, only a queued or priority message goes in: it waits in the thread, with its label.
@@ -1381,7 +1400,7 @@ export default function App() {
       const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(runningNow ? { delivery: delivery as 'queue' | 'priority' } : {}) }
       if (onScreen()) setMessages((items) => [...items, userMessage])
       appendCachedMessage(profile, userMessage)
-      if (runningNow) return await queueTurn(chat, text, attachments, userMessage, mode, caveman, delivery === 'priority')
+      if (runningNow) return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority')
       updateCachedChat(profile, { running: true })
       updateBot(profile, { preview: text, timestamp: now, status: 'working' })
       if (onScreen()) {
@@ -1392,7 +1411,7 @@ export default function App() {
         const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
         if (onScreen()) setActivity('')
         const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, profile)
-        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: cavemanApiText(prompt, modeApiText(prompt, mode), caveman) })
+        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: styledApiText(prompt, mode, style) })
         updateCachedChat(profile, { ...submitted, running: true })
         if (onScreen()) {
           const open = useChatStore.getState().activeChat
@@ -1466,7 +1485,7 @@ export default function App() {
    * Message sent during a turn: queued, Hermes starts it when the turn ends. Priority, it goes into
    * the same queue with a resume instruction, then the current turn is interrupted: so it runs right after.
    */
-  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, caveman: boolean, priority: boolean) => {
+  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, style: TurnStyle, priority: boolean) => {
     const onScreen = () => stillOnProfile(useRosterStore.getState().selected, chat.profile)
     // Copied before submit: a turn that ends during the await must not be interrupted as if it were this message.
     const generation = chat.executionGeneration
@@ -1474,7 +1493,7 @@ export default function App() {
       const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
       if (onScreen()) setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      const modeText = cavemanApiText(prompt, modeApiText(prompt, mode), caveman)
+      const modeText = styledApiText(prompt, mode, style)
       await submitPromptResuming(chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
       if (priority) {
         const open = useChatStore.getState().activeChat
@@ -1842,6 +1861,63 @@ export default function App() {
   const onSidebarSettings = useCallback(() => { setSettingsTab('general') }, [])
   const onSidebarCloseMobile = useCallback(() => { setMobileOpen(false) }, [])
 
+  // ── Voice mode: one spoken conversation with the open bot ──
+  const speechEngine = useMemo(() => createSpeechEngine({ demo: DEMO }), [])
+  const [voice, setVoice] = useState<{ session: VoiceSession; profile: string } | null>(null)
+  voiceRef.current = voice
+  const voiceActions = useRef({ send, answerPendingPrompt })
+  voiceActions.current = { send, answerPendingPrompt }
+  const closeVoice = useCallback(() => {
+    const current = voiceRef.current
+    voiceRef.current = null
+    current?.session.dispose()
+    setVoice(null)
+  }, [])
+  const openVoice = useCallback(() => {
+    const profile = useRosterStore.getState().selected
+    if (!speechEngine || voiceRef.current || !profile) return
+    const languageCode = () => dictationLanguageCode(getSettings().dictationLanguage, i18n.language)
+    const dictation = createDictationEngine({ demo: DEMO, language: languageCode(), languageCode })
+    if (!dictation) {
+      setNotice(i18n.t('dictation.notice.unavailable'))
+      return
+    }
+    const session: VoiceSession = new VoiceSession({
+      dictation,
+      speech: speechEngine,
+      languageCode,
+      settings: () => {
+        const current = getSettings()
+        return { voices: { fr: current.voiceFr, en: current.voiceEn }, rate: current.voiceRate, speakSteps: current.voiceSteps }
+      },
+      send: async (text, { cutShort }) => {
+        if (!stillOnProfile(useRosterStore.getState().selected, profile)) return false
+        const busy = useChatStore.getState().running
+        const sent = await voiceActions.current.send(text, [], loadModes()[profile] ?? 'exec', busy ? 'queue' : undefined, { cutShort })
+        // The demo answers at once, without gateway events.
+        if (sent && DEMO) setTimeout(() => session.turnEnded({ text: i18n.t('app.demoAnswer'), meaningful: true }), 700)
+        return sent
+      },
+      answer: async (prompt, answer) => {
+        await voiceActions.current.answerPendingPrompt(prompt, answer)
+        return true
+      },
+      onEnd: closeVoice,
+      phrase: (key, language) => i18n.t(`voice.spoken.${key}`, { lng: language }),
+      isOffline: () => !navigator.onLine,
+    })
+    session.setRunning(useChatStore.getState().running)
+    const entry = { session, profile }
+    voiceRef.current = entry
+    setVoice(entry)
+  }, [speechEngine, closeVoice])
+  // The voice belongs to one bot: another bot, a room, the local chat or a logout ends it.
+  useEffect(() => {
+    if (voice && (voice.profile !== selected || localOpen || selectedRoomId || auth !== 'ready')) closeVoice()
+  }, [voice, selected, localOpen, selectedRoomId, auth, closeVoice])
+  useEffect(() => { voice?.session.setRunning(running) }, [voice, running])
+  useEffect(() => () => { voiceRef.current?.session.dispose() }, [])
+
   if (auth === 'checking') {
     return <LoadingScreen />
   }
@@ -1901,6 +1977,10 @@ export default function App() {
         onSend={send}
         onStop={stop}
         onNotice={setNotice}
+        voiceOverlay={voice && voice.profile === selectedBot.slug ? (
+          <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} />
+        ) : undefined}
+        onVoice={speechEngine ? openVoice : undefined}
         onOpenDocument={openDocument}
         onOpenBot={openBot}
         modelLabel={chipModelLabel(chatModel || selectedBot.model)}

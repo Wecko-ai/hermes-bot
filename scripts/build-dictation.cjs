@@ -13,6 +13,10 @@ const SOURCES = [
   path.join(DIRECTORY, 'Sources', 'DictationCore', 'TranscriptMerger.swift'),
   path.join(DIRECTORY, 'Sources', 'DictationCore', 'SessionGate.swift'),
   path.join(DIRECTORY, 'Sources', 'DictationCore', 'LocaleTag.swift'),
+  path.join(DIRECTORY, 'Sources', 'hermesbot-dictation', 'Speak.swift'),
+  path.join(DIRECTORY, 'Sources', 'DictationCore', 'SpeechLevels.swift'),
+  path.join(DIRECTORY, 'Sources', 'DictationCore', 'SpeakProtocol.swift'),
+  path.join(DIRECTORY, 'Sources', 'DictationCore', 'VoiceCatalog.swift'),
 ]
 const INFO_PLIST = path.join(DIRECTORY, 'Info.plist')
 const OUTPUT = path.join(DIRECTORY, '.build', 'hermesbot-dictation')

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cavemanApiText, loadModes, modeApiText, modePlaceholder, saveModes } from './modes'
+import { cavemanApiText, loadModes, modeApiText, modePlaceholder, saveModes, voiceApiText } from './modes'
 
 describe('modes de travail', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -47,5 +47,17 @@ describe('modes de travail', () => {
     expect(loadModes()).toEqual({ nova: 'brain' })
     store.set('hermesbot-modes', 'pas du json')
     expect(loadModes()).toEqual({})
+  })
+})
+
+describe('voiceApiText', () => {
+  it('adds the voice note after the mode text, and the cut-short note when the voice was interrupted', () => {
+    const plain = voiceApiText('Où en est la vidéo ?', undefined)
+    expect(plain).toMatch(/^Où en est la vidéo \?\n\n\[HermesBot voice mode\. For this turn only/)
+    expect(plain).not.toContain('cut your previous spoken reply')
+    expect(plain).toContain('messages to others stay normal')
+    const planned = voiceApiText('Plan', modeApiText('Plan', 'plan'), true)
+    expect(planned).toMatch(/^Plan\n\n\[HermesBot mode: PLAN\./)
+    expect(planned).toMatch(/\[HermesBot voice mode\.[^\]]+\]\n\[The user cut your previous spoken reply short/)
   })
 })

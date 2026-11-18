@@ -15,6 +15,7 @@ const { loadConfig } = require('../server/config.cjs')
 const { messages } = require('./messages.cjs')
 const { externalUrl } = require('./links.cjs')
 const { createDictation, UNAVAILABLE } = require('./dictation.cjs')
+const { createSpeech, maySay } = require('./speech.cjs')
 const { createDictationGate } = require('./dictation-gate.cjs')
 const { revealMedia } = require('./reveal-media.cjs')
 const { readEncrypted, writeEncrypted } = require('./encrypted-store.cjs')
@@ -192,7 +193,19 @@ const dictation = createDictation({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hermes-bot:dictation-event', event)
   },
   // While the microphone is open, a mark on the Dock icon that the page cannot hide (macOS adds its own indicator).
-  onMicrophone: (open) => app.dock?.setBadge(open ? '●' : ''),
+  onMicrophone: (open) => {
+    microphoneOpen = open
+    app.dock?.setBadge(open ? '●' : '')
+  },
+})
+// Speech output (speech.cjs): the same helper, `speak` mode. Output only, so no gesture is needed; the
+// half-duplex rule (no voice while the microphone is open) is enforced in the `speech-say` handler.
+let microphoneOpen = false
+const speech = createSpeech({
+  helperPath: DICTATION_HELPER,
+  onEvent: (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hermes-bot:speech-event', event)
+  },
 })
 
 function installPermissionHandlers(ses) {
@@ -301,15 +314,18 @@ async function createWindow() {
     if (event.isMainFrame && !event.isSameDocument) {
       dictationGate?.disarm()
       dictation.cancel()
+      speech.stop()
     }
   })
   mainWindow.webContents.on('render-process-gone', () => {
     dictationGate?.disarm()
     dictation.cancel()
+    speech.stop()
   })
   mainWindow.on('closed', () => {
     dictationGate?.disarm()
     dictation.cancel()
+    speech.dispose()
     mainWindow = null
   })
   await mainWindow.loadURL(ORIGIN)
@@ -359,11 +375,22 @@ ipcMain.handle('hermes-bot:dictation-start', (event, options) => {
   if (!fromWindow(event) || !dictationGate || !mainWindow || mainWindow.isDestroyed()) return false
   const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
   if (!dictationGate.takeStart({ focused: mainWindow.isFocused(), visible })) return false
+  // Half-duplex: the voice is silenced before the microphone opens.
+  if (speech.isSpeaking()) speech.stop()
   return dictation.start(options, { maxListenMs: dictationGate.maxListenMs() })
 })
 // Stopping is always safe: it only turns the microphone off.
 ipcMain.handle('hermes-bot:dictation-stop', (event) => { if (fromWindow(event)) dictation.stop() })
 ipcMain.handle('hermes-bot:dictation-cancel', (event) => { if (fromWindow(event)) dictation.cancel() })
+
+// Speech output: same origin check, no gesture (output only). Refused while the microphone is open.
+ipcMain.handle('hermes-bot:speech-voices', (event) => (fromWindow(event) ? speech.voices() : []))
+ipcMain.handle('hermes-bot:speech-say', (event, utterance) => {
+  if (!fromWindow(event)) return false
+  if (!maySay({ microphoneOpen, dictationActive: dictation.active })) return false
+  return speech.say(utterance)
+})
+ipcMain.handle('hermes-bot:speech-stop', (event) => { if (fromWindow(event)) speech.stop() })
 
 // Quit through the app so before-quit runs: both ssh tunnels, then the dictation helper.
 let tunnelsClosed = false
@@ -374,6 +401,7 @@ app.on('before-quit', (event) => {
   if (closingTunnels) return
   closingTunnels = true
   try { dictation.dispose() } catch { /* helper already gone */ }
+  try { speech.dispose() } catch { /* helper already gone */ }
   Promise.all([stopHermesTunnel(), stopVaultTunnel()]).finally(() => {
     tunnelsClosed = true
     app.quit()

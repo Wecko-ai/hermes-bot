@@ -31,7 +31,7 @@ describe('configuration locale', () => {
     expect(config.localChat.model).toBe('')
     expect(config.browserTurn.command).toBeNull()
     expect(config.animationsDir).toBe(path.join(dataDir, 'animations'))
-    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [] })
+    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [], voiceModeName: '' })
   })
 
   it('superpose environnement, fichier utilisateur et fichier privé, dans cet ordre', () => {

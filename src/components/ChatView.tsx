@@ -43,6 +43,10 @@ interface ChatViewProps {
   showUsage: boolean
   onToggleUsage: () => void
   modelPicker?: ReactNode
+  /** The voice mode over the chat, when open. */
+  voiceOverlay?: ReactNode
+  /** Opens the voice mode; absent when nothing can speak here. */
+  onVoice?: () => void
   /** Open questions and approvals of this chat: the bot stays blocked while they wait. */
   prompts: PendingPrompt[]
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
@@ -186,6 +190,7 @@ export function ChatView(props: ChatViewProps) {
         onOpenBot={props.onOpenBot}
       />
       {props.modelPicker}
+      {!props.hidden && props.voiceOverlay}
       {!props.hidden && <SubagentsPanel key={bot.slug} entries={props.subagents} profile={bot.slug} processes={props.processes} onLoadTail={props.onLoadSubagentTail} onOpenHistory={props.onOpenSubagentHistory} onOpenDocument={(media) => props.onOpenDocument(bot.slug, media)} />}
       {props.prompts[0] && !props.hidden && (
         <div className="prompt-dock">
@@ -207,6 +212,7 @@ export function ChatView(props: ChatViewProps) {
         usage={props.usage}
         showUsage={props.showUsage}
         onToggleUsage={props.onToggleUsage}
+        onVoice={props.onVoice}
       />
       {dragging && <div className="drop-overlay" aria-hidden="true"><div><Upload size={22} /><strong>{t('chat.dropTo', { name: bot.name })}</strong><span>{t('chat.dropHint')}</span></div></div>}
     </main>
