@@ -8,15 +8,15 @@ describe('modèles et usage', () => {
     expect(modelLabel('claude-fable-5.1')).toBe('Fable 5.1')
     expect(modelLabel('claude-opus-4-20250514')).toBe('Opus 4')
     expect(modelLabel('claude-opus-4-5-20251101')).toBe('Opus 4.5')
-    expect(modelLabel('deepseek/deepseek-v4-flash')).toBe('deepseek-v4-flash')
-    expect(modelLabel('kimi-k3')).toBe('kimi-k3')
+    expect(modelLabel('deepseek/deepseek-v4-flash')).toBe('DeepSeek V4 Flash')
+    expect(modelLabel('kimi-k3')).toBe('Kimi K3')
     expect(modelLabel('k3.1-pro')).toBe('K3.1 Pro')
   })
 
   it('dit Cursor dans la pastille du champ, pas dans les lignes du sélecteur', () => {
     expect(modelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5')
     expect(chipModelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5 · Cursor')
-    expect(chipModelLabel('cursor/gpt-5.6-sol')).toBe('gpt-5.6-sol · Cursor')
+    expect(chipModelLabel('cursor/gpt-5.6-sol')).toBe('GPT Sol 5.6 · Cursor')
     expect(chipModelLabel('claude-sonnet-5-5')).toBe('Sonnet 5.5')
     expect(chipModelLabel('openrouter/anthropic/claude-sonnet-5.5')).toBe('Sonnet 5.5')
   })

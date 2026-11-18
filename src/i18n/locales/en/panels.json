@@ -186,7 +186,34 @@
       "unsupported": "This window can’t send notifications."
     },
     "notifications": "Notifications",
-    "notificationsHint": "When a bot is done or waits on your answer, unless its chat is in view"
+    "notificationsHint": "When a bot is done or waits on your answer, unless its chat is in view",
+    "scores": {
+      "title": "Model scores",
+      "hint": "Shows the Artificial Analysis Intelligence Index and a usage tip (agentic, coding, fast, cheap) on each model. Free key, one request a day.",
+      "keyLabel": "Artificial Analysis API key",
+      "keyPlaceholder": "Paste your key",
+      "getKey": "Get a free key",
+      "save": "Save key",
+      "saving": "Saving…",
+      "remove": "Remove key",
+      "saved": "Key saved. Scores load in a moment.",
+      "removed": "Key removed.",
+      "storedState": "A key is stored, encrypted on this Mac.",
+      "envState": "The key comes from the ARTIFICIAL_ANALYSIS_API_KEY environment variable.",
+      "missing": "No key yet: models show no score.",
+      "browserOnly": "This build cannot encrypt a key: use the ARTIFICIAL_ANALYSIS_API_KEY environment variable.",
+      "invalid": "This does not look like a valid key.",
+      "unavailable": "This build cannot store a key.",
+      "failed": "The key could not be saved.",
+      "updated": "Updated {{date}}",
+      "error": {
+        "invalid_key": "Artificial Analysis refused the key.",
+        "rate_limited": "Artificial Analysis rate limit reached, showing the last list.",
+        "too_large": "Artificial Analysis sent an unexpected answer.",
+        "upstream_failed": "Artificial Analysis is unreachable, showing the last list."
+      },
+      "attribution": "Scores: Artificial Analysis"
+    }
   },
   "vault": {
     "unresponsive": "The vault isn’t responding.",
@@ -235,7 +262,26 @@
     "fold": "fold",
     "pick": "choose",
     "contextPercent": "Context {{percent}}% ({{used}}/{{max}})",
-    "contextNone": "Context —"
+    "contextNone": "Context —",
+    "freeTag": "Free",
+    "scoreLabel": "Artificial Analysis Intelligence Index: {{score}}",
+    "scoresBy": "Scores: ",
+    "rec": {
+      "agentic": "Agentic",
+      "coding": "Coding",
+      "engineering": "Engineering",
+      "reasoning": "Reasoning",
+      "fast": "Fast",
+      "cheap": "Cheap"
+    },
+    "recHint": {
+      "agentic": "Among the best of this list on Artificial Analysis’ agentic index",
+      "coding": "Among the best of this list on Artificial Analysis’ coding index",
+      "engineering": "Among the best of this list on Artificial Analysis’ engineering index",
+      "reasoning": "Among the highest Intelligence Index scores of this list",
+      "fast": "Fast: 100 tokens per second or more, among the quickest of this list",
+      "cheap": "Cheap: $1 or less per million tokens (3:1 input to output), with at least half the best score of this list"
+    }
   },
   "providers": {},
   "serverRequest": {

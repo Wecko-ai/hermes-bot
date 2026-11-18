@@ -7,6 +7,8 @@ import { providerBrand } from '../lib/providers'
 import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
+import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
+import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 
 interface ModelPickerProps {
   options: ModelOption[]
@@ -75,6 +77,9 @@ function saveOpenGroups(slugs: string[]) {
 export function ModelPicker({ options, freeMode = false, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
   const { t } = useTranslation()
   const { ui } = useAppConfig()
+  const scores = useScores()
+  const scored = useMemo(() => scoreModels(options, scores), [options, scores])
+  useEffect(() => { void ensureScores() }, [])
   const [query, setQuery] = useState(initialQuery)
   const [openGroups, setOpenGroups] = useState(readOpenGroups)
   // The active model's group always opens on arrival: it is only folded for this opening.
@@ -237,7 +242,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           className={`model-option ${isCurrent ? 'is-current' : ''} ${active?.key === key ? 'is-active' : ''} ${pendingKey === key ? 'is-pending' : ''} ${issue ? 'is-unusable' : ''}`}
                           data-model={option.model}
                           data-row={key}
-                          title={issue ? `${option.model} · ${issue}` : option.model}
+                          title={[option.model, issue].filter(Boolean).join(' · ')}
                           tabIndex={-1}
                           onMouseMove={() => setActiveKey(key)}
                           onClick={() => choose(option)}
@@ -247,6 +252,8 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
                           {freeMode && modelCost(option, ui.subscriptionProviders) === 'paid' && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
                           {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
+                          {/:free$/i.test(option.model) && <span className="model-option-tag is-free">{t('models.freeTag')}</span>}
+                          <ModelScoreMeta info={scored.get(modelKey(option).slice('model:'.length))} />
                           {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                           {isCurrent && <Check className="model-option-check" size={15} />}
                         </button>
@@ -259,7 +266,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
           })}
         </div>
         <div className="model-picker-footer">
-          <span>{t('models.thisConversation')}<button type="button" className="model-picker-manage" onClick={onManage}>{t('models.manage')}</button></span>
+          <span>{t('models.thisConversation')}<button type="button" className="model-picker-manage" onClick={onManage}>{t('models.manage')}</button>{scored.size > 0 && <> · <ScoresAttribution /></>}</span>
           <span className="model-picker-keys" aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd><i>{t('models.navigate')}</i><kbd>←</kbd><kbd>→</kbd><i>{t('models.fold')}</i><kbd>↵</kbd><i>{t('models.pick')}</i></span>
         </div>
       </div>

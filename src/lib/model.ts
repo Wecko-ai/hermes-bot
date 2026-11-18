@@ -1,14 +1,13 @@
 import type { SessionUsage } from '../types'
 import { i18n } from '../i18n'
+import { DOTTED_PREFIX, prettyModelName } from './model-names'
 
 export function modelLabel(model: string) {
-  const name = model.split('/').pop() || model
+  const name = (model.split('/').pop() || model).replace(DOTTED_PREFIX, '')
   // One or two digits for the version: `-20250514` is a date, `.1` a version.
   const claude = name.match(/^claude-([a-z]+)-(\d+)(?:[-.](\d{1,2})(?!\d))?/i)
-  const kimiPro = name.match(/^k(\d+(?:\.\d+)?)-pro$/i)
-  if (kimiPro) return `K${kimiPro[1]} Pro`
-  if (!claude) return name
-  return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
+  if (claude) return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`
+  return prettyModelName(model)
 }
 
 /** The composer's chip: a model served through the Cursor subscription says so, next to the same model's API route. */

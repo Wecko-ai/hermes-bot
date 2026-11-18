@@ -6,6 +6,8 @@ import { version } from '../../package.json'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
+import { ensureScores, removeScoreKey, saveScoreKey, scoreModels, useScores, type KeyResult } from '../lib/model-scores'
+import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { groupModels, ProviderTile } from './ModelPicker'
@@ -299,12 +301,66 @@ function useHiddenModelsDraft(demo: boolean) {
 
 type ModelsDraft = ReturnType<typeof useHiddenModelsDraft>
 
+/** Artificial Analysis key: sent once to the local server, which stores it encrypted and never returns it. */
+function ScoresSection() {
+  const { t } = useTranslation()
+  const scores = useScores()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  useEffect(() => { void ensureScores() }, [])
+  const report = (result: KeyResult, done: string) => setMessage(result === 'ok' ? done : t(`settings.scores.${result === 'invalid' ? 'invalid' : result === 'unavailable' ? 'unavailable' : 'failed'}`))
+  const save = async () => {
+    setBusy(true)
+    const result = await saveScoreKey(key.trim())
+    setBusy(false)
+    if (result === 'ok') setKey('')
+    report(result, t('settings.scores.saved'))
+  }
+  const remove = async () => {
+    setBusy(true)
+    report(await removeScoreKey(), t('settings.scores.removed'))
+    setBusy(false)
+  }
+  const state = scores.keySource === 'stored' ? t('settings.scores.storedState')
+    : scores.keySource === 'env' ? t('settings.scores.envState')
+      : scores.loaded && !scores.canStore ? t('settings.scores.browserOnly') : t('settings.scores.missing')
+  return (
+    <section className="settings-scores" aria-label={t('settings.scores.title')}>
+      <h3 className="settings-scores-title">{t('settings.scores.title')}</h3>
+      <p className="settings-note">{t('settings.scores.hint')}</p>
+      <p className="settings-note" data-testid="scores-state">{state}{scores.updatedAt && scores.models.length > 0 ? ` ${t('settings.scores.updated', { date: new Date(scores.updatedAt).toLocaleDateString() })}` : ''}</p>
+      {scores.error && <p className="settings-note is-error">{t(`settings.scores.error.${scores.error}`, { defaultValue: t('settings.scores.error.upstream_failed') })}</p>}
+      {scores.canStore && scores.keySource !== 'env' && (
+        <div className="settings-scores-key">
+          <input
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={key}
+            placeholder={t('settings.scores.keyPlaceholder')}
+            aria-label={t('settings.scores.keyLabel')}
+            onChange={(event) => setKey(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter' && key.trim() && !busy) void save() }}
+          />
+          <button type="button" className="settings-button" disabled={busy || !key.trim()} onClick={() => void save()}>{busy ? t('settings.scores.saving') : t('settings.scores.save')}</button>
+          {scores.keySource === 'stored' && <button type="button" className="settings-button" disabled={busy} onClick={() => void remove()}>{t('settings.scores.remove')}</button>}
+        </div>
+      )}
+      {message && <p className="settings-note" role="status">{message}</p>}
+      <p className="settings-note"><a className="settings-link" href="https://artificialanalysis.ai/documentation" target="_blank" rel="noreferrer noopener">{t('settings.scores.getKey')}</a> · <ScoresAttribution /></p>
+    </section>
+  )
+}
+
 function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, draft: editor }: Pick<SettingsDialogProps, 'models' | 'modelsLoading' | 'modelsError' | 'onLoadModels'> & { demo: boolean; draft: ModelsDraft }) {
   const { t } = useTranslation()
   const { freeMode } = useSettings()
   const { ui } = useAppConfig()
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
+  const scores = useScores()
+  const scored = useMemo(() => scoreModels(models, scores), [models, scores])
   // A single read when the tab opens: the models from the gateway, the hidden list from its shared file.
   const loadRef = useRef(onLoadModels)
   useEffect(() => {
@@ -335,6 +391,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
     <>
       <Toggle label={t('settings.freeMode')} hint={t('settings.freeModeHint')} checked={freeMode} onChange={(freeMode) => updateSettings({ freeMode })} />
       <p className="settings-note">{t('settings.modelsNote')}</p>
+      <ScoresSection />
       <div className="settings-model-tools">
         <div className="settings-search">
           <Search size={14} />
@@ -375,6 +432,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
                   <input type="checkbox" checked={!hidden.has(hiddenModelKey(option))} onChange={(event) => setVisible([option], event.target.checked)} />
                   <span className="settings-model-label">{modelLabel(option.model)}</span>
                   <code>{option.model}</code>
+                  <ModelScoreMeta info={scored.get(`${option.provider}:${option.model}`)} />
                   {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                   {modelCost(option, ui.subscriptionProviders) === 'free' && <span className="model-option-tag is-free">{t('settings.freeTag')}</span>}
                   {modelCost(option, ui.subscriptionProviders) === 'subscription' && <span className="model-option-tag is-plan">{t('settings.subscriptionTag')}</span>}

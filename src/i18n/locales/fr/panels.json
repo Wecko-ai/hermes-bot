@@ -186,7 +186,34 @@
       "unsupported": "Cette fenêtre ne peut pas envoyer de notifications."
     },
     "notifications": "Notifications",
-    "notificationsHint": "Quand un bot a fini ou attend ta réponse, sauf si son chat est sous tes yeux"
+    "notificationsHint": "Quand un bot a fini ou attend ta réponse, sauf si son chat est sous tes yeux",
+    "scores": {
+      "title": "Scores des modèles",
+      "hint": "Affiche l’indice d’intelligence d’Artificial Analysis et un conseil d’usage (agentique, code, rapide, économique) sur chaque modèle. Clé gratuite, une requête par jour.",
+      "keyLabel": "Clé API Artificial Analysis",
+      "keyPlaceholder": "Colle ta clé",
+      "getKey": "Obtenir une clé gratuite",
+      "save": "Enregistrer la clé",
+      "saving": "Enregistrement…",
+      "remove": "Retirer la clé",
+      "saved": "Clé enregistrée. Les scores arrivent.",
+      "removed": "Clé retirée.",
+      "storedState": "Une clé est enregistrée, chiffrée sur ce Mac.",
+      "envState": "La clé vient de la variable d’environnement ARTIFICIAL_ANALYSIS_API_KEY.",
+      "missing": "Pas encore de clé : les modèles n’affichent aucun score.",
+      "browserOnly": "Cette version ne peut pas chiffrer de clé : utilise la variable d’environnement ARTIFICIAL_ANALYSIS_API_KEY.",
+      "invalid": "Cela ne ressemble pas à une clé valide.",
+      "unavailable": "Cette version ne peut pas garder de clé.",
+      "failed": "La clé n’a pas pu être enregistrée.",
+      "updated": "Mis à jour {{date}}",
+      "error": {
+        "invalid_key": "Artificial Analysis a refusé la clé.",
+        "rate_limited": "Limite d’Artificial Analysis atteinte, dernière liste affichée.",
+        "too_large": "Artificial Analysis a envoyé une réponse inattendue.",
+        "upstream_failed": "Artificial Analysis est injoignable, dernière liste affichée."
+      },
+      "attribution": "Scores : Artificial Analysis"
+    }
   },
   "vault": {
     "unresponsive": "Le coffre ne répond pas.",
@@ -235,7 +262,26 @@
     "fold": "plier",
     "pick": "choisir",
     "contextPercent": "Contexte {{percent}} % ({{used}}/{{max}})",
-    "contextNone": "Contexte —"
+    "contextNone": "Contexte —",
+    "freeTag": "Gratuit",
+    "scoreLabel": "Indice d’intelligence Artificial Analysis : {{score}}",
+    "scoresBy": "Scores : ",
+    "rec": {
+      "agentic": "Agentique",
+      "coding": "Code",
+      "engineering": "Ingénierie",
+      "reasoning": "Raisonnement",
+      "fast": "Rapide",
+      "cheap": "Économique"
+    },
+    "recHint": {
+      "agentic": "Parmi les meilleurs de cette liste sur l’indice agentique d’Artificial Analysis",
+      "coding": "Parmi les meilleurs de cette liste sur l’indice de code d’Artificial Analysis",
+      "engineering": "Parmi les meilleurs de cette liste sur l’indice d’ingénierie d’Artificial Analysis",
+      "reasoning": "Parmi les plus hauts indices d’intelligence de cette liste",
+      "fast": "Rapide : 100 tokens par seconde ou plus, parmi les plus rapides de cette liste",
+      "cheap": "Économique : 1 $ ou moins le million de tokens (3 d’entrée pour 1 de sortie), avec au moins la moitié du meilleur score de cette liste"
+    }
   },
   "providers": {},
   "serverRequest": {
