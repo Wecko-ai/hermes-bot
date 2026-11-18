@@ -207,6 +207,8 @@ let microphoneOpen = false
 const speech = createSpeech({
   helperPath: DICTATION_HELPER,
   onEvent: (event) => {
+    // A reply spoken to its end (or failed) lets the hands-free conversation listen once more.
+    if (event.type === 'end' || (event.type === 'error' && event.id !== undefined)) dictationGate?.noteSpeechEnd()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hermes-bot:speech-event', event)
   },
 })
@@ -389,7 +391,7 @@ ipcMain.handle('hermes-bot:dictation-relisten', async (event, localeId) => {
   const gate = dictationGate
   if (!fromWindow(event) || !gate || !mainWindow || mainWindow.isDestroyed()) return { ...UNAVAILABLE }
   const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
-  const token = gate.mayRelisten({ focused: mainWindow.isFocused(), visible })
+  const token = gate.mayRelisten({ focused: mainWindow.isFocused(), visible, listening: dictation.active })
   if (!token) return { ...UNAVAILABLE }
   const state = await dictation.prepare(localeId)
   if (state.access === 'granted' && windowInFront()) gate.armStart(token)

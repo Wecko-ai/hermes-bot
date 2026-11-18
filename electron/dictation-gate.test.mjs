@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import gateModule from './dictation-gate.cjs'
 
-const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS, CONVERSATION_MS } = gateModule
+const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS, CONVERSATION_MS, RELISTEN_MAX_LISTEN_MS, MAX_RELISTENS } = gateModule
 
 function clock(start = 1_000_000) {
   let time = start
@@ -161,7 +161,7 @@ describe('hands-free conversation (voice mode)', () => {
     expect(gate.mayPrepare()).toBeNull()
   })
 
-  it('lets each listen be prepared without a gesture, window in front, one armed start at a time', () => {
+  it('lets one listen follow each spoken reply, without a gesture, window in front, with a short limit', () => {
     const time = clock()
     const gate = createDictationGate({ now: time.now })
     gate.noteInput(click)
@@ -170,13 +170,43 @@ describe('hands-free conversation (voice mode)', () => {
       time.advance(30_000)
       const token = gate.mayRelisten(inFront)
       expect(token).not.toBeNull()
+      // No reply spoken since: the page cannot loop the microphone.
+      expect(gate.mayRelisten(inFront)).toBeNull()
       expect(gate.armStart(token)).toBe(true)
       expect(gate.armStart(token)).toBe(false)
       expect(gate.takeStart(inFront)).toBe(true)
+      expect(gate.maxListenMs()).toBe(RELISTEN_MAX_LISTEN_MS)
       expect(gate.takeStart(inFront)).toBe(false)
+      gate.noteSpeechEnd()
     }
     expect(gate.mayRelisten({ focused: false, visible: true })).toBeNull()
     expect(gate.mayRelisten({ focused: true, visible: false })).toBeNull()
+    expect(gate.mayRelisten({ ...inFront, listening: true })).toBeNull()
+    // A start from a click keeps the usual limit.
+    expect(gate.armStart(prepare(gate))).toBe(true)
+    expect(gate.takeStart(inFront)).toBe(true)
+    expect(gate.maxListenMs()).toBe(MAX_LISTEN_MS)
+  })
+
+  it('gives a bounded number of listens per conversation', () => {
+    const gate = createDictationGate({ now: clock().now })
+    gate.noteInput(click)
+    gate.openConversation()
+    for (let round = 0; round < MAX_RELISTENS; round += 1) {
+      expect(gate.mayRelisten(inFront)).not.toBeNull()
+      gate.noteSpeechEnd()
+    }
+    expect(gate.mayRelisten(inFront)).toBeNull()
+    // A new click opens a fresh one.
+    gate.noteInput(click)
+    gate.openConversation()
+    expect(gate.mayRelisten(inFront)).not.toBeNull()
+  })
+
+  it('a spoken reply outside a conversation gives nothing', () => {
+    const gate = createDictationGate({ now: clock().now })
+    gate.noteSpeechEnd()
+    expect(gate.mayRelisten(inFront)).toBeNull()
   })
 
   it('ends after its time, on any blur or hide, and when closed', () => {
@@ -213,6 +243,7 @@ describe('hands-free conversation (voice mode)', () => {
     const gate = createDictationGate({ now: time.now })
     gate.noteInput(click)
     gate.openConversation()
+    expect(gate.mayRelisten(inFront)).not.toBeNull()
     time.advance(CONVERSATION_MS - 1_000)
     gate.noteInput(click)
     gate.openConversation()
