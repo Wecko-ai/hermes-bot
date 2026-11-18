@@ -25,7 +25,7 @@
 .voice-accent-probe { position: absolute; width: 0; height: 0; overflow: hidden; color: var(--voice-accent, #4fd1ff); }
 
 .voice-header { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; -webkit-app-region: no-drag; }
-.voice-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; letter-spacing: 0.02em; color: var(--voice-text-dim); }
+.voice-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; letter-spacing: 0.02em; color: var(--voice-text-dim); }
 
 .voice-stage { position: relative; flex: 1 1 auto; width: 100%; max-width: 520px; min-height: 220px; max-height: 520px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; }
 .voice-hud { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -52,3 +52,9 @@
 
 /* A bot question or approval: its usual card, kept readable on the dark stage. */
 .voice-prompt { width: min(560px, 100%); margin-top: 12px; color: var(--text); }
+
+/* Hands-free switch, in the header. */
+.voice-mode-switch { height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 1px solid var(--voice-line); border-radius: 9999px; background: rgb(255 255 255 / 6%); color: var(--voice-text-dim); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 140ms var(--ease-out, ease-out), color 140ms var(--ease-out, ease-out); }
+.voice-mode-switch:hover { background: rgb(255 255 255 / 12%); }
+.voice-mode-switch.is-on { border-color: color-mix(in srgb, var(--voice-accent, #4fd1ff) 55%, transparent); background: color-mix(in srgb, var(--voice-accent, #4fd1ff) 18%, transparent); color: var(--voice-text); }
+.voice-mode-switch:focus-visible { outline: 2px solid color-mix(in srgb, var(--voice-accent, #4fd1ff) 80%, white); outline-offset: 3px; }

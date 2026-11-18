@@ -64,6 +64,18 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 
 /** How a turn is worded for the model: caveman from the composer, the voice note from the voice mode. */
 type TurnStyle = { caveman: boolean; voice?: { cutShort: boolean } }
+/** The hands-free conversation of the desktop app's main process (the demo pretends). */
+function voiceConversation() {
+  if (DEMO) return { open: async () => true, close: () => {} }
+  const bridge = typeof window === 'undefined' ? undefined : window.hermesBot?.dictation
+  if (!bridge?.conversation || !bridge.relisten) return undefined
+  const conversation = bridge.conversation
+  return {
+    open: async () => (await conversation('open')) > 0,
+    close: () => { void conversation('close').catch(() => {}) },
+  }
+}
+
 const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle) => style.voice
   ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
   : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
@@ -1905,11 +1917,15 @@ export default function App() {
       onEnd: closeVoice,
       phrase: (key, language) => i18n.t(`voice.spoken.${key}`, { lng: language }),
       isOffline: () => !navigator.onLine,
+      conversation: voiceConversation(),
+      initialMode: getSettings().voiceHandsFree ? 'handsfree' : 'push',
     })
     session.setRunning(useChatStore.getState().running)
     const entry = { session, profile }
     voiceRef.current = entry
     setVoice(entry)
+    // Same click as the button: hands-free opens its conversation and listens at once.
+    session.begin()
   }, [speechEngine, closeVoice])
   // The voice belongs to one bot: another bot, a room, the local chat or a logout ends it.
   useEffect(() => {
@@ -1978,7 +1994,7 @@ export default function App() {
         onStop={stop}
         onNotice={setNotice}
         voiceOverlay={voice && voice.profile === selectedBot.slug ? (
-          <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} />
+          <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} handsFreeAvailable={Boolean(voiceConversation())} />
         ) : undefined}
         onVoice={speechEngine ? openVoice : undefined}
         onOpenDocument={openDocument}

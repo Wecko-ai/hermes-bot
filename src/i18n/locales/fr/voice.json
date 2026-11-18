@@ -45,7 +45,13 @@
       "rate": "Débit",
       "steps": "Dire les étapes",
       "stepsHint": "Le bot dit aussi les courtes lignes qu’il écrit avant de travailler (« Je regarde… »).",
-      "voicesHint": "De meilleures voix sont gratuites : Réglages Système > Accessibilité > Lire et énoncer > Voix du système, puis télécharge une voix Premium."
-    }
+      "voicesHint": "De meilleures voix sont gratuites : Réglages Système > Accessibilité > Lire et énoncer > Voix du système, puis télécharge une voix Premium.",
+      "handsFree": "Mains libres par défaut",
+      "handsFreeHint": "Après chaque réponse, le micro se rouvre 8 secondes tant que la fenêtre est devant, 10 minutes au plus après ton dernier clic. Quitter la fenêtre l’arrête."
+    },
+    "handsFree": "Mains libres",
+    "handsFreeTitle": "Mains libres : après chaque réponse, le micro se rouvre quelques secondes. Coupé : maintiens Parler à chaque phrase.",
+    "standby": "En veille. Appuie sur Parler ou Entrée pour continuer.",
+    "handsFreeIdle": "Je t’écoute. Parle à {{name}}."
   }
 }

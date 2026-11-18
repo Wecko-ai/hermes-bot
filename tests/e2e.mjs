@@ -1101,6 +1101,8 @@ try {
       dictation: {
         prepare: async (localeId) => { calls.push({ method: 'prepare', localeId }); const { access, microphone, exists, onDevice, available } = state; return { access, microphone, exists, onDevice, available } },
         start: async (options) => { calls.push({ method: 'start', ...options }); return state.startResult },
+        conversation: async (action) => { calls.push({ method: 'conversation', action }); return action === 'open' ? Date.now() + 600_000 : 0 },
+        relisten: async (localeId) => { calls.push({ method: 'relisten', localeId }); const { access, microphone, exists, onDevice, available } = state; return { access, microphone, exists, onDevice, available } },
         stop: async () => {
           calls.push({ method: 'stop' })
           setTimeout(() => {
@@ -1846,10 +1848,20 @@ try {
   }
   // The media test deleted the desktop bridge (browser mode): the voice mode opens its engines at open time.
   await page.evaluate(() => { window.hermesBot = window.__fakeBridge })
+  const handsFreeSwitch = voiceOverlay.getByRole('switch', { name: 'Mains libres' })
+  const callsOf = (method) => page.evaluate((name) => window.__dictation.calls.filter((call) => call.method === name), method)
+  const relistensBefore = (await callsOf('relisten')).length
   await page.getByRole('button', { name: 'Mode voix : parler avec Orion' }).click()
   await voiceOverlay.waitFor({ timeout: 3_000 })
   if (await voiceOverlay.getAttribute('role') !== 'dialog') throw new Error('Le mode voix doit être un dialogue.')
-  await voiceState.getByText('Prêt').waitFor({ timeout: 2_000 })
+  // Hands-free by default: the same click opens the conversation and the microphone listens without a press.
+  if (await handsFreeSwitch.getAttribute('aria-checked') !== 'true') throw new Error('Mains libres doit être actif par défaut.')
+  await voiceState.getByText('À l’écoute').waitFor({ timeout: 3_000 })
+  if ((await callsOf('conversation')).at(-1)?.action !== 'open' || (await callsOf('relisten')).length !== relistensBefore + 1) throw new Error(`Mains libres : ${JSON.stringify((await page.evaluate(() => window.__dictation.calls.slice(-4))))}`)
+  // Push-to-talk for the next checks: the switch closes the conversation and drops the empty listen.
+  await handsFreeSwitch.click()
+  await voiceState.getByText('Prêt').waitFor({ timeout: 3_000 })
+  if ((await callsOf('conversation')).at(-1)?.action !== 'close') throw new Error('Couper Mains libres doit fermer la conversation.')
   const promptsBeforeVoice = promptCalls
   await voiceSay('Résume ma journée')
   for (let attempt = 0; attempt < 80 && promptCalls === promptsBeforeVoice; attempt += 1) await delay(25)
@@ -1901,6 +1913,23 @@ try {
   await voiceState.getByText('Prêt').waitFor({ timeout: 4_000 })
   await delay(200)
   if ((await speechSaid()).length !== saidBeforeSilence) throw new Error('Mode voix : un silence ne doit pas être dit.')
+  // Hands-free again: it listens at once, sends what was heard, speaks the reply, then listens by itself.
+  await handsFreeSwitch.click()
+  await voiceState.getByText('À l’écoute').waitFor({ timeout: 3_000 })
+  const handsFreePrompts = promptCalls
+  await dictationEmit({ type: 'words', text: 'Merci beaucoup', final: true })
+  await dictationEmit({ type: 'audioEnd' })
+  await dictationEmit({ type: 'done' })
+  for (let attempt = 0; attempt < 80 && promptCalls === handsFreePrompts; attempt += 1) await delay(25)
+  if (lastPromptText !== 'Merci beaucoup') throw new Error(`Mains libres : envoi « ${lastPromptText} »`)
+  for (let attempt = 0; attempt < 80 && !(await speechSaid()).some((call) => call.text === 'Réponse Hermes simulée.'); attempt += 1) await delay(25)
+  const relistensAfterReply = (await callsOf('relisten')).length
+  await speakAll()
+  for (let attempt = 0; attempt < 80 && (await callsOf('relisten')).length === relistensAfterReply; attempt += 1) await delay(25)
+  if ((await callsOf('relisten')).length !== relistensAfterReply + 1) throw new Error('Mains libres : le micro doit se rouvrir seul après la réponse.')
+  await voiceState.getByText('À l’écoute').waitFor({ timeout: 3_000 })
+  await handsFreeSwitch.click()
+  await voiceState.getByText('Prêt').waitFor({ timeout: 3_000 })
   // A bare "stop" ends the mode without sending anything; Escape too.
   const promptsBeforeStop = promptCalls
   await voiceSay('Stop.')

@@ -45,6 +45,8 @@ export interface AppSettings {
   voiceRate: number
   /** Voice mode: also speak the short steps a bot writes before its tools. */
   voiceSteps: boolean
+  /** Voice mode: hands-free (the microphone reopens after each reply) rather than push-to-talk. */
+  voiceHandsFree: boolean
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -82,6 +84,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     voiceEn: typeof value.voiceEn === 'string' ? value.voiceEn.slice(0, 200) : '',
     voiceRate: typeof value.voiceRate === 'number' && Number.isFinite(value.voiceRate) ? Math.min(2, Math.max(0.5, value.voiceRate)) : 1,
     voiceSteps: flag(value.voiceSteps, true),
+    voiceHandsFree: flag(value.voiceHandsFree, true),
   }
 }
 

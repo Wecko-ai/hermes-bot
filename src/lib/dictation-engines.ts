@@ -19,12 +19,17 @@ type Prepared = Awaited<ReturnType<DictationBridge['prepare']>>
 export class DesktopDictationEngine implements DictationEngine {
   private prepared: { localeId: string; result: Prepared } | null = null
   private unsubscribe: (() => void) | null = null
+  private withoutGesture = false
 
   constructor(private readonly bridge: DictationBridge, private readonly languageCode: () => string) {}
 
+  setWithoutGesture(on: boolean) {
+    this.withoutGesture = on && typeof this.bridge.relisten === 'function'
+  }
+
   private async prepare(localeId: string) {
     if (this.prepared?.localeId === localeId) return this.prepared.result
-    const result = await this.bridge.prepare(localeId)
+    const result = this.withoutGesture && this.bridge.relisten ? await this.bridge.relisten(localeId) : await this.bridge.prepare(localeId)
     this.prepared = { localeId, result }
     return result
   }
@@ -222,6 +227,7 @@ export class FakeDictationEngine implements DictationEngine {
   text: string
   initializeCalls = 0
   listenCalls = 0
+  withoutGesture = false
   stopCalls = 0
   cancelCalls = 0
   lastLocaleId: string | undefined
@@ -256,6 +262,10 @@ export class FakeDictationEngine implements DictationEngine {
   }
 
   get listening() { return this.sink !== null }
+
+  setWithoutGesture(on: boolean) {
+    this.withoutGesture = on
+  }
 
   async initialize() {
     this.initializeCalls += 1

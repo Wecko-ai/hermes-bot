@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('hermesBot', Object.freeze({
   // where the app has no recognizer: the page then uses its own fallback.
   dictation: Object.freeze({
     prepare: (localeId) => ipcRenderer.invoke('hermes-bot:dictation-prepare', localeId),
+    // Voice mode, hands-free: open or close the bounded conversation, and prepare a listen inside it.
+    conversation: (action) => ipcRenderer.invoke('hermes-bot:dictation-conversation', action),
+    relisten: (localeId) => ipcRenderer.invoke('hermes-bot:dictation-relisten', localeId),
     start: (options) => ipcRenderer.invoke('hermes-bot:dictation-start', options),
     stop: () => ipcRenderer.invoke('hermes-bot:dictation-stop'),
     cancel: () => ipcRenderer.invoke('hermes-bot:dictation-cancel'),

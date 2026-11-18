@@ -10,11 +10,17 @@
 // - `start` is only the follow-up of one armed `prepare`, once, within START_WINDOW_MS, and only
 //   while the window is focused and visible (main.cjs);
 // - a session lasts at most two minutes;
+// - voice mode, hands-free (a bounded exception, 2026-11-18): one gesture may instead
+//   open a conversation (`openConversation`). For CONVERSATION_MS after it, the microphone may be armed
+//   again without a new gesture (`mayRelisten`), one listen at a time, only while the window is focused
+//   and visible. Any blur, hide, minimize or navigation (`disarm`) ends the conversation, and so does
+//   `closeConversation`. A new gesture opens a fresh one;
 // - while the microphone is open the main process shows a mark on the app's Dock icon, which the
 //   page cannot hide (dictation.cjs `onMicrophone`, main.cjs). macOS's own indicator is the other sign.
 const GESTURE_MS = 2_000
 const START_WINDOW_MS = 10_000
 const MAX_LISTEN_MS = 120_000
+const CONVERSATION_MS = 10 * 60_000
 
 /** A mouse press, or Enter pressed once (not held), as `before-mouse-event` and `before-input-event` give them. */
 function isGesture(input) {
@@ -29,6 +35,8 @@ function createDictationGate({ now = Date.now } = {}) {
   let issuedGeneration = 0
   let gesture = null
   let startUntil = 0
+  // Hands-free voice conversation: until when the microphone may be armed again without a gesture.
+  let conversationUntil = 0
 
   return {
     /** Input of the window, from the system. Only a deliberate gesture counts, and it replaces the last one. */
@@ -64,12 +72,45 @@ function createDictationGate({ now = Date.now } = {}) {
       startUntil = now() + START_WINDOW_MS
       return true
     },
+    /**
+     * Consume the current gesture to open a hands-free conversation (voice mode). Returns its end time,
+     * or 0 when there is no fresh gesture. The gesture can no longer authorize a `prepare`.
+     */
+    openConversation() {
+      if (!gesture || gesture.generation !== generation) return 0
+      if (now() - gesture.at > GESTURE_MS) {
+        gesture = null
+        return 0
+      }
+      gesture = null
+      conversationUntil = now() + CONVERSATION_MS
+      return conversationUntil
+    },
+    closeConversation() {
+      conversationUntil = 0
+    },
+    /**
+     * In an open conversation, window in front: a token for one `prepare` without a gesture, armed by
+     * `armStart` like the gesture's. Null when the conversation is over or the window is not in front.
+     */
+    mayRelisten({ focused, visible }) {
+      if (!conversationUntil) return null
+      if (now() > conversationUntil) {
+        conversationUntil = 0
+        return null
+      }
+      if (focused !== true || visible !== true) return null
+      issuedGeneration = generation
+      startUntil = 0
+      return Object.freeze({ generation })
+    },
     /** The window left the foreground, or the page went away: a prepare in flight must not arm. */
     disarm() {
       generation += 1
       gesture = null
       issuedGeneration = 0
       startUntil = 0
+      conversationUntil = 0
     },
     /** Whether this `start` follows an armed `prepare`, window in front. Uses up the right. */
     takeStart({ focused, visible }) {
@@ -83,4 +124,4 @@ function createDictationGate({ now = Date.now } = {}) {
   }
 }
 
-module.exports = { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS }
+module.exports = { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS, CONVERSATION_MS }

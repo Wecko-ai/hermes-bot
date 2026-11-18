@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Mic, Pause, VolumeX, X } from 'lucide-react'
+import { Ear, Mic, Pause, VolumeX, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { VoiceSession } from '../lib/voice-session'
 import type { PendingPrompt } from '../lib/hermes'
@@ -8,6 +8,7 @@ import { PromptCard } from './PromptCard'
 import { createHudMemory, drawHud, stepHud, type HudState } from '../lib/voice-hud'
 import { avatarColor } from './BotAvatar'
 import { useAppConfig } from '../lib/app-config'
+import { updateSettings } from '../lib/settings'
 import { LiveAvatar, useReducedMotion } from './LiveAvatar'
 import './VoiceOverlay.css'
 
@@ -22,6 +23,8 @@ interface VoiceOverlayProps {
   /** A question or approval of the bot: its card stays reachable over the voice mode. */
   prompt?: PendingPrompt
   onAnswerPrompt: (prompt: PendingPrompt, answer: string) => Promise<void>
+  /** The hands-free switch is offered (the desktop app). */
+  handsFreeAvailable: boolean
 }
 
 const FALLBACK_ACCENT = 'rgb(79, 209, 255)'
@@ -42,7 +45,7 @@ function readableAccent(probe: HTMLElement | null) {
  * Voice mode over the chat: the bot's avatar inside a HUD that pulses with the voice, the state, the
  * caption and the controls. Talk: hold and release (push-to-talk), or tap and pause. Enter does the same.
  */
-export function VoiceOverlay({ session, bot, running, activity, onClose, onStopBot, prompt, onAnswerPrompt }: VoiceOverlayProps) {
+export function VoiceOverlay({ session, bot, running, activity, onClose, onStopBot, prompt, onAnswerPrompt, handsFreeAvailable }: VoiceOverlayProps) {
   const { t } = useTranslation()
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const reducedMotion = useReducedMotion()
@@ -169,9 +172,11 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
     ? snapshot.transcript || '…'
     : phase === 'speaking'
       ? snapshot.caption
-      : phase === 'idle' && !snapshot.transcript && !snapshot.caption
-        ? t('voice.idleCaption', { name: bot.name })
-        : phase === 'thinking' ? snapshot.transcript : snapshot.caption || snapshot.transcript
+      : phase === 'idle' && snapshot.standby
+        ? t('voice.standby')
+        : phase === 'idle' && !snapshot.transcript && !snapshot.caption
+          ? t(snapshot.mode === 'handsfree' ? 'voice.handsFreeIdle' : 'voice.idleCaption', { name: bot.name })
+          : phase === 'thinking' ? snapshot.transcript : snapshot.caption || snapshot.transcript
 
   return (
     <div
@@ -184,6 +189,23 @@ export function VoiceOverlay({ session, bot, running, activity, onClose, onStopB
       <span ref={probeRef} className="voice-accent-probe" aria-hidden="true" />
       <header className="voice-header">
         <span className="voice-title">{modeName} · {bot.name}</span>
+        {handsFreeAvailable && (
+          <button
+            type="button"
+            className={`voice-mode-switch ${snapshot.mode === 'handsfree' ? 'is-on' : ''}`}
+            role="switch"
+            aria-checked={snapshot.mode === 'handsfree'}
+            title={t('voice.handsFreeTitle')}
+            onClick={() => {
+              const next = snapshot.mode === 'handsfree' ? 'push' : 'handsfree'
+              updateSettings({ voiceHandsFree: next === 'handsfree' })
+              session.setMode(next)
+            }}
+          >
+            <Ear size={15} />
+            <span>{t('voice.handsFree')}</span>
+          </button>
+        )}
         <button type="button" className="voice-icon-button" aria-label={t('voice.close')} title={t('voice.close')} onClick={onClose}><X size={18} /></button>
       </header>
       <div className="voice-stage">

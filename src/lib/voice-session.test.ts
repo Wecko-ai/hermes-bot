@@ -236,3 +236,134 @@ describe('VoiceSession speech refusals', () => {
     expect(session.getSnapshot().phase).toBe('idle')
   })
 })
+
+describe('VoiceSession hands-free', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function handsFree(overrides: Partial<VoiceSessionOptions> = {}) {
+    const conversation = { opens: 0, closes: 0, allow: true }
+    const parts = setup({
+      initialMode: 'handsfree',
+      conversation: { open: async () => { conversation.opens += 1; return conversation.allow }, close: () => { conversation.closes += 1 } },
+      followUpMs: 3_000,
+      firstListenMs: 5_000,
+      relistenDelayMs: 100,
+      ...overrides,
+    })
+    /** Words heard in the listen that is open now, then the end of the listen. */
+    const hear = async (text: string) => {
+      parts.dictation.emitWords(text)
+      parts.dictation.emitDone()
+      await tick()
+      await tick()
+    }
+    return { ...parts, conversation, hear }
+  }
+
+  it('listens at once without a press, and again after each spoken reply', async () => {
+    const { session, dictation, speech, sent, conversation, hear } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    expect(conversation.opens).toBe(1)
+    expect(dictation.listenCalls).toBe(1)
+    expect(dictation.withoutGesture).toBe(true)
+    expect(session.getSnapshot().phase).toBe('listening')
+    await hear('Quoi de neuf ?')
+    expect(sent.map((item) => item.text)).toEqual(['Quoi de neuf ?'])
+    session.turnEnded({ text: 'Rien de spécial aujourd’hui.', meaningful: true })
+    await tick()
+    expect(dictation.listenCalls).toBe(1)
+    while (speech.speaking) speech.finish()
+    await vi.advanceTimersByTimeAsync(150)
+    expect(dictation.listenCalls).toBe(2)
+    expect(session.getSnapshot().phase).toBe('listening')
+  })
+
+  it('goes to standby when nothing is said in time, until a press', async () => {
+    const { session, dictation, conversation } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    await vi.advanceTimersByTimeAsync(5_100)
+    expect(session.getSnapshot()).toMatchObject({ phase: 'idle', standby: true })
+    session.pressTalk()
+    await tick()
+    await tick()
+    expect(conversation.opens).toBe(2)
+    expect(dictation.listenCalls).toBe(2)
+    expect(session.getSnapshot().standby).toBe(false)
+  })
+
+  it('does not listen while the bot is still working after a spoken step', async () => {
+    const { session, dictation, speech, hear } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    await hear('Cherche le prix')
+    session.turnStep('Je lance la recherche.')
+    await tick()
+    while (speech.speaking) speech.finish()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(dictation.listenCalls).toBe(1)
+    expect(session.getSnapshot().phase).toBe('thinking')
+    session.turnEnded({ text: 'Trente euros.', meaningful: true })
+    while (speech.speaking) speech.finish()
+    await vi.advanceTimersByTimeAsync(150)
+    expect(dictation.listenCalls).toBe(2)
+  })
+
+  it('drops the bot’s own voice heard back by the microphone', async () => {
+    const { session, speech, sent, dictation, hear } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    await hear('Donne-moi la météo')
+    session.turnEnded({ text: 'Il fera beau et chaud demain après-midi.', meaningful: true })
+    while (speech.speaking) speech.finish()
+    await vi.advanceTimersByTimeAsync(150)
+    await hear('il fera beau et chaud demain')
+    expect(sent).toHaveLength(1)
+    expect(dictation.listenCalls).toBe(3)
+  })
+
+  it('never listens again after an approval request', async () => {
+    const { session, speech, dictation, hear } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    await hear('Supprime les vieux rendus')
+    session.prompt({ ...clarify([]), kind: 'approval', question: '', description: 'rm' })
+    while (speech.speaking) speech.finish()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(dictation.listenCalls).toBe(1)
+  })
+
+  it('a refused conversation means standby; push mode closes it', async () => {
+    const refused = handsFree()
+    refused.conversation.allow = false
+    refused.session.begin()
+    await tick()
+    await tick()
+    expect(refused.session.getSnapshot().standby).toBe(true)
+    expect(refused.dictation.listenCalls).toBe(0)
+
+    const { session, conversation, dictation } = handsFree()
+    session.begin()
+    await tick()
+    await tick()
+    session.setMode('push')
+    await tick()
+    expect(conversation.closes).toBe(1)
+    expect(dictation.cancelCalls).toBe(1)
+    expect(session.getSnapshot().mode).toBe('push')
+    session.dispose()
+    expect(conversation.closes).toBe(1)
+  })
+
+  it('without a conversation, hands-free is not offered', () => {
+    const { session } = setup({ initialMode: 'handsfree' })
+    expect(session.getSnapshot().mode).toBe('push')
+  })
+})

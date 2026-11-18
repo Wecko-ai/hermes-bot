@@ -55,6 +55,11 @@ export interface DictationEngine {
   stop: () => Promise<void>
   /** Drops the session, without a final result. */
   cancel: () => Promise<void>
+  /**
+   * Voice mode, hands-free: the next sessions are prepared inside the open conversation, without a
+   * new click (the main process still checks the conversation and the window). Absent: not supported.
+   */
+  setWithoutGesture?: (on: boolean) => void
 }
 
 export const MISSING_LOCALE: DictationLocale = { localeId: null, onDevice: false, serverReachable: true }
@@ -249,6 +254,11 @@ export class DictationController {
   /** The dictation language changed in Settings: a language that could not be recognized no longer blocks the mic. */
   recheckLanguage() {
     if (this.snapshot.blocked === 'language' && this.options.languageCode() !== this.blockedLanguage) this.update({ blocked: null })
+  }
+
+  /** A refusal that came from the main process (voice mode, conversation over), not from the system: the next press tries again. */
+  clearBlock() {
+    if (this.snapshot.blocked === 'unavailable') this.update({ blocked: null })
   }
 
   /** The window is back in front: a refusal may have been lifted in System Settings. The next click tries again. */

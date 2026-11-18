@@ -374,6 +374,27 @@ ipcMain.handle('hermes-bot:dictation-prepare', async (event, localeId) => {
   if (state.access === 'granted' && windowInFront()) gate.armStart(token)
   return state
 })
+// Voice mode, hands-free: the click on the voice button opens a bounded conversation (dictation-gate.cjs).
+ipcMain.handle('hermes-bot:dictation-conversation', (event, action) => {
+  const gate = dictationGate
+  if (!fromWindow(event) || !gate) return 0
+  if (action === 'close') {
+    gate.closeConversation()
+    return 0
+  }
+  return action === 'open' ? gate.openConversation() : 0
+})
+// In that conversation, the next listen is prepared without a gesture, window in front only.
+ipcMain.handle('hermes-bot:dictation-relisten', async (event, localeId) => {
+  const gate = dictationGate
+  if (!fromWindow(event) || !gate || !mainWindow || mainWindow.isDestroyed()) return { ...UNAVAILABLE }
+  const visible = mainWindow.isVisible() && !mainWindow.isMinimized()
+  const token = gate.mayRelisten({ focused: mainWindow.isFocused(), visible })
+  if (!token) return { ...UNAVAILABLE }
+  const state = await dictation.prepare(localeId)
+  if (state.access === 'granted' && windowInFront()) gate.armStart(token)
+  return state
+})
 ipcMain.handle('hermes-bot:dictation-start', (event, options) => {
   if (!fromWindow(event) || !dictationGate || !mainWindow || mainWindow.isDestroyed()) return false
   const visible = mainWindow.isVisible() && !mainWindow.isMinimized()

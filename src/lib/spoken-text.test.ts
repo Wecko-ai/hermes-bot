@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { guessLanguage, matchChoice, splitSentences, toSpokenText, voiceCommand } from './spoken-text'
+import { guessLanguage, isEcho, matchChoice, splitSentences, toSpokenText, voiceCommand } from './spoken-text'
 
 const fr = (md: string, maxSentences?: number) => toSpokenText(md, { language: 'fr', maxSentences })
 const en = (md: string, maxSentences?: number) => toSpokenText(md, { language: 'en', maxSentences })
@@ -210,5 +210,20 @@ describe('matchChoice', () => {
   })
   it('prefers an exact label over longer labels that contain it', () => {
     expect(matchChoice('oui', ['Oui', 'Oui, mais plus tard'])).toBe(0)
+  })
+})
+
+describe('reasoning blocks and echo', () => {
+  it('never reads a <think> block aloud', () => {
+    expect(toSpokenText('<think>Je dois vérifier le cache.</think>Le rendu est prêt.', { language: 'fr' }).text).toBe('Le rendu est prêt.')
+  })
+
+  it('recognizes the bot’s own sentence heard back, not the user’s short answers', () => {
+    const spoken = ['Il fera beau et chaud demain après-midi.', 'Pense à ta crème solaire.']
+    expect(isEcho('il fera beau et chaud demain', spoken)).toBe(true)
+    expect(isEcho('Pense à ta crème', spoken)).toBe(true)
+    expect(isEcho('oui', spoken)).toBe(false)
+    expect(isEcho('Et pour la vidéo de jeudi ?', spoken)).toBe(false)
+    expect(isEcho('il fera beau', [])).toBe(false)
   })
 })

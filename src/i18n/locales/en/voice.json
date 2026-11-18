@@ -45,7 +45,13 @@
       "rate": "Speaking rate",
       "steps": "Speak the steps",
       "stepsHint": "The bot also says the short lines it writes before working (\"I'm looking it up…\").",
-      "voicesHint": "Better voices are free: System Settings > Accessibility > Read & Speak > System voice, then download a Premium voice."
-    }
+      "voicesHint": "Better voices are free: System Settings > Accessibility > Read & Speak > System voice, then download a Premium voice.",
+      "handsFree": "Hands-free by default",
+      "handsFreeHint": "After each reply, the microphone reopens for 8 seconds while the window is in front, for 10 minutes at most after your last click. Leaving the window ends it."
+    },
+    "handsFree": "Hands-free",
+    "handsFreeTitle": "Hands-free: after each reply the microphone reopens for a few seconds. Off: hold Talk for each sentence.",
+    "standby": "Standby. Press Talk or Enter to go on.",
+    "handsFreeIdle": "Listening for you. Speak to {{name}}."
   }
 }

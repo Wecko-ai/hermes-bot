@@ -239,6 +239,7 @@ function VoiceSettings() {
           <output className="settings-range-value">{settings.voiceRate.toFixed(2)}×</output>
         </span>
       </Row>
+      <Toggle label={t('voice.settings.handsFree')} hint={t('voice.settings.handsFreeHint')} checked={settings.voiceHandsFree} onChange={(voiceHandsFree) => updateSettings({ voiceHandsFree })} />
       <Toggle label={t('voice.settings.steps')} hint={t('voice.settings.stepsHint')} checked={settings.voiceSteps} onChange={(voiceSteps) => updateSettings({ voiceSteps })} />
     </>
   )

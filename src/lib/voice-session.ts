@@ -17,9 +17,11 @@
 import { DictationController, type DictationBlock, type DictationEngine, type DictationNotice } from './dictation'
 import type { PendingPrompt } from './hermes'
 import type { SpeechEngine, SpeechEvent, SpeechVoice } from './speech-engines'
-import { guessLanguage, matchChoice, toSpokenText, voiceCommand, type SpokenLanguage } from './spoken-text'
+import { guessLanguage, isEcho, matchChoice, toSpokenText, voiceCommand, type SpokenLanguage } from './spoken-text'
 
 export type VoicePhase = 'idle' | 'listening' | 'thinking' | 'speaking' | 'asking'
+/** `push`: one press, one listen. `handsfree`: after each reply the microphone reopens for a short while. */
+export type VoiceMode = 'push' | 'handsfree'
 export type VoiceNotice = DictationNotice | 'notSent' | 'noMatch' | 'cancelled' | 'speechFailed' | 'answerOnScreen'
 
 export interface VoiceSnapshot {
@@ -37,6 +39,9 @@ export interface VoiceSnapshot {
   notice: VoiceNotice | null
   /** Changes at each notice, so the same notice twice is shown twice. */
   noticeKey: number
+  mode: VoiceMode
+  /** Hands-free, nothing heard in time (or the window left the front): waits for a press to listen again. */
+  standby: boolean
 }
 
 export interface VoiceSettings {
@@ -71,6 +76,17 @@ export interface VoiceSessionOptions {
   /** Without any turn event for this long after the bot stopped, expected replies are dropped. */
   staleTurnMs?: number
   now?: () => number
+  /**
+   * The hands-free conversation of the main process (dictation-gate.cjs): `open` consumes the current
+   * click or Enter. Absent: push-to-talk only.
+   */
+  conversation?: { open: () => Promise<boolean>; close: () => void }
+  initialMode?: VoiceMode
+  /** Hands-free: how long the microphone waits for speech after a reply, and after opening. */
+  followUpMs?: number
+  firstListenMs?: number
+  /** Hands-free: quiet time between the end of the voice and the next listen. */
+  relistenDelayMs?: number
 }
 
 const DEFAULT_TAG: Record<SpokenLanguage, string> = { fr: 'fr-FR', en: 'en-GB' }
@@ -88,7 +104,18 @@ export class VoiceSession {
   private readonly unsubscribeSpeech: () => void
   private readonly unsubscribeDictation: () => void
   private readonly now: () => number
-  private snapshot: VoiceSnapshot = { phase: 'idle', transcript: '', caption: '', question: null, approval: false, blocked: null, notice: null, noticeKey: 0 }
+  private snapshot: VoiceSnapshot
+  /** Hands-free: the main process let this session listen again without a gesture. */
+  private conversationOpen = false
+  /** The current listen was started by the session itself, not by a press. */
+  private autoListening = false
+  /** The last listen was prepared inside the conversation (a refusal then means the conversation is over). */
+  private lastWithoutGesture = false
+  private echoRetries = 0
+  /** What the voice said last, to recognize it if the microphone hears it back. */
+  private recentSpoken: string[] = []
+  private followUpTimer: ReturnType<typeof setTimeout> | undefined
+  private relistenTimer: ReturnType<typeof setTimeout> | undefined
   private voiceList: SpeechVoice[] = []
   /** Turn ends still expected, oldest first: `mine` is spoken, `foreign` is not. */
   private turns: ('mine' | 'foreign')[] = []
@@ -109,13 +136,15 @@ export class VoiceSession {
   constructor(options: VoiceSessionOptions) {
     this.options = options
     this.now = options.now ?? Date.now
+    const mode: VoiceMode = options.initialMode === 'handsfree' && options.conversation ? 'handsfree' : 'push'
+    this.snapshot = { phase: 'idle', transcript: '', caption: '', question: null, approval: false, blocked: null, notice: null, noticeKey: 0, mode, standby: false }
     this.dictation = new DictationController({
       engine: options.dictation,
       languageCode: options.languageCode,
       getText: () => '',
       setText: (text) => this.onTranscript(text),
       isOffline: options.isOffline,
-      onNotice: (notice) => this.notify(notice),
+      onNotice: (notice) => this.onDictationNotice(notice),
       listenForMs: 60_000,
       pauseForMs: options.pauseForMs ?? 1_600,
       finalWaitMs: 800,
@@ -152,7 +181,39 @@ export class VoiceSession {
     if (this.spoken.size) this.stopSpeaking()
     this.pendingReply = null
     this.pressedAt = this.now()
-    void this.dictation.start()
+    this.echoRetries = 0
+    if (this.snapshot.standby) this.update({ standby: false })
+    if (this.snapshot.mode === 'handsfree') {
+      // The press renews the conversation (it uses the gesture), then the listen is prepared inside it.
+      void this.openConversation().then((open) => this.startListen(open, null))
+      return
+    }
+    this.startListen(false, null)
+  }
+
+  /** Right after the overlay opened, in the same click: hands-free starts listening at once. */
+  begin() {
+    if (this.snapshot.mode !== 'handsfree') return
+    void this.openConversation().then((open) => {
+      if (open) this.listenAuto(this.options.firstListenMs ?? 15_000)
+      else this.update({ standby: true })
+    })
+  }
+
+  /** The mode switch of the overlay (a click: a gesture for the hands-free conversation). */
+  setMode(mode: VoiceMode) {
+    if (this.disposed || mode === this.snapshot.mode || (mode === 'handsfree' && !this.options.conversation)) return
+    this.update({ mode, standby: false })
+    if (mode === 'push') {
+      this.closeConversation()
+      if (this.autoListening && !this.heard.trim()) this.dictation.cancel()
+      return
+    }
+    if (this.dictation.active || this.spoken.size) return
+    void this.openConversation().then((open) => {
+      if (!open) return this.update({ standby: true })
+      if (!this.turns.includes('mine') || this.snapshot.question) this.listenAuto(this.options.firstListenMs ?? 15_000)
+    })
   }
 
   /** Talk button released: after a long press, the release ends the listen (push-to-talk). */
@@ -173,6 +234,8 @@ export class VoiceSession {
     this.bands = NO_BANDS
     void this.options.speech.stop().catch(() => {})
     this.refresh()
+    // Hands-free: cutting the voice means the user wants to talk.
+    this.afterSpeech()
   }
 
   /** The overlay closes. */
@@ -180,6 +243,10 @@ export class VoiceSession {
     if (this.disposed) return
     this.disposed = true
     clearTimeout(this.staleTimer)
+    clearTimeout(this.followUpTimer)
+    clearTimeout(this.relistenTimer)
+    if (this.conversationOpen) this.options.conversation?.close()
+    this.conversationOpen = false
     this.unsubscribeDictation()
     this.dictation.dispose()
     this.unsubscribeSpeech()
@@ -222,8 +289,9 @@ export class VoiceSession {
     if (this.disposed) return
     const head = this.turns.shift()
     if (this.snapshot.question || this.snapshot.approval) this.update({ question: null, approval: false })
-    if (head === 'mine' && reply.meaningful) this.speak(reply.text)
+    const spoke = head === 'mine' && reply.meaningful && this.speak(reply.text)
     this.refresh()
+    if (head === 'mine' && !spoke) this.afterSpeech()
   }
 
   /** A question or an approval from the bot, during a turn of this session. */
@@ -276,11 +344,24 @@ export class VoiceSession {
     if (this.disposed) return
     const pending = this.pendingReply
     this.pendingReply = null
+    const auto = this.autoListening
+    this.autoListening = false
+    clearTimeout(this.followUpTimer)
     if (!text) {
-      // Nothing said: a reply that came in while listening is spoken now.
+      // Nothing said: a reply that came in while listening is spoken now; hands-free waits for a press.
       if (pending) this.speak(pending.text, pending.maxSentences)
+      else if (auto && this.snapshot.mode === 'handsfree') this.update({ standby: true })
       return
     }
+    if (auto && isEcho(text, this.recentSpoken)) {
+      // The microphone heard the bot's own voice: listen once more, then wait for a press.
+      if (this.echoRetries < 1) {
+        this.echoRetries += 1
+        this.listenAuto(this.options.followUpMs ?? 8_000)
+      } else this.update({ standby: true })
+      return
+    }
+    this.echoRetries = 0
     const command = voiceCommand(text)
     if (command === 'end') {
       this.options.onEnd()
@@ -289,6 +370,7 @@ export class VoiceSession {
     if (command === 'cancel') {
       this.update({ transcript: '' })
       this.notify('cancelled')
+      this.afterSpeech()
       return
     }
     const question = this.snapshot.question
@@ -302,7 +384,7 @@ export class VoiceSession {
       const index = matchChoice(text, question.choices)
       if (index === null) {
         this.notify('noMatch')
-        this.speak(this.options.phrase('noMatch', this.options.languageCode()), 1)
+        if (!this.speak(this.options.phrase('noMatch', this.options.languageCode()), 1)) this.afterSpeech()
         return
       }
       answer = question.choices[index]
@@ -338,20 +420,27 @@ export class VoiceSession {
       }
       this.cutShort = cutShort
       this.notify('notSent')
+      this.refresh()
+      this.afterSpeech()
+      return
     }
     this.refresh()
   }
 
-  private speak(text: string, maxSentences?: number) {
-    if (this.disposed) return
+  /** `false`: nothing to say (the caller may listen again at once). */
+  private speak(text: string, maxSentences?: number): boolean {
+    if (this.disposed) return false
     if (this.dictation.active) {
       // The microphone is open: the reply waits for the end of this listen.
       this.pendingReply = { text, maxSentences }
-      return
+      return true
     }
     const language = guessLanguage(text, this.options.languageCode())
     const { sentences } = toSpokenText(text, { language, maxSentences })
-    if (!sentences.length) return
+    if (!sentences.length) return false
+    clearTimeout(this.relistenTimer)
+    if (this.snapshot.standby) this.update({ standby: false })
+    this.recentSpoken = [...this.recentSpoken, ...sentences].slice(-12)
     const settings = this.options.settings()
     const voice = settings.voices[language] || undefined
     const tag = this.voiceList.find((item) => item.id === voice)?.language || DEFAULT_TAG[language]
@@ -364,6 +453,7 @@ export class VoiceSession {
         this.spoken.delete(id)
         this.notify('speechFailed')
         this.refresh()
+        if (!this.spoken.size) this.afterSpeech()
       }
       void this.options.speech.say(utterance).then((accepted) => {
         if (accepted || !this.spoken.has(id)) return
@@ -375,6 +465,7 @@ export class VoiceSession {
       }, refused)
     }
     this.refresh()
+    return true
   }
 
   private onSpeechEvent(event: SpeechEvent) {
@@ -399,6 +490,71 @@ export class VoiceSession {
       this.bands = NO_BANDS
     }
     this.refresh()
+    if (!this.spoken.size) this.afterSpeech()
+  }
+
+  // ── Hands-free ─────────────────────────────────────────────────────────────
+
+  private async openConversation() {
+    if (!this.options.conversation || this.disposed) return false
+    let open = false
+    try { open = await this.options.conversation.open() } catch { open = false }
+    this.conversationOpen = open && !this.disposed
+    return this.conversationOpen
+  }
+
+  private closeConversation() {
+    clearTimeout(this.followUpTimer)
+    clearTimeout(this.relistenTimer)
+    if (!this.conversationOpen) return
+    this.conversationOpen = false
+    this.options.conversation?.close()
+  }
+
+  /** One listen. `withoutGesture`: inside the conversation; `windowMs`: give up when nothing is said by then. */
+  private startListen(withoutGesture: boolean, windowMs: number | null) {
+    if (this.disposed || this.dictation.active) return
+    clearTimeout(this.followUpTimer)
+    this.autoListening = windowMs !== null
+    this.lastWithoutGesture = withoutGesture
+    this.options.dictation.setWithoutGesture?.(withoutGesture)
+    void this.dictation.start()
+    if (windowMs === null) return
+    this.followUpTimer = setTimeout(() => {
+      if (this.disposed || !this.dictation.active || this.heard.trim()) return
+      this.dictation.cancel()
+    }, windowMs)
+  }
+
+  private listenAuto(windowMs: number) {
+    if (this.disposed || this.snapshot.mode !== 'handsfree' || !this.conversationOpen) return
+    if (this.dictation.active || this.spoken.size || this.snapshot.approval) return
+    this.startListen(true, windowMs)
+  }
+
+  /** The voice is done (or there was nothing to say): hands-free listens again after a short quiet. */
+  private afterSpeech() {
+    if (this.disposed || this.snapshot.mode !== 'handsfree' || !this.conversationOpen || this.snapshot.approval) return
+    clearTimeout(this.relistenTimer)
+    this.relistenTimer = setTimeout(() => {
+      if (this.disposed || this.spoken.size || this.dictation.active || this.sending) return
+      // The bot is still working on this message (a step was spoken): its reply comes first.
+      if (this.turns.includes('mine') && !this.snapshot.question) return
+      this.listenAuto(this.options.followUpMs ?? 8_000)
+    }, this.options.relistenDelayMs ?? 350)
+  }
+
+  /** A hands-free listen the main process refused (window not in front, conversation over): standby, no toast. */
+  private onDictationNotice(notice: DictationNotice) {
+    if (this.lastWithoutGesture && (notice === 'unavailable' || notice === 'failed')) {
+      this.autoListening = false
+      this.lastWithoutGesture = false
+      this.conversationOpen = false
+      this.dictation.clearBlock()
+      this.update({ standby: true })
+      return
+    }
+    this.notify(notice)
   }
 
   private phaseNow(): VoicePhase {

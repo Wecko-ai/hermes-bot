@@ -124,7 +124,8 @@ export function toSpokenText(markdown: string, options: { language: SpokenLangua
   const { language, maxSentences = 6 } = options
   const empty: SpokenText = { text: '', sentences: [], truncated: false }
   if (isSilentMessage(markdown)) return empty
-  const source = withoutSilentMarkers(markdown)
+  // A model's visible reasoning is never read aloud.
+  const source = withoutSilentMarkers(markdown.replace(/<(think|thinking|reasoning)>[\s\S]*?(?:<\/\1>|$)/gi, ' '))
   if (!source || isSilentMessage(source)) return empty
 
   const blocks: string[] = []
@@ -266,4 +267,50 @@ export function matchChoice(transcript: string, choices: string[]): number | nul
     return []
   })
   return fuzzy.length === 1 ? fuzzy[0] : null
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Echo of the bot's own voice
+
+const ECHO_THRESHOLD = 0.6
+const ECHO_MIN_CHARS = 10
+
+const bigrams = (text: string) => {
+  const grams = new Map<string, number>()
+  for (let i = 0; i < text.length - 1; i += 1) {
+    const gram = text.slice(i, i + 2)
+    grams.set(gram, (grams.get(gram) ?? 0) + 1)
+  }
+  return grams
+}
+
+/** Dice coefficient of the character bigrams: 1 for the same text, near 0 for unrelated ones. */
+export function similarity(a: string, b: string): number {
+  if (a === b) return a ? 1 : 0
+  if (a.length < 2 || b.length < 2) return 0
+  const left = bigrams(a)
+  const right = bigrams(b)
+  let shared = 0
+  for (const [gram, count] of left) shared += Math.min(count, right.get(gram) ?? 0)
+  return (2 * shared) / (a.length - 1 + b.length - 1)
+}
+
+/**
+ * Over speakers, the end of the bot's own reply can reach the microphone and come back as words nobody
+ * said. A transcript is taken for an echo when it is close to what was just spoken, compared with each
+ * sentence and with windows of the same length in the whole spoken text. Short answers ("oui", "deux")
+ * are never taken for an echo.
+ */
+export function isEcho(transcript: string, spoken: string[]): boolean {
+  const heard = normalize(transcript)
+  if (heard.length < ECHO_MIN_CHARS || !spoken.length) return false
+  const sentences = spoken.map(normalize).filter(Boolean)
+  if (sentences.some((sentence) => similarity(heard, sentence) >= ECHO_THRESHOLD)) return true
+  const all = sentences.join(' ')
+  const words = all.split(' ')
+  const size = heard.split(' ').length
+  for (let start = 0; start + size <= words.length; start += 1) {
+    if (similarity(heard, words.slice(start, start + size).join(' ')) >= ECHO_THRESHOLD) return true
+  }
+  return false
 }

@@ -12,6 +12,13 @@ interface Window {
       /** Asks for the microphone and speech recognition permissions, and probes the language. */
       prepare: (localeId: string) => Promise<{ access: 'granted' | 'denied' | 'unavailable'; microphone: boolean; exists: boolean; onDevice: boolean; available: boolean }>
       start: (options: { localeId: string; onDevice: boolean; listenForMs: number; pauseForMs: number }) => Promise<boolean>
+      /**
+       * Voice mode, hands-free. `open` consumes the current click or Enter and opens a conversation of
+       * 10 minutes at most (its end time, 0 when refused); any blur, hide or `close` ends it.
+       */
+      conversation?: (action: 'open' | 'close') => Promise<number>
+      /** Like `prepare`, without a gesture, inside an open conversation and with the window in front. */
+      relisten?: (localeId: string) => Promise<{ access: 'granted' | 'denied' | 'unavailable'; microphone: boolean; exists: boolean; onDevice: boolean; available: boolean }>
       stop: () => Promise<void>
       cancel: () => Promise<void>
       onEvent: (listener: (event: { type: 'words'; text: string; final: boolean } | { type: 'level'; value: number } | { type: 'audioEnd' } | { type: 'done' } | { type: 'error'; code: string }) => void) => () => void

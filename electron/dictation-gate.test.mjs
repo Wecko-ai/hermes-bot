@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import gateModule from './dictation-gate.cjs'
 
-const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS } = gateModule
+const { createDictationGate, isGesture, GESTURE_MS, START_WINDOW_MS, MAX_LISTEN_MS, CONVERSATION_MS } = gateModule
 
 function clock(start = 1_000_000) {
   let time = start
@@ -143,5 +143,80 @@ describe('dictation gate', () => {
     expect(gate.needsConsent).toBeUndefined()
     expect(gate.refused).toBeUndefined()
     expect(gate.setConsent).toBeUndefined()
+  })
+})
+
+describe('hands-free conversation (voice mode)', () => {
+  it('opens only from a fresh gesture, and that gesture can no longer prepare', () => {
+    const time = clock()
+    const gate = createDictationGate({ now: time.now })
+    expect(gate.openConversation()).toBe(0)
+    gate.noteInput({ type: 'keyDown', key: 'a', isAutoRepeat: false })
+    expect(gate.openConversation()).toBe(0)
+    gate.noteInput(click)
+    time.advance(GESTURE_MS + 1)
+    expect(gate.openConversation()).toBe(0)
+    gate.noteInput(click)
+    expect(gate.openConversation()).toBe(time.now() + CONVERSATION_MS)
+    expect(gate.mayPrepare()).toBeNull()
+  })
+
+  it('lets each listen be prepared without a gesture, window in front, one armed start at a time', () => {
+    const time = clock()
+    const gate = createDictationGate({ now: time.now })
+    gate.noteInput(click)
+    gate.openConversation()
+    for (let round = 0; round < 3; round += 1) {
+      time.advance(30_000)
+      const token = gate.mayRelisten(inFront)
+      expect(token).not.toBeNull()
+      expect(gate.armStart(token)).toBe(true)
+      expect(gate.armStart(token)).toBe(false)
+      expect(gate.takeStart(inFront)).toBe(true)
+      expect(gate.takeStart(inFront)).toBe(false)
+    }
+    expect(gate.mayRelisten({ focused: false, visible: true })).toBeNull()
+    expect(gate.mayRelisten({ focused: true, visible: false })).toBeNull()
+  })
+
+  it('ends after its time, on any blur or hide, and when closed', () => {
+    const time = clock()
+    const gate = createDictationGate({ now: time.now })
+    gate.noteInput(click)
+    gate.openConversation()
+    time.advance(CONVERSATION_MS + 1)
+    expect(gate.mayRelisten(inFront)).toBeNull()
+
+    gate.noteInput(enter)
+    gate.openConversation()
+    gate.disarm()
+    expect(gate.mayRelisten(inFront)).toBeNull()
+
+    gate.noteInput(click)
+    gate.openConversation()
+    gate.closeConversation()
+    expect(gate.mayRelisten(inFront)).toBeNull()
+  })
+
+  it('a relisten in flight does not arm once the window left the front', () => {
+    const gate = createDictationGate({ now: clock().now })
+    gate.noteInput(click)
+    gate.openConversation()
+    const token = gate.mayRelisten(inFront)
+    gate.disarm()
+    expect(gate.armStart(token)).toBe(false)
+    expect(gate.takeStart(inFront)).toBe(false)
+  })
+
+  it('a new gesture renews the conversation', () => {
+    const time = clock()
+    const gate = createDictationGate({ now: time.now })
+    gate.noteInput(click)
+    gate.openConversation()
+    time.advance(CONVERSATION_MS - 1_000)
+    gate.noteInput(click)
+    gate.openConversation()
+    time.advance(5_000)
+    expect(gate.mayRelisten(inFront)).not.toBeNull()
   })
 })

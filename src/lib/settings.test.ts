@@ -12,7 +12,7 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], freeMode: false, localModel: '', notifications: true, voiceFr: '', voiceEn: '', voiceRate: 1, voiceSteps: true })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], freeMode: false, localModel: '', notifications: true, voiceFr: '', voiceEn: '', voiceRate: 1, voiceSteps: true, voiceHandsFree: true })
     expect(parseSettings('{"voiceRate":7,"voiceEn":"com.apple.voice.premium.en-GB.Daniel"}')).toMatchObject({ voiceRate: 2, voiceEn: 'com.apple.voice.premium.en-GB.Daniel' })
     expect(parseSettings('{"voiceRate":"fast"}').voiceRate).toBe(1)
   })
