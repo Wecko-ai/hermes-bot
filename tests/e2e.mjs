@@ -1345,10 +1345,11 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}nova-done-ui.png` })
   // Bot never opened, woken by another bot: only its `session.active_list` reports it as working.
   liveStatusByProfile.orion = 'working'
-  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 9_000 })
+  // Live statuses are polled every 6 s: two polls and some margin for a slow CI runner.
+  await page.locator('[data-bot=orion] .bot-row-status.is-working').waitFor({ timeout: 15_000 })
   if (!activeListParams.some((params) => params.profile === 'orion')) throw new Error('session.active_list n’est pas demandé pour le profil du bot.')
   delete liveStatusByProfile.orion
-  await page.locator('[data-bot=orion] .bot-row-status.is-done').waitFor({ timeout: 9_000 })
+  await page.locator('[data-bot=orion] .bot-row-status.is-done').waitFor({ timeout: 15_000 })
   await page.locator('.working-strip').getByText('Tous les bots sont disponibles').waitFor({ timeout: 9_000 })
   await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=orion].is-selected').waitFor()
