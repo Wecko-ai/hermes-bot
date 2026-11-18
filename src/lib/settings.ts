@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { ModelOption, ModelOverride } from '../types'
 import { LANGUAGES, type LanguageChoice } from '../i18n'
-import { isFreeModel } from './free-models'
+import { modelCost } from './free-models'
 
 export const THEMES = ['system', 'light', 'dark'] as const
 export const TEXT_SIZES = ['small', 'normal', 'large'] as const
@@ -32,7 +32,7 @@ export interface AppSettings {
   pinnedBots: string[]
   /** Hide list, not an allow list: a newly released model is still offered. */
   hiddenModels: string[]
-  /** Free mode: the picker offers only the models that cost nothing (see free-models.ts). Kept on this Mac only. */
+  /** Free mode: the picker offers only the models that cost nothing more: free ones and subscriptions (see free-models.ts). Kept on this Mac only. */
   freeMode: boolean
   /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
   localModel: string
@@ -119,11 +119,13 @@ export const hiddenModelKey = (option: ModelOverride) => `${option.provider}:${o
 
 /**
  * The active model and the profile's stay offered: the picker must always be able to show them.
- * In free mode, the paid models go too (the kept ones excepted).
+ * In free mode (`subscriptions` given), the paid models go too, the kept ones excepted: what stays
+ * is free or comes with a subscription already paid.
  */
-export function selectableModels(options: ModelOption[], hidden: string[], keep: string[], freeOnly = false) {
+export function selectableModels(options: ModelOption[], hidden: string[], keep: string[], subscriptions?: readonly string[]) {
   const masked = new Set(hidden)
-  return options.filter((option) => keep.includes(option.model) || (!masked.has(hiddenModelKey(option)) && (!freeOnly || isFreeModel(option))))
+  return options.filter((option) => keep.includes(option.model)
+    || (!masked.has(hiddenModelKey(option)) && (!subscriptions || modelCost(option, subscriptions) !== 'paid')))
 }
 
 export function withModelsVisible(hidden: string[], options: ModelOverride[], visible: boolean) {

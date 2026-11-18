@@ -11,6 +11,8 @@ export interface AppConfig {
     userName: string
     /** Providers never offered in the model picker. */
     hiddenProviders: string[]
+    /** Providers paid by a flat subscription: the free mode keeps their models (they cost nothing more). */
+    subscriptionProviders: string[]
     /** Bots drawn in the contrast color (black in light theme) when their profile sets no color. */
     contrastAvatars: string[]
   }
@@ -20,7 +22,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], contrastAvatars: [] },
+  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [] },
   animatedBots: [],
   localChat: { name: '' },
 }
@@ -42,6 +44,7 @@ export function parseAppConfig(value: unknown): AppConfig {
       userInitial: text(ui.userInitial).slice(0, 2),
       userName: text(ui.userName),
       hiddenProviders: strings(ui.hiddenProviders),
+      subscriptionProviders: strings(ui.subscriptionProviders),
       contrastAvatars: strings(ui.contrastAvatars),
     },
     animatedBots: strings(raw.animatedBots),

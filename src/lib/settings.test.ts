@@ -62,11 +62,15 @@ describe('modèles proposés', () => {
     expect(selectableModels(options, hidden, ['claude-opus-5-5', 'claude-haiku-5-5']).map((item) => item.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
   })
 
-  it('en mode gratuit, ne propose que les modèles gratuits, sauf le modèle actif', () => {
+  it('en mode gratuit, ne propose que les modèles gratuits et ceux des abonnements, sauf le modèle actif', () => {
     const all = [...options, option('nvidia/nemotron-3-ultra-550b-a55b:free', 'openrouter'), option('gemini-3.5-flash', 'gemini'), option('gemini-4-carbon', 'gemini')]
-    expect(selectableModels(all, [], [], true).map(hiddenModelKey)).toEqual(['openrouter:nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini:gemini-3.5-flash'])
-    expect(selectableModels(all, [], ['claude-opus-5-5'], true).map((item) => item.model)).toEqual(['claude-opus-5-5', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini-3.5-flash'])
-    expect(selectableModels(all, ['gemini:gemini-3.5-flash'], [], true).map((item) => item.model)).toEqual(['nvidia/nemotron-3-ultra-550b-a55b:free'])
+    expect(selectableModels(all, [], [], []).map(hiddenModelKey)).toEqual(['openrouter:nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini:gemini-3.5-flash'])
+    expect(selectableModels(all, [], ['claude-opus-5-5'], []).map((item) => item.model)).toEqual(['claude-opus-5-5', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini-3.5-flash'])
+    expect(selectableModels(all, ['gemini:gemini-3.5-flash'], [], []).map((item) => item.model)).toEqual(['nvidia/nemotron-3-ultra-550b-a55b:free'])
+    // The Anthropic subscription costs nothing more; the same model on OpenRouter is still paid.
+    expect(selectableModels(all, [hiddenModelKey(options[1])], [], ['anthropic']).map(hiddenModelKey)).toEqual(['anthropic:claude-opus-5-5', 'anthropic:claude-haiku-5-5', 'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini:gemini-3.5-flash'])
+    // Free mode off: everything not hidden.
+    expect(selectableModels(all, [], [], undefined)).toHaveLength(all.length)
     expect(parseSettings('{"freeMode":true}').freeMode).toBe(true)
     expect(parseSettings('{"freeMode":"oui"}').freeMode).toBe(false)
   })

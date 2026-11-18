@@ -6,11 +6,13 @@ import { providerBrand } from './providers'
 const GEMINI_FREE = /flash|hydrogen/
 const GEMINI_PAID = /pro|carbon|argon|omni|ultra/
 
+type CostedOption = Pick<ModelOption, 'provider' | 'model' | 'providerName' | 'free'>
+
 /**
- * Models that cost nothing to call: what the free mode keeps in the picker. A paid key at one of
- * these providers is not told apart: the free mode trusts that the Gemini key has no billing.
+ * Models that cost nothing to call. A paid key at one of these providers is not told apart:
+ * the free mode trusts that the Gemini key has no billing.
  */
-export function isFreeModel(option: Pick<ModelOption, 'provider' | 'model' | 'providerName' | 'free'>): boolean {
+export function isFreeModel(option: CostedOption): boolean {
   if (option.free) return true
   const provider = option.provider.toLowerCase()
   const model = option.model.toLowerCase()
@@ -21,4 +23,15 @@ export function isFreeModel(option: Pick<ModelOption, 'provider' | 'model' | 'pr
   if (provider === 'gemini') return GEMINI_FREE.test(model) && !GEMINI_PAID.test(model)
   // Servers running on this Mac.
   return providerBrand(option.provider, option.providerName).local
+}
+
+export type ModelCost = 'free' | 'subscription' | 'paid'
+
+/**
+ * What one more call costs. `subscriptions`: the providers paid by a flat subscription
+ * (`ui.subscriptionProviders`), whose models cost nothing more. The free mode keeps both.
+ */
+export function modelCost(option: CostedOption, subscriptions: readonly string[]): ModelCost {
+  if (isFreeModel(option)) return 'free'
+  return subscriptions.includes(option.provider) ? 'subscription' : 'paid'
 }

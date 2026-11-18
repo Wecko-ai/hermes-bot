@@ -31,7 +31,7 @@ describe('configuration locale', () => {
     expect(config.localChat.model).toBe('')
     expect(config.browserTurn.command).toBeNull()
     expect(config.animationsDir).toBe(path.join(dataDir, 'animations'))
-    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], contrastAvatars: [] })
+    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [] })
   })
 
   it('superpose environnement, fichier utilisateur et fichier privé, dans cet ordre', () => {
@@ -55,7 +55,7 @@ describe('configuration locale', () => {
         browserOrigin: 'https://example.com/path',
         sshHost: '-oProxyCommand=evil',
         browserTurn: { command: ['relative/arbiter', 'statut'] },
-        ui: { defaultBot: '../x', hiddenProviders: ['ok', 'not ok', 42], sectionOrder: 'Atelier' },
+        ui: { defaultBot: '../x', hiddenProviders: ['ok', 'not ok', 42], subscriptionProviders: ['anthropic', 'custom:opencode-go', 'custom:cursor-(abo)', 'no/slash', 7], sectionOrder: 'Atelier' },
       },
     })
     const config = loadConfig({ env: {}, platform: 'darwin', home, root })
@@ -65,6 +65,7 @@ describe('configuration locale', () => {
     expect(config.browserTurn.command).toBeNull()
     expect(config.ui.defaultBot).toBe('')
     expect(config.ui.hiddenProviders).toEqual(['ok'])
+    expect(config.ui.subscriptionProviders).toEqual(['anthropic', 'custom:opencode-go', 'custom:cursor-(abo)'])
     expect(config.ui.sectionOrder).toEqual([])
   })
 

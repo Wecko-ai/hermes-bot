@@ -12,6 +12,8 @@ const path = require('node:path')
 
 const ROOT = path.resolve(__dirname, '..')
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
+// Hermes provider slugs: `custom:<name>` for the providers of config.yaml.
+const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9_.:()-]{0,127}$/
 const SSH_HOST = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,254}$/
 
 function dataDirectory(env = process.env, platform = process.platform, home = os.homedir()) {
@@ -32,6 +34,7 @@ function readJson(file) {
 const text = (value, max = 256) => typeof value === 'string' && value.trim() && value.length <= max ? value.trim() : ''
 const strings = (value, max = 64) => Array.isArray(value) ? value.map((item) => text(item, 128)).filter(Boolean).slice(0, max) : []
 const slugs = (value) => strings(value).filter((item) => SLUG.test(item))
+const providers = (value) => strings(value).filter((item) => PROVIDER.test(item))
 
 function origin(value) {
   const candidate = text(value, 512)
@@ -150,6 +153,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       userInitial: text(ui.userInitial, 2),
       userName: text(ui.userName, 64),
       hiddenProviders: slugs(ui.hiddenProviders),
+      // Providers paid by a flat subscription: the free mode keeps them, as they cost nothing more.
+      subscriptionProviders: providers(ui.subscriptionProviders),
       contrastAvatars: slugs(ui.contrastAvatars),
     },
   }

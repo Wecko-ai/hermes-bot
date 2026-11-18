@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFreeModel } from './free-models'
+import { isFreeModel, modelCost } from './free-models'
 
 const free = (provider: string, model: string, providerName = provider, extra: { free?: boolean } = {}) => isFreeModel({ provider, model, providerName, ...extra })
 
@@ -33,5 +33,14 @@ describe('modèles gratuits', () => {
     expect(free('ollama-cloud', 'kimi-k3', 'Ollama Cloud')).toBe(false)
     expect(free('custom:cursor', 'cursor/claude-sonnet-5-5', 'Cursor (abo)')).toBe(false)
     expect(free('anthropic', 'claude-opus-5-5', 'Anthropic')).toBe(false)
+  })
+
+  it('compte les abonnements déclarés comme sans frais en plus, gratuits d’abord', () => {
+    const subscriptions = ['anthropic', 'cursor', 'kimi-coding']
+    expect(modelCost({ provider: 'anthropic', model: 'claude-opus-5-5', providerName: 'Anthropic' }, subscriptions)).toBe('subscription')
+    expect(modelCost({ provider: 'cursor', model: 'cursor/composer-2.5', providerName: 'Cursor (abo)' }, subscriptions)).toBe('subscription')
+    expect(modelCost({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5', providerName: 'OpenRouter' }, subscriptions)).toBe('paid')
+    expect(modelCost({ provider: 'gemini', model: 'gemini-3.5-flash', providerName: 'Google' }, subscriptions)).toBe('free')
+    expect(modelCost({ provider: 'anthropic', model: 'claude-opus-5-5', providerName: 'Anthropic' }, [])).toBe('paid')
   })
 })

@@ -54,7 +54,7 @@ console.log(\`tour : \${owner} \${since} pid=123 depuis 1 min\\nen file : 0\`)
 const TEST_DATA = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-e2e-'))
 const TEST_CONFIG = path.join(TEST_DATA, 'config.json')
 const TEST_ANIMATIONS = path.join(TEST_DATA, 'animations')
-writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' }, modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` } }))
+writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'], subscriptionProviders: ['kimi-coding'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' }, modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` } }))
 // Models the simulated proxy answered (tiny live check before a switch).
 const modelProbeCalls = []
 mkdirSync(TEST_ANIMATIONS)
@@ -2749,8 +2749,9 @@ try {
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
-  // Free mode: the picker keeps only the free models (here the local ones); the active and profile
-  // models stay offered, marked Paid. The switch writes nothing to the gateway's shared file.
+  // Free mode: the picker keeps what costs nothing more (here the local models and the Kimi
+  // subscription); the active and profile models stay offered, marked Paid. The switch writes
+  // nothing to the gateway's shared file.
   const setFreeMode = async (on) => {
     await openSettings()
     await settingsDialog.getByRole('button', { name: 'Modèles', exact: true }).click()
@@ -2761,6 +2762,8 @@ try {
       await settingsDialog.locator('.settings-model-toggle', { hasText: 'Local LLM' }).click()
       await settingsDialog.locator('.settings-model[data-model="qwen-local-27b"] .model-option-tag.is-free').waitFor({ timeout: 3_000 })
       if (await settingsDialog.locator('.settings-model[data-model="claude-opus-5-5"] .model-option-tag.is-free').count()) throw new Error('Un modèle payant est marqué Gratuit.')
+      await settingsDialog.locator('.settings-model-toggle', { hasText: 'Kimi' }).click()
+      await settingsDialog.locator('.settings-model[data-model="kimi-k3"] .model-option-tag', { hasText: 'Abonnement' }).waitFor({ timeout: 3_000 })
     }
     await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
     await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
@@ -2769,9 +2772,10 @@ try {
   await setFreeMode(true)
   await page.getByRole('button', { name: 'Choisir le modèle' }).click()
   await page.locator('.model-picker-note', { hasText: 'Mode gratuit' }).waitFor({ timeout: 5_000 })
+  await page.waitForTimeout(350)
   const offeredFree = await page.locator('.model-picker .model-option').evaluateAll((rows) => rows.map((row) => ({ model: row.dataset.model, paid: Boolean(row.querySelector('.is-paid')) })))
   const unpaidOffered = offeredFree.filter((row) => !row.paid).map((row) => row.model).sort()
-  if (unpaidOffered.join() !== 'gemma-local,qwen-local-27b') throw new Error(`Mode gratuit : modèles proposés ${JSON.stringify(offeredFree)}`)
+  if (unpaidOffered.join() !== 'gemma-local,k3.1-pro,kimi-for-coding,kimi-k3,qwen-local-27b') throw new Error(`Mode gratuit : modèles proposés ${JSON.stringify(offeredFree)}`)
   if (!offeredFree.some((row) => row.paid)) throw new Error(`Mode gratuit : le modèle actif doit rester proposé, marqué Payant : ${JSON.stringify(offeredFree)}`)
   await page.screenshot({ path: `${SCREENSHOTS}model-picker-free.png` })
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')

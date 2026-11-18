@@ -201,7 +201,7 @@ All settings are optional. Each one is an environment variable, or a key of `con
 | `PORT` | | `4330` | Port of the local server |
 | | `allowRemoteGateway` | `false` | `true` lets `gatewayOrigin` and `ollamaOrigin` point to another machine (your cookies and prompts then leave this Mac; prefer the SSH tunnel) |
 
-Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) only exist in `config.json`.
+Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) only exist in `config.json`. `ui.subscriptionProviders` lists the providers you pay by a flat subscription (for example `anthropic` signed in with a Claude plan): the free mode (Settings > Models) keeps their models next to the free ones, as they cost nothing more.
 
 ## Optional extras
 

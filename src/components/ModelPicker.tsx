@@ -4,12 +4,13 @@ import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } f
 import type { ModelOption } from '../types'
 import { modelLabel } from '../lib/model'
 import { providerBrand } from '../lib/providers'
-import { isFreeModel } from '../lib/free-models'
+import { modelCost } from '../lib/free-models'
+import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
 
 interface ModelPickerProps {
   options: ModelOption[]
-  /** Free mode: the options are the free models; a kept paid model says it is paid. */
+  /** Free mode: the options cost nothing more (free or subscription); a kept paid model says it is paid. */
   freeMode?: boolean
   current: string
   profileModel: string
@@ -73,6 +74,7 @@ function saveOpenGroups(slugs: string[]) {
 
 export function ModelPicker({ options, freeMode = false, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
   const { t } = useTranslation()
+  const { ui } = useAppConfig()
   const [query, setQuery] = useState(initialQuery)
   const [openGroups, setOpenGroups] = useState(readOpenGroups)
   // The active model's group always opens on arrival: it is only folded for this opening.
@@ -243,7 +245,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           <span className="model-option-name">{modelLabel(option.model)}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
-                          {freeMode && !isFreeModel(option) && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
+                          {freeMode && modelCost(option, ui.subscriptionProviders) === 'paid' && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
                           {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
                           {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                           {isCurrent && <Check className="model-option-check" size={15} />}
