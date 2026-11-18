@@ -324,6 +324,52 @@ export async function stopRoom(client: HermesClient, roomId: string, cancelId: s
   return client.request<{ cancelled: number }>('groups.stop', { profile: ROOM_PROFILE, room_id: roomId, cancel_id: cancelId })
 }
 
+/** Longest room name Hermes accepts (`MAX_ROOM_NAME_CHARS`). */
+export const ROOM_NAME_MAX = 200
+
+/** Rename needs only the method. */
+export function roomCanRename(capabilities: RoomCapabilities | null) {
+  return Boolean(capabilities?.methods.includes('groups.rename'))
+}
+
+/**
+ * Delete needs `groups.disband` and the `replayable_disband` feature: the feature is what makes a repeated
+ * disband answer with the same tombstone instead of an error, so a lost reply can be retried safely.
+ */
+export function roomCanDisband(capabilities: RoomCapabilities | null) {
+  return Boolean(capabilities?.methods.includes('groups.disband') && capabilities.features.includes('replayable_disband'))
+}
+
+/**
+ * `groups.rename`: one `event_id` per attempt. Hermes answers a repeated id with the same content as already
+ * done, and refuses it with other content, so a retry of the same name must reuse the id.
+ */
+export async function renameRoom(client: HermesClient, roomId: string, eventId: string, name: string) {
+  const result = await client.request<{ room: Room }>('groups.rename', { profile: ROOM_PROFILE, room_id: roomId, event_id: eventId, name: name.trim() })
+  return result.room
+}
+
+/**
+ * `groups.disband`: stops the room's work, revokes its routes, then tombstones the id for good. Repeating the
+ * call on a disbanded room answers `idempotent: true`, so a lost reply is simply retried with the same ids.
+ */
+export async function disbandRoom(client: HermesClient, roomId: string, cancelId: string) {
+  return client.request<{ tombstone: { room_id: string; disbanded_at: number; idempotent?: boolean } }>('groups.disband', { profile: ROOM_PROFILE, room_id: roomId, cancel_id: cancelId })
+}
+
+/** Reasons Hermes gives for a refused disband or rename, as keys of `room.menu.errors`. */
+export function roomActionErrorKey(error: unknown): 'unsupported' | 'retry' | 'peer' | 'otherGateway' | 'stopPending' | 'failed' | 'offline' {
+  if (roomMethodMissing(error)) return 'unsupported'
+  if (!(error instanceof HermesRpcError)) return 'offline'
+  switch (error.data.reason) {
+    case 'room_disbanding_retry': return 'retry'
+    case 'peer_unreachable': return 'peer'
+    case 'authority_conflict': return 'otherGateway'
+    case 'room_stop_pending': return 'stopPending'
+    default: return 'failed'
+  }
+}
+
 export function roomMethodMissing(error: unknown) {
   return error instanceof HermesRpcError && error.code === -32601
 }

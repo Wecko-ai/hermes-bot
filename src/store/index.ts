@@ -8,4 +8,4 @@ export {
   type RequestsState,
 } from './requests'
 export { useSubagentsStore, resetSubagentsStore, type SubagentsState } from './subagents'
-export { useRoomStore, resetRoomStore, roomCancelId, clearRoomCancel, type RoomCacheEntry, type PendingRoomSend, type RoomSupport } from './rooms'
+export { useRoomStore, resetRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband, type RoomCacheEntry, type PendingRoomSend, type RoomSupport } from './rooms'

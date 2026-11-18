@@ -4,6 +4,7 @@ Notable changes to HermesBot. The project follows [semantic versioning](https://
 
 ## Unreleased
 
+- Right-click a room in the sidebar (or Menu key / Shift+F10) for its options: open, rename (`groups.rename`), stop while it works, copy the room ID and delete (`groups.disband`). Delete asks first and says what Hermes does: the room ends for every member, its work is stopped, it cannot be reopened, and its log is kept up to 90 days. Both writes retry with the same identifiers after a lost reply. Delete is offered only when the gateway advertises `groups.disband` and `replayable_disband`.
 - Model settings are saved with a Save button: the checkboxes in Settings > Models only change a draft, Discard changes reverts it, and closing the dialog with unsaved choices asks first. A save sends only this window's own changes, merged onto the gateway's latest shared copy, so a window left open with an older list (another Mac) can no longer hide again a model shown elsewhere. Each window also reads the shared list back when it comes to the front.
 - Models no longer vanish from the picker after a credential refresh: when the gateway answers with its built-in catalog while its own cache warms again (a list without the newest models), the models a provider listed in the last seven days stay offered.
 - Cursor provider logo in the model picker, and the composer's model chip says "· Cursor" for a model served through a Cursor subscription (`cursor/…`), so it is not mistaken for the same model's API route.

@@ -11,8 +11,8 @@ import { subagentHistory } from './lib/subagent-history'
 import type { AgentProcess } from './lib/agent-process'
 import { ensureAppConfig, useAppConfig } from './lib/app-config'
 import { toolLabel, workLine } from './lib/work-summary'
-import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel } from './store'
-import { createRoom, listRooms, loadRoomCapabilities, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
+import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband } from './store'
+import { createRoom, disbandRoom, listRooms, loadRoomCapabilities, renameRoom, roomActionErrorKey, roomCanDisband, roomCanRename, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
 import { chipModelLabel, modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
@@ -101,7 +101,7 @@ const {
 } = useChatStore.getState()
 const { addPrompt, settlePrompt, removePrompt, clearSessionPrompts, replaceSessionPrompts, addServerRequest, removeServerRequest, setBrowserVaultRequests, removeBrowserVaultRequest } = useRequestsStore.getState()
 const { applyEvent: applySubagentEvent, applyList: applySubagentList, setProcesses: setChatProcesses, setAgentProcesses } = useSubagentsStore.getState()
-const { setRooms, setCapabilities, setSupport, selectRoom: selectRoomInStore, closeRoom, setRoomLoading, setRoomError, applySnapshot, setPendingSend, setSendFlight } = useRoomStore.getState()
+const { setRooms, setCapabilities, setSupport, selectRoom: selectRoomInStore, closeRoom, removeRoom, patchRoom, setRoomLoading, setRoomError, applySnapshot, setPendingSend, setSendFlight } = useRoomStore.getState()
 
 const systemPrefersDark = () => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false
 
@@ -1001,8 +1001,9 @@ export default function App() {
     }
   }
 
-  const stopOpenRoom = async () => {
-    const roomId = useRoomStore.getState().selectedRoomId
+  const stopOpenRoom = () => stopRoomById(useRoomStore.getState().selectedRoomId)
+
+  const stopRoomById = async (roomId: string) => {
     if (!roomId) return
     if (DEMO) {
       clearDemoRoomTimers()
@@ -1024,6 +1025,46 @@ export default function App() {
     } catch {
       setNotice(i18n.t('room.stopFailed'))
     }
+  }
+
+  /** Menu rename. The event id is kept while the name stays the same, so a lost reply retries safely. */
+  const renameRoomById = async (roomId: string, name: string) => {
+    if (DEMO) {
+      const room = useRoomStore.getState().rooms.find((item) => item.room_id === roomId)
+      if (room) patchRoom({ ...room, name, updated_at: Math.floor(Date.now() / 1000) })
+      return
+    }
+    try {
+      const room = await renameRoom(client, roomId, roomRenameEventId(roomId, name), name)
+      clearRoomRename(roomId)
+      patchRoom(room)
+      void refreshRooms()
+    } catch (error) {
+      throw new Error(i18n.t(`room.menu.errors.${roomActionErrorKey(error)}`))
+    }
+  }
+
+  /** Menu delete (`groups.disband`). The cancel id is kept until Hermes confirms, so a lost reply retries safely. */
+  const deleteRoomById = async (roomId: string) => {
+    if (DEMO) {
+      clearDemoRoomTimers()
+      removeRoom(roomId)
+      return
+    }
+    try {
+      await disbandRoom(client, roomId, roomDisbandCancelId(roomId))
+    } catch (error) {
+      throw new Error(i18n.t(`room.menu.errors.${roomActionErrorKey(error)}`))
+    }
+    clearRoomDisband(roomId)
+    clearRoomCancel(roomId)
+    clearRoomRename(roomId)
+    // Reads that started before the delete must not bring the room back.
+    roomIndexRequestRef.current += 1
+    roomRequestRef.current.set(roomId, (roomRequestRef.current.get(roomId) || 0) + 1)
+    removeRoom(roomId)
+    setNotice(i18n.t('room.menu.deleted'))
+    void refreshRooms()
   }
 
   const initialize = async () => {
@@ -1786,12 +1827,15 @@ export default function App() {
     () => Object.fromEntries(rooms.map((room) => [room.room_id, Boolean(roomCache[room.room_id]?.driver?.working || roomCache[room.room_id]?.driver?.member_activity?.length)])),
     [rooms, roomCache],
   )
-  const sidebarActions = useRef({ reconnect, logout, selectBot, selectRoom, botAction })
-  sidebarActions.current = { reconnect, logout, selectBot, selectRoom, botAction }
+  const sidebarActions = useRef({ reconnect, logout, selectBot, selectRoom, botAction, renameRoomById, deleteRoomById, stopRoomById })
+  sidebarActions.current = { reconnect, logout, selectBot, selectRoom, botAction, renameRoomById, deleteRoomById, stopRoomById }
   const onSidebarReconnect = useCallback(() => { void sidebarActions.current.reconnect() }, [])
   const onSidebarLogout = useCallback(() => { void sidebarActions.current.logout() }, [])
   const onSidebarSelect = useCallback((bot: Bot) => { sidebarActions.current.selectBot(bot) }, [])
   const onSidebarSelectRoom = useCallback((roomId: string) => { sidebarActions.current.selectRoom(roomId) }, [])
+  const onSidebarRoomRename = useCallback((roomId: string, name: string) => sidebarActions.current.renameRoomById(roomId, name), [])
+  const onSidebarRoomDelete = useCallback((roomId: string) => sidebarActions.current.deleteRoomById(roomId), [])
+  const onSidebarRoomStop = useCallback((roomId: string) => sidebarActions.current.stopRoomById(roomId), [])
   const onSidebarBotAction = useCallback((bot: Bot, action: BotAction) => sidebarActions.current.botAction(bot, action), [])
   const onSidebarNewBot = useCallback(() => { setNewBotOpen(true); setMobileOpen(false) }, [])
   const onSidebarNewRoom = useCallback(() => { setNewRoomOpen(true); setMobileOpen(false) }, [])
@@ -1827,6 +1871,11 @@ export default function App() {
         onCloseMobile={onSidebarCloseMobile}
         onSelect={onSidebarSelect}
         onSelectRoom={onSidebarSelectRoom}
+        canRoomRename={DEMO || roomCanRename(roomCapabilities)}
+        canRoomDisband={DEMO || roomCanDisband(roomCapabilities)}
+        onRoomRename={onSidebarRoomRename}
+        onRoomDelete={onSidebarRoomDelete}
+        onRoomStop={onSidebarRoomStop}
         onNewBot={onSidebarNewBot}
         onNewRoom={onSidebarNewRoom}
         onOpenSettings={onSidebarSettings}

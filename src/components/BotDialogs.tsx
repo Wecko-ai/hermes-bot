@@ -8,7 +8,7 @@ import './BotDialogs.css'
 /** Longest display name accepted: the roster row and the chat header stay readable. */
 const MAX_NAME = 64
 
-function BotSheet({ title, icon, danger, busy, children, onCancel, onSubmit }: {
+export function BotSheet({ title, icon, danger, busy, children, onCancel, onSubmit }: {
   title: string
   icon: ReactNode
   danger?: boolean

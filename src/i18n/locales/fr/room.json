@@ -53,6 +53,37 @@
     "logStalled": "Le journal du salon s’est arrêté avant le dernier événement.",
     "notAdmitted": "Hermes n’a pas publié le message. Modifie-le ou réessaie.",
     "stopFailed": "Impossible d’arrêter le salon.",
-    "roomCreated": "Salon créé. Aucun bot ne se lance avant ton premier message."
+    "roomCreated": "Salon créé. Aucun bot ne se lance avant ton premier message.",
+    "menu": {
+      "label": "Actions pour {{name}}",
+      "open": "Ouvrir",
+      "rename": "Renommer le salon",
+      "stop": "Arrêter le salon",
+      "copyId": "Copier l’ID du salon",
+      "copied": "ID du salon copié",
+      "copyFailed": "Impossible de copier l’ID",
+      "delete": "Supprimer le salon",
+      "renameTitle": "Renommer {{name}}",
+      "renameLabel": "Nom du salon",
+      "renameHint": "Tous les membres voient le nouveau nom. L’historique du salon ne change pas.",
+      "deleteTitle": "Supprimer {{name}} ?",
+      "deleteBody_one": "Le salon se termine pour son {{count}} membre. Il disparaît de la liste et ne peut pas être rouvert : Hermes retire son ID pour de bon.",
+      "deleteBody_other": "Le salon se termine pour ses {{count}} membres. Il disparaît de la liste et ne peut pas être rouvert : Hermes retire son ID pour de bon.",
+      "deleteWorking": "Des bots y travaillent en ce moment : Hermes arrête d’abord ce travail.",
+      "deleteHistory": "Hermes garde le journal du salon 90 jours au plus (moins s’il a besoin de la place), puis l’efface.",
+      "deleteBots": "Les bots eux-mêmes, leurs propres conversations et leurs profils ne sont pas touchés.",
+      "deleteSubmit": "Supprimer le salon",
+      "deleting": "Suppression…",
+      "deleted": "Salon supprimé.",
+      "errors": {
+        "unsupported": "Ce Hermes ne sait pas faire ça (méthode absente). Mets Hermes à jour, puis réessaie.",
+        "retry": "Hermes termine encore le salon. Réessaie dans un instant.",
+        "peer": "Un membre n’a pas pu être joint, donc Hermes n’a pas supprimé le salon. Réessaie quand il sera disponible.",
+        "otherGateway": "Ce salon est géré par une autre gateway Hermes.",
+        "stopPending": "Hermes n’a pas encore pu arrêter le travail du salon. Réessaie dans un instant.",
+        "failed": "Hermes a refusé le changement.",
+        "offline": "Hermes ne répond pas. Vérifie la connexion, puis réessaie."
+      }
+    }
   }
 }

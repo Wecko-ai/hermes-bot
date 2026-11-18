@@ -53,6 +53,37 @@
     "logStalled": "The room log stopped before the latest event.",
     "notAdmitted": "Hermes did not post the message. Edit it or try again.",
     "stopFailed": "The room could not be stopped.",
-    "roomCreated": "Room created. No bot runs until you send a message."
+    "roomCreated": "Room created. No bot runs until you send a message.",
+    "menu": {
+      "label": "Actions for {{name}}",
+      "open": "Open",
+      "rename": "Rename room",
+      "stop": "Stop the room",
+      "copyId": "Copy room ID",
+      "copied": "Room ID copied",
+      "copyFailed": "Could not copy the ID",
+      "delete": "Delete room",
+      "renameTitle": "Rename {{name}}",
+      "renameLabel": "Room name",
+      "renameHint": "Every member sees the new name. The room history is not changed.",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteBody_one": "This ends the room for its {{count}} member. It disappears from the list and cannot be reopened: Hermes retires its ID for good.",
+      "deleteBody_other": "This ends the room for all {{count}} members. It disappears from the list and cannot be reopened: Hermes retires its ID for good.",
+      "deleteWorking": "Bots are working in it now: Hermes stops that work first.",
+      "deleteHistory": "Hermes keeps the room's log for up to 90 days (sooner if it needs the space), then erases it.",
+      "deleteBots": "The bots themselves, their own conversations and their profiles are not touched.",
+      "deleteSubmit": "Delete room",
+      "deleting": "Deleting…",
+      "deleted": "Room deleted.",
+      "errors": {
+        "unsupported": "This Hermes cannot do that (method missing). Update Hermes, then retry.",
+        "retry": "Hermes is still ending the room. Retry in a moment.",
+        "peer": "A member could not be reached, so Hermes did not delete the room. Retry when it is available.",
+        "otherGateway": "This room is managed by another Hermes gateway.",
+        "stopPending": "Hermes could not stop the room's work yet. Retry in a moment.",
+        "failed": "Hermes refused the change.",
+        "offline": "Hermes does not answer. Check the connection, then retry."
+      }
+    }
   }
 }

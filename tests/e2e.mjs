@@ -355,6 +355,11 @@ const hostedRooms = []
 const roomCalls = []
 const roomSendCalls = []
 const roomStopCalls = []
+const roomRenameCalls = []
+const roomDisbandCalls = []
+// Disbanded ids stay tombstoned: a repeated disband answers idempotently, any other call finds nothing.
+const disbandedRooms = new Map()
+const lostReplies = new Set()
 
 function roomById(roomId) {
   const room = hostedRooms.find((item) => item.room_id === roomId)
@@ -498,7 +503,7 @@ wss.on('connection', (socket) => {
     if (frame.method.startsWith('groups.')) {
       roomCalls.push({ method: frame.method, params: structuredClone(frame.params) })
       if (frame.method === 'groups.capabilities') {
-        return reply({ protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'test', room_link: { enabled: false }, features: [], methods: ['groups.capabilities', 'groups.list', 'groups.state', 'groups.log', 'groups.create', 'groups.send', 'groups.stop'], max_log_limit: 100, seatable_profiles: ['nova', 'orion', 'atlas'] })
+        return reply({ protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'test', room_link: { enabled: false }, features: ['idempotent_send', 'replayable_disband'], methods: ['groups.capabilities', 'groups.list', 'groups.state', 'groups.log', 'groups.create', 'groups.send', 'groups.stop', 'groups.rename', 'groups.disband'], max_log_limit: 100, seatable_profiles: ['nova', 'orion', 'atlas'] })
       }
       if (frame.method === 'groups.list') {
         const offset = frame.params.offset || 0
@@ -512,7 +517,34 @@ wss.on('connection', (socket) => {
         hostedRooms.unshift(room)
         return reply({ room: publicRoom(room) })
       }
+      if (frame.method === 'groups.disband') {
+        roomDisbandCalls.push(structuredClone(frame.params))
+        const tombstone = disbandedRooms.get(frame.params.room_id)
+        if (tombstone) return reply({ tombstone: { room_id: frame.params.room_id, disbanded_at: tombstone, idempotent: true } })
+        // A member that cannot be reached: nothing is disbanded, the answer says why.
+        if (lostReplies.delete('peer_unreachable')) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4113, message: 'The member could not be reached; retry Disband when it is available.', data: { reason: 'peer_unreachable' } } })
+        const target = roomById(frame.params.room_id)
+        target.timers.forEach(clearTimeout)
+        hostedRooms.splice(hostedRooms.indexOf(target), 1)
+        const at = Math.floor(Date.now() / 1000)
+        disbandedRooms.set(target.room_id, at)
+        return reply({ tombstone: { room_id: target.room_id, disbanded_at: at, idempotent: false } })
+      }
+      if (disbandedRooms.has(frame.params.room_id)) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4114, message: 'hosted room not found', data: {} } })
       const room = roomById(frame.params.room_id)
+      if (frame.method === 'groups.rename') {
+        roomRenameCalls.push(structuredClone(frame.params))
+        const done = room.renames?.get(frame.params.event_id)
+        if (done !== undefined && done !== frame.params.name) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4117, message: 'event_id already exists with different immutable content', data: {} } })
+        room.renames ||= new Map()
+        room.renames.set(frame.params.event_id, frame.params.name)
+        room.name = frame.params.name
+        room.revision += 1
+        pushRoomEvent(room, 'room.renamed', { kind: 'system', id: 'room-control' }, { name: frame.params.name })
+        // The write landed but the answer is lost: only a retry with the same event_id is safe.
+        if (frame.params.name === 'Nom perdu' && !lostReplies.has('rename-lost')) { lostReplies.add('rename-lost'); return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 5117, message: 'reply_lost', data: {} } }) }
+        return reply({ room: publicRoom(room) })
+      }
       if (frame.method === 'groups.state') return reply(roomState(room))
       if (frame.method === 'groups.log') {
         const since = frame.params.since_seq || 0
@@ -534,7 +566,9 @@ wss.on('connection', (socket) => {
         room.threadId = frame.params.payload.thread_id
         const event = pushRoomEvent(room, 'message.user', { kind: 'user', id: 'desktop' }, { text: content, thread_id: room.threadId, attachments: [] })
         room.sent.set(eventId, event)
-        scheduleRoomReplies(room)
+        // This one keeps a member working until Stop, so the menu can offer Stop without racing the replies.
+        if (content === 'Menu salon') room.activity = [{ member_id: room.members[0].member_id, status: 'running', round_index: 0, thread_id: room.threadId, started_at: Math.floor(Date.now() / 1000) }]
+        else scheduleRoomReplies(room)
         return reply({ event, client_event_id: eventId, accepted: true, driver_started: true })
       }
       if (frame.method === 'groups.stop') {
@@ -1156,6 +1190,97 @@ try {
   await roomPanel.locator('.room-notice.is-stopped').waitFor({ timeout: 5_000 })
   if (roomStopCalls.length !== 1 || !roomStopCalls[0].cancel_id) throw new Error('Stop du salon non reçu.')
   if (promptCalls !== promptsBeforeRoom) throw new Error('Le salon est passé par prompt.submit au lieu de groups.send.')
+
+  // Right-click on a room: its own menu, same keyboard behavior as the bot menu.
+  const roomRow = page.locator(`[data-room="${roomId}"]`)
+  const roomMenu = page.locator('.bot-menu')
+  const roomItem = (name) => roomMenu.getByRole('menuitem', { name, exact: true })
+  const openRoomMenu = async () => {
+    await roomRow.click({ button: 'right' })
+    await roomMenu.waitFor({ timeout: 3_000 })
+    await page.waitForFunction(() => document.activeElement?.closest('.bot-menu'), null, { timeout: 2_000 })
+  }
+  await openRoomMenu()
+  if (await roomMenu.getAttribute('aria-label') !== 'Actions pour Équipe produit') throw new Error(`Nom du menu du salon : ${await roomMenu.getAttribute('aria-label')}`)
+  const roomMenuLabels = (await roomMenu.locator('[role^="menuitem"]').allTextContents()).join(' | ')
+  if (roomMenuLabels !== 'Ouvrir | Renommer le salon | Copier l’ID du salon | Supprimer le salon') throw new Error(`Menu du salon au repos : ${roomMenuLabels}`)
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}room-menu.png` })
+  await page.keyboard.press('ArrowUp')
+  if (await page.evaluate(() => document.activeElement?.textContent) !== 'Supprimer le salon') throw new Error('Les flèches du menu du salon ne bouclent pas.')
+  await page.keyboard.press('Escape')
+  await roomMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  await page.waitForFunction((id) => document.activeElement?.getAttribute('data-room') === id, roomId, { timeout: 2_000 })
+  await openRoomMenu()
+  await page.locator('.sidebar-filter-row > span').first().click()
+  await roomMenu.waitFor({ state: 'detached', timeout: 2_000 })
+  // Copy the room ID.
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `${E2E_APP_ORIGIN}` })
+  await openRoomMenu()
+  await roomItem('Copier l’ID du salon').click()
+  await roomMenu.getByRole('menuitem', { name: 'ID du salon copié' }).waitFor({ timeout: 2_000 })
+  if (await page.evaluate(() => navigator.clipboard.readText()) !== roomId) throw new Error('L’ID du salon copié n’est pas celui du salon.')
+  await roomMenu.waitFor({ state: 'detached', timeout: 3_000 })
+  // Stop is offered only while the room works, and goes through groups.stop.
+  await roomBox.fill('Menu salon')
+  await roomBox.press('Enter')
+  await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
+  await openRoomMenu()
+  const stopsBeforeMenu = roomStopCalls.length
+  await roomItem('Arrêter le salon').click()
+  await roomPanel.locator('.room-notice.is-stopped').nth(1).waitFor({ timeout: 5_000 })
+  if (roomStopCalls.length !== stopsBeforeMenu + 1) throw new Error('Arrêter par le menu n’a pas appelé groups.stop.')
+  // Rename: a lost answer is retried with the same event_id and the same name.
+  await openRoomMenu()
+  await roomItem('Renommer le salon').click()
+  const renameRoomDialog = page.getByRole('dialog', { name: 'Renommer Équipe produit' })
+  await renameRoomDialog.getByRole('textbox', { name: 'Nom du salon' }).fill('Nom perdu')
+  await renameRoomDialog.getByRole('button', { name: 'Renommer', exact: true }).click()
+  await renameRoomDialog.getByRole('alert').waitFor({ timeout: 3_000 })
+  await renameRoomDialog.getByRole('button', { name: 'Renommer', exact: true }).click()
+  await renameRoomDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  if (roomRenameCalls.length !== 2 || roomRenameCalls[0].event_id !== roomRenameCalls[1].event_id || roomRenameCalls[1].name !== 'Nom perdu' || roomRenameCalls[1].room_id !== roomId || roomRenameCalls[1].profile !== 'default') throw new Error(`Renommage du salon : ${JSON.stringify(roomRenameCalls)}`)
+  await roomRow.locator('.bot-row-name').getByText('Nom perdu', { exact: true }).waitFor({ timeout: 3_000 })
+  await roomPanel.locator('h1').getByText('Nom perdu').waitFor({ timeout: 3_000 })
+  // Esc closes the rename dialog without writing.
+  await openRoomMenu()
+  await roomItem('Renommer le salon').click()
+  await page.getByRole('dialog', { name: 'Renommer Nom perdu' }).waitFor({ timeout: 3_000 })
+  await page.keyboard.press('Escape')
+  await page.getByRole('dialog', { name: 'Renommer Nom perdu' }).waitFor({ state: 'detached', timeout: 3_000 })
+  if (roomRenameCalls.length !== 2) throw new Error('Échap a écrit un renommage.')
+  // Delete: the dialog tells what Hermes does; Cancel keeps the room.
+  await openRoomMenu()
+  await roomItem('Supprimer le salon').click()
+  const deleteRoomDialog = page.getByRole('alertdialog', { name: 'Supprimer Nom perdu ?' })
+  await deleteRoomDialog.waitFor({ timeout: 3_000 })
+  const deleteText = await deleteRoomDialog.innerText()
+  for (const phrase of ['ne peut pas être rouvert', '90 jours', 'ne sont pas touchés']) if (!deleteText.includes(phrase)) throw new Error(`Le texte de suppression ne dit pas « ${phrase} » : ${deleteText}`)
+  await delay(300)
+  await page.screenshot({ path: `${SCREENSHOTS}room-delete.png` })
+  await deleteRoomDialog.getByRole('button', { name: 'Annuler' }).click()
+  await deleteRoomDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  if (roomDisbandCalls.length || await roomRow.count() !== 1) throw new Error('Annuler a supprimé le salon.')
+  // Confirm: the first attempt is refused (member unreachable), the retry keeps the same cancel_id and succeeds.
+  lostReplies.add('peer_unreachable')
+  await openRoomMenu()
+  await roomItem('Supprimer le salon').click()
+  await deleteRoomDialog.getByRole('button', { name: 'Supprimer le salon' }).click()
+  await deleteRoomDialog.getByRole('alert').getByText('Un membre n’a pas pu être joint').waitFor({ timeout: 3_000 })
+  if (await roomRow.count() !== 1) throw new Error('Le salon a disparu après un refus de Hermes.')
+  await deleteRoomDialog.getByRole('button', { name: 'Supprimer le salon' }).click()
+  await deleteRoomDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  await roomRow.waitFor({ state: 'detached', timeout: 3_000 })
+  await roomPanel.waitFor({ state: 'detached', timeout: 3_000 })
+  if (roomDisbandCalls.length !== 2 || roomDisbandCalls[0].cancel_id !== roomDisbandCalls[1].cancel_id || !roomDisbandCalls[0].cancel_id || roomDisbandCalls[1].room_id !== roomId || roomDisbandCalls[1].profile !== 'default') throw new Error(`Suppression du salon : ${JSON.stringify(roomDisbandCalls)}`)
+  // A read that follows the delete (list refresh) does not bring the room back, and nobody polls it any more.
+  const disbandedAt = roomCalls.findLastIndex((call) => call.method === 'groups.disband')
+  for (let waited = 0; !roomCalls.slice(disbandedAt + 1).some((call) => call.method === 'groups.list') && waited < 15_000; waited += 200) await delay(200)
+  if (!roomCalls.slice(disbandedAt + 1).some((call) => call.method === 'groups.list')) throw new Error('La liste des salons n’est pas relue après la suppression.')
+  const roomCallsAfterDelete = roomCalls.length
+  await delay(2_500)
+  if (await roomRow.count()) throw new Error('Le salon supprimé est revenu dans le roster.')
+  if (roomCalls.slice(roomCallsAfterDelete).some((call) => call.params.room_id === roomId)) throw new Error('Le salon supprimé est encore lu.')
   await page.locator('[data-bot=orion]').click()
   await page.getByRole('textbox', { name: 'Message à Orion' }).waitFor({ timeout: 5_000 })
   if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après un changement de bot.')

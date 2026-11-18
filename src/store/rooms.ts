@@ -34,6 +34,10 @@ interface RoomState {
   setSupport: (support: RoomSupport) => void
   selectRoom: (roomId: string) => void
   closeRoom: () => void
+  /** Drops a room that was deleted (or renamed away) from the list, its cache and its pending state. */
+  removeRoom: (roomId: string) => void
+  /** Applies a renamed room to the list and the cache at once. */
+  patchRoom: (room: Room) => void
   setRoomLoading: (roomId: string, loading: boolean) => void
   setRoomError: (roomId: string, error: string) => void
   applySnapshot: (roomId: string, snapshot: RoomSnapshot) => void
@@ -55,6 +59,25 @@ export const useRoomStore = create<RoomState>()((set) => ({
   setSupport: (support) => set({ support }),
   selectRoom: (selectedRoomId) => set({ selectedRoomId }),
   closeRoom: () => set({ selectedRoomId: '' }),
+  removeRoom: (roomId) => set((state) => {
+    const { [roomId]: _cache, ...cache } = state.cache
+    const { [roomId]: _pending, ...pendingSends } = state.pendingSends
+    const { [roomId]: _flight, ...sendFlights } = state.sendFlights
+    return {
+      rooms: state.rooms.filter((room) => room.room_id !== roomId),
+      selectedRoomId: state.selectedRoomId === roomId ? '' : state.selectedRoomId,
+      cache,
+      pendingSends,
+      sendFlights,
+    }
+  }),
+  patchRoom: (room) => set((state) => {
+    const cached = state.cache[room.room_id]
+    return {
+      rooms: state.rooms.map((item) => item.room_id === room.room_id ? { ...item, ...room, members: item.members } : item),
+      cache: cached ? { ...state.cache, [room.room_id]: { ...cached, room: { ...cached.room, ...room, members: cached.room.members } } } : state.cache,
+    }
+  }),
   setRoomLoading: (roomId, loading) => set((state) => {
     const cached = state.cache[roomId]
     const room = cached?.room || state.rooms.find((item) => item.room_id === roomId)
@@ -141,7 +164,39 @@ export function clearRoomCancel(roomId: string) {
   cancelIds.delete(roomId)
 }
 
+const renameIds = new Map<string, { name: string; eventId: string }>()
+const disbandIds = new Map<string, string>()
+
+/** A rename retries with one event id while the name stays the same; another name is a new event. */
+export function roomRenameEventId(roomId: string, name: string) {
+  const known = renameIds.get(roomId)
+  if (known && known.name === name) return known.eventId
+  const eventId = crypto.randomUUID()
+  renameIds.set(roomId, { name, eventId })
+  return eventId
+}
+
+export function clearRoomRename(roomId: string) {
+  renameIds.delete(roomId)
+}
+
+/** A disband retries with one cancel id until Hermes confirms the tombstone. */
+export function roomDisbandCancelId(roomId: string) {
+  let id = disbandIds.get(roomId)
+  if (!id) {
+    id = `disband-${crypto.randomUUID()}`
+    disbandIds.set(roomId, id)
+  }
+  return id
+}
+
+export function clearRoomDisband(roomId: string) {
+  disbandIds.delete(roomId)
+}
+
 export function resetRoomStore() {
   cancelIds.clear()
+  renameIds.clear()
+  disbandIds.clear()
   useRoomStore.setState({ rooms: [], capabilities: null, support: 'unknown', selectedRoomId: '', cache: {}, pendingSends: {}, sendFlights: {} })
 }

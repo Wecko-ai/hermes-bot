@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Room, RoomEvent, RoomSnapshot } from '../lib/rooms'
 import {
   clearRoomCancel,
+  clearRoomDisband,
+  clearRoomRename,
   resetRoomStore,
   roomCancelId,
+  roomDisbandCancelId,
+  roomRenameEventId,
   useRoomStore,
 } from './rooms'
 
@@ -155,5 +159,55 @@ describe('room store', () => {
     resetRoomStore()
     expect(roomCancelId('room-b')).not.toBe(other)
     expect(randomUUID).toHaveBeenCalledTimes(4)
+  })
+
+  it('removeRoom drops the room, its cache and pending state, and leaves the room view', () => {
+    const { applySnapshot, removeRoom, selectRoom, setPendingSend, setRooms, setSendFlight } = useRoomStore.getState()
+    const doomed = room('room-1')
+    setRooms([doomed, room('room-2')])
+    applySnapshot('room-1', snapshot(doomed, [event(1)]))
+    selectRoom('room-1')
+    setPendingSend('room-1', { eventId: 'e', threadId: 't', text: 'x' })
+    setSendFlight('room-1', true)
+    removeRoom('room-1')
+    const state = useRoomStore.getState()
+    expect(state.rooms.map((item) => item.room_id)).toEqual(['room-2'])
+    expect(state.cache['room-1']).toBeUndefined()
+    expect(state.pendingSends['room-1']).toBeUndefined()
+    expect(state.sendFlights['room-1']).toBeUndefined()
+    expect(state.selectedRoomId).toBe('')
+  })
+
+  it('removeRoom keeps another open room open', () => {
+    const { removeRoom, selectRoom, setRooms } = useRoomStore.getState()
+    setRooms([room('room-1'), room('room-2')])
+    selectRoom('room-2')
+    removeRoom('room-1')
+    expect(useRoomStore.getState().selectedRoomId).toBe('room-2')
+  })
+
+  it('patchRoom applies a new name to the list and the cache and keeps the members', () => {
+    const { applySnapshot, patchRoom, setRooms } = useRoomStore.getState()
+    const member = { member_id: 'orion', profile: 'orion', handle: 'orion' }
+    const original = room('room-1', { members: [member] })
+    setRooms([original])
+    applySnapshot('room-1', snapshot(original, [event(1)]))
+    patchRoom(room('room-1', { name: 'Renamed', members: [], updated_at: 9 }))
+    const state = useRoomStore.getState()
+    expect(state.rooms[0]).toMatchObject({ name: 'Renamed', updated_at: 9, members: [member] })
+    expect(state.cache['room-1'].room).toMatchObject({ name: 'Renamed', members: [member] })
+  })
+
+  it('keeps one rename event id per name and one disband cancel id until cleared', () => {
+    const first = roomRenameEventId('room-1', 'A')
+    expect(roomRenameEventId('room-1', 'A')).toBe(first)
+    expect(roomRenameEventId('room-1', 'B')).not.toBe(first)
+    clearRoomRename('room-1')
+    expect(roomRenameEventId('room-1', 'B')).toBeTruthy()
+    const cancel = roomDisbandCancelId('room-1')
+    expect(roomDisbandCancelId('room-1')).toBe(cancel)
+    expect(roomDisbandCancelId('room-2')).not.toBe(cancel)
+    clearRoomDisband('room-1')
+    expect(roomDisbandCancelId('room-1')).not.toBe(cancel)
   })
 })

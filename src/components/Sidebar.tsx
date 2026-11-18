@@ -4,6 +4,8 @@ import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, 
 import type { Bot } from '../types'
 import type { Room } from '../lib/rooms'
 import { BotContextMenu } from './BotContextMenu'
+import { RoomContextMenu } from './RoomContextMenu'
+import { DeleteRoomDialog, RenameRoomDialog } from './RoomDialogs'
 import { DeleteBotDialog, RenameBotDialog } from './BotDialogs'
 import { avatarColor, statusLabel } from './BotAvatar'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
@@ -43,6 +45,13 @@ interface SidebarProps {
   onCloseMobile: () => void
   onSelect: (bot: Bot) => void
   onSelectRoom: (roomId: string) => void
+  /** Which room writes the gateway offers (from `groups.capabilities`). */
+  canRoomRename: boolean
+  canRoomDisband: boolean
+  /** Room menu writes; reject with an `Error` whose message is shown in the dialog or as a notice. */
+  onRoomRename: (roomId: string, name: string) => Promise<void>
+  onRoomDelete: (roomId: string) => Promise<void>
+  onRoomStop: (roomId: string) => Promise<void>
   /** Opens the new bot dialog. */
   onNewBot: () => void
   onNewRoom: () => void
@@ -54,7 +63,7 @@ interface SidebarProps {
   onNotice: (message: string) => void
 }
 
-export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const roomCache = useRoomStore((state) => state.cache)
@@ -121,6 +130,32 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
   }, [])
   const runMenuAction = (bot: Bot, action: BotAction) => {
     onBotAction(bot, action).catch((error: unknown) => onNotice(botActionError(error)))
+  }
+
+  // Right-click menu of a room, with its rename and delete dialogs. Kept by id: the room objects change with every read.
+  const [roomMenu, setRoomMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null)
+  const [roomDialog, setRoomDialog] = useState<{ kind: 'rename' | 'delete'; id: string } | null>(null)
+  const menuRoom = roomMenu ? rooms.find((room) => room.room_id === roomMenu.id) : undefined
+  const dialogRoom = roomDialog ? rooms.find((room) => room.room_id === roomDialog.id) : undefined
+  // A room that is gone (deleted here or elsewhere) takes its menu and dialog with it.
+  useEffect(() => { if (roomMenu && !menuRoom) setRoomMenu(null) }, [roomMenu, menuRoom])
+  useEffect(() => { if (roomDialog && !dialogRoom) setRoomDialog(null) }, [roomDialog, dialogRoom])
+  const openRoomMenu = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>, room: Room, keyboard = false) => {
+    event.preventDefault()
+    const row = event.currentTarget.getBoundingClientRect()
+    const pointer = event.nativeEvent instanceof MouseEvent ? event.nativeEvent : null
+    setRoomMenu({ id: room.room_id, at: contextMenuPoint(row, pointer?.clientX ?? 0, pointer?.clientY ?? 0, keyboard) })
+  }
+  const roomMenuId = useRef('')
+  roomMenuId.current = roomMenu?.id ?? ''
+  const closeRoomMenu = useCallback((restoreFocus: boolean) => {
+    const id = roomMenuId.current
+    setRoomMenu(null)
+    if (id && restoreFocus) setTimeout(() => listRef.current?.querySelector<HTMLElement>(`[data-room="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }), 0)
+  }, [])
+  const runRoomAction = (room: Room, action: 'open' | 'stop') => {
+    if (action === 'open') onSelectRoom(room.room_id)
+    else onRoomStop(room.room_id).catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
   }
 
   const unread = bots.reduce((total, bot) => total + bot.unread, 0)
@@ -212,6 +247,10 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                   key={room.room_id}
                   data-room={room.room_id}
                   onClick={() => onSelectRoom(room.room_id)}
+                  onContextMenu={(event) => openRoomMenu(event, room)}
+                  onKeyDown={(event) => { if (isContextMenuKey(event.key, event.shiftKey)) openRoomMenu(event, room, true) }}
+                  aria-haspopup="menu"
+                  aria-expanded={roomMenu?.id === room.room_id}
                   aria-current={selectedRoomId === room.room_id ? 'page' : undefined}
                 >
                   <span className="room-row-avatars" aria-hidden="true">
@@ -316,6 +355,22 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
           onClose={closeMenu}
         />
       )}
+      {roomMenu && menuRoom && (
+        <RoomContextMenu
+          room={menuRoom}
+          at={roomMenu.at}
+          working={Boolean(roomWorking[menuRoom.room_id])}
+          canRename={canRoomRename}
+          canDisband={canRoomDisband}
+          canManage={canManage}
+          onAction={(action) => runRoomAction(menuRoom, action)}
+          onRename={() => setRoomDialog({ kind: 'rename', id: menuRoom.room_id })}
+          onDelete={() => setRoomDialog({ kind: 'delete', id: menuRoom.room_id })}
+          onClose={closeRoomMenu}
+        />
+      )}
+      {roomDialog?.kind === 'rename' && dialogRoom && <RenameRoomDialog room={dialogRoom} onRename={(name) => onRoomRename(dialogRoom.room_id, name)} onClose={() => setRoomDialog(null)} />}
+      {roomDialog?.kind === 'delete' && dialogRoom && <DeleteRoomDialog room={dialogRoom} working={Boolean(roomWorking[dialogRoom.room_id])} onDelete={() => onRoomDelete(dialogRoom.room_id)} onClose={() => setRoomDialog(null)} />}
       {dialog?.kind === 'rename' && dialogBot && <RenameBotDialog bot={dialogBot} onRename={(title) => onBotAction(dialogBot, { type: 'rename', title })} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'delete' && dialogBot && <DeleteBotDialog bot={dialogBot} onDelete={() => onBotAction(dialogBot, { type: 'delete' })} onClose={() => setDialog(null)} />}
     </>

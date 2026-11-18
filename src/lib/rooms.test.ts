@@ -3,10 +3,15 @@ import type { Bot } from '../types'
 import { HermesRpcError, type HermesClient } from './hermes'
 import {
   createRoom,
+  disbandRoom,
   listRooms,
   mergeRoomEvents,
   planRoomSend,
   readRoom,
+  renameRoom,
+  roomActionErrorKey,
+  roomCanDisband,
+  roomCanRename,
   ROOM_LOG_STALLED,
   roomMembers,
   roomPreview,
@@ -369,5 +374,39 @@ describe('room gateway requests', () => {
       room_id: 'room-1',
       cancel_id: 'cancel-1',
     })
+  })
+
+  const capabilities = (methods: string[], features: string[] = []) => ({ protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'g', features, methods, max_log_limit: 100 })
+
+  it('offers rename on the method alone and delete only with the replayable disband feature', () => {
+    expect(roomCanRename(null)).toBe(false)
+    expect(roomCanRename(capabilities(['groups.rename']))).toBe(true)
+    expect(roomCanDisband(null)).toBe(false)
+    expect(roomCanDisband(capabilities(['groups.disband']))).toBe(false)
+    expect(roomCanDisband(capabilities(['groups.disband'], ['replayable_disband']))).toBe(true)
+    expect(roomCanDisband(capabilities([], ['replayable_disband']))).toBe(false)
+  })
+
+  it('renameRoom sends the event id and the trimmed name under the default profile', async () => {
+    const request = vi.fn().mockResolvedValue({ room: { room_id: 'room-1', name: 'New' } })
+    await expect(renameRoom(clientWith(request), 'room-1', 'event-1', '  New ')).resolves.toMatchObject({ name: 'New' })
+    expect(request).toHaveBeenCalledExactlyOnceWith('groups.rename', { profile: 'default', room_id: 'room-1', event_id: 'event-1', name: 'New' })
+  })
+
+  it('disbandRoom sends one stable cancel id and returns the tombstone', async () => {
+    const request = vi.fn().mockResolvedValue({ tombstone: { room_id: 'room-1', disbanded_at: 5, idempotent: true } })
+    await expect(disbandRoom(clientWith(request), 'room-1', 'disband-1')).resolves.toMatchObject({ tombstone: { idempotent: true } })
+    expect(request).toHaveBeenCalledExactlyOnceWith('groups.disband', { profile: 'default', room_id: 'room-1', cancel_id: 'disband-1' })
+  })
+
+  it('maps Hermes refusal reasons to message keys', () => {
+    const refusal = (reason: string) => new HermesRpcError('x', { reason }, 4113)
+    expect(roomActionErrorKey(new HermesRpcError('x', {}, -32601))).toBe('unsupported')
+    expect(roomActionErrorKey(refusal('room_disbanding_retry'))).toBe('retry')
+    expect(roomActionErrorKey(refusal('peer_unreachable'))).toBe('peer')
+    expect(roomActionErrorKey(refusal('authority_conflict'))).toBe('otherGateway')
+    expect(roomActionErrorKey(refusal('room_stop_pending'))).toBe('stopPending')
+    expect(roomActionErrorKey(new HermesRpcError('x', {}, 5114))).toBe('failed')
+    expect(roomActionErrorKey(new Error('socket closed'))).toBe('offline')
   })
 })
