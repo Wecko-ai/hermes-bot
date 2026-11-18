@@ -209,6 +209,8 @@
     "empty": "No credentials yet. A bot that needs to sign in will ask you in a window.",
     "edit": "Edit",
     "remove": "Remove",
+    "shareCredentials": "Share credentials between all bots",
+    "shareCredentialsHint": "A login given to one bot serves them all: before asking you for a login, each bot finds the ones already stored. Off, each credential stays reserved for the bots chosen for it.",
     "autoSignup": "Create accounts without asking me",
     "autoSignupHint": "When a bot needs to create an account, the vault generates the password, fills it in and stores it without a card; you are told afterwards. Requests for credentials and codes keep their card. Never in a scheduled task.",
     "settingsFailed": "Setting not saved."

@@ -209,6 +209,8 @@
     "empty": "Aucun identifiant pour l’instant. Un bot qui doit se connecter te le demandera dans une fenêtre.",
     "edit": "Modifier",
     "remove": "Retirer",
+    "shareCredentials": "Partager les identifiants entre tous les bots",
+    "shareCredentialsHint": "Un identifiant donné à un bot sert à tous : avant de te demander un login, chaque bot trouve ceux déjà rangés. Coupé, chaque identifiant reste réservé aux bots choisis pour lui.",
     "autoSignup": "Créer les comptes sans me demander",
     "autoSignupHint": "Quand un bot doit créer un compte, le coffre génère le mot de passe, le remplit et le range sans carte ; tu es prévenu ensuite. Les demandes d’identifiants et de codes gardent leur carte. Jamais dans une tâche planifiée.",
     "settingsFailed": "Réglage non enregistré."

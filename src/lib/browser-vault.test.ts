@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AutoSignupSetting } from '../components/VaultTab'
+import { AutoSignupSetting, ShareCredentialsSetting } from '../components/VaultTab'
 import { getVaultSettings, saveVaultSettings, takeUnseenNotices, type BrowserVaultNotice } from './browser-vault'
 
 const notice = (id: string): BrowserVaultNotice => ({
@@ -28,13 +28,21 @@ describe('coffre — réglage « Créer les comptes sans me demander »', () => 
     expect(on).not.toContain('disabled=""')
   })
 
+  it('affiche le partage des identifiants, coupé et verrouillé tant que le coffre n’a pas répondu', () => {
+    const html = renderToStaticMarkup(createElement(ShareCredentialsSetting, { checked: false, disabled: true, onChange: () => undefined }))
+    expect(html).toContain('Partager les identifiants entre tous les bots')
+    expect(html).toContain('Un identifiant donné à un bot sert à tous')
+    expect(html).toContain('disabled=""')
+    expect(renderToStaticMarkup(createElement(ShareCredentialsSetting, { checked: true, disabled: false, onChange: () => undefined }))).toContain('checked=""')
+  })
+
   it('s’enregistre auprès du coffre et rend ce que le coffre a gardé', async () => {
     const fetch = vi.fn(async (_path: string, init?: RequestInit) => new Response(JSON.stringify({ settings: { autoSignup: init?.method === 'POST' } }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
-    expect(await getVaultSettings()).toEqual({ autoSignup: false })
+    expect(await getVaultSettings()).toEqual({ autoSignup: false, shareCredentials: false })
     expect(fetch.mock.calls[0][0]).toBe('/api/browser-vault/settings')
     expect(fetch.mock.calls[0][1]?.method).toBe('GET')
-    expect(await saveVaultSettings({ autoSignup: true })).toEqual({ autoSignup: true })
+    expect(await saveVaultSettings({ autoSignup: true })).toEqual({ autoSignup: true, shareCredentials: false })
     expect(fetch.mock.calls[1][0]).toBe('/api/browser-vault/settings')
     expect(fetch.mock.calls[1][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ autoSignup: true }) })
   })
@@ -45,8 +53,8 @@ describe('coffre — réglage « Créer les comptes sans me demander »', () => 
   })
 
   it('réponse inattendue du coffre : désactivé', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ settings: { autoSignup: 'true' } }), { status: 200 })))
-    expect(await getVaultSettings()).toEqual({ autoSignup: false })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ settings: { autoSignup: 'true', shareCredentials: 1 } }), { status: 200 })))
+    expect(await getVaultSettings()).toEqual({ autoSignup: false, shareCredentials: false })
   })
 })
 

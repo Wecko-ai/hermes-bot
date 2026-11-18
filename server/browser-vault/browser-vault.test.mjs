@@ -825,7 +825,7 @@ describe('coffre navigateur — création de compte', () => {
   it('réglage inactif (par défaut) : la carte comme avant, aucune notification', async () => {
     const { events, vault, call, pending, admin, close } = await setup()
     try {
-      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: false } })
+      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: false, shareCredentials: false } })
       const answer = call({ identifier: 'inscription@exemple.org' })
       const request = await pending()
       expect(request).toMatchObject({ kind: 'signup', bot: 'orion', origin: SITE, identifier: 'inscription@exemple.org' })
@@ -889,6 +889,33 @@ describe('coffre navigateur — création de compte', () => {
     }
   })
 
+  it('partage actif : un identifiant rangé pour un bot sert aux autres (list et fill), coupé il redevient réservé', async () => {
+    const settings = memorySettings({ autoSignup: true })
+    const { events, command, call, admin, lines, close } = await setup({ settings })
+    try {
+      expect((await call({ identifier: 'inscription@exemple.org' })).status).toBe(200)
+      const hidden = await command('list', { bot: 'vega' })
+      expect(JSON.parse(hidden.raw).entries).toEqual([])
+      expect(JSON.parse((await command('fill', { bot: 'vega' })).raw)).toEqual({ error: 'bot_not_allowed' })
+
+      expect(await admin('/admin/v1/settings', { shareCredentials: true })).toEqual({ status: 200, body: { settings: { autoSignup: true, shareCredentials: true } } })
+      expect(parsed(lines)).toContainEqual(expect.objectContaining({ action: 'admin_settings', result: 'share_credentials_on' }))
+      const shared = JSON.parse((await command('list', { bot: 'vega' })).raw)
+      expect(shared.entries).toEqual([expect.objectContaining({ origin: SITE, identifier: 'inscription@exemple.org' })])
+      // Metadata only: neither the password nor the bot list leaves the vault.
+      expect(JSON.stringify(shared)).not.toMatch(/password|bots/)
+      const filled = await command('fill', { bot: 'vega' })
+      expect(filled.status).toBe(200)
+      expect(JSON.parse(filled.raw)).toMatchObject({ status: 'filled', origin: SITE })
+      expect(events.filter((event) => event.fill)).toHaveLength(2)
+
+      expect((await admin('/admin/v1/settings', { shareCredentials: false })).status).toBe(200)
+      expect(JSON.parse((await command('fill', { bot: 'vega' })).raw)).toEqual({ error: 'bot_not_allowed' })
+    } finally {
+      await close()
+    }
+  })
+
   it('réglage actif : deux inscriptions simultanées sur un site, une seule rangée, l’autre entry_exists', async () => {
     const { events, vault, call, close } = await setup({ settings: memorySettings({ autoSignup: true }) })
     try {
@@ -931,8 +958,8 @@ describe('coffre navigateur — création de compte', () => {
       for (const body of [{ autoSignup: 'true' }, { autoSignup: 1 }, {}, { autoSignup: true, autre: true }]) {
         expect(await admin('/admin/v1/settings', body)).toEqual({ status: 400, body: { error: 'invalid_settings' } })
       }
-      expect(await admin('/admin/v1/settings', { autoSignup: true })).toEqual({ status: 200, body: { settings: { autoSignup: true } } })
-      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: true } })
+      expect(await admin('/admin/v1/settings', { autoSignup: true })).toEqual({ status: 200, body: { settings: { autoSignup: true, shareCredentials: false } } })
+      expect((await admin('/admin/v1/settings')).body).toEqual({ settings: { autoSignup: true, shareCredentials: false } })
       expect(parsed(lines)).toContainEqual(expect.objectContaining({ action: 'admin_settings', bot: 'hermesbot', result: 'auto_signup_on' }))
     } finally {
       await close()
@@ -1284,27 +1311,28 @@ describe('coffre navigateur — connexion fédérée, réponse au bot', () => {
 
 describe('coffre navigateur — fichier des réglages', () => {
   it('désactivé par défaut, booléen strict seulement', () => {
-    expect(parseSettings(undefined)).toEqual({ autoSignup: false })
-    expect(parseSettings({ autoSignup: 'true' })).toEqual({ autoSignup: false })
-    expect(parseSettings({ autoSignup: true, autre: 1 })).toEqual({ autoSignup: true })
+    expect(parseSettings(undefined)).toEqual({ autoSignup: false, shareCredentials: false })
+    expect(parseSettings({ autoSignup: 'true', shareCredentials: 1 })).toEqual({ autoSignup: false, shareCredentials: false })
+    expect(parseSettings({ autoSignup: true, shareCredentials: true, autre: 1 })).toEqual({ autoSignup: true, shareCredentials: true })
   })
 
   it('écrit en 0600, relu au démarrage suivant ; illisible, corrompu ou ouvert aux autres : désactivé', async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-vault-settings-'))
     const file = path.join(directory, 'HermesBot', 'browser-vault-settings.json')
     try {
-      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false, shareCredentials: false })
       await expect(fileSettings(file).set({ autoSignup: 'oui' })).rejects.toThrow('invalid_settings')
       expect(existsSync(file)).toBe(false)
-      expect(await fileSettings(file).set({ autoSignup: true })).toEqual({ autoSignup: true })
+      expect(await fileSettings(file).set({ autoSignup: true })).toEqual({ autoSignup: true, shareCredentials: false })
       expect(statSync(file).mode & 0o777).toBe(0o600)
-      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ autoSignup: true })
-      expect(fileSettings(file).get()).toEqual({ autoSignup: true })
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ autoSignup: true, shareCredentials: false })
+      expect(await fileSettings(file).set({ shareCredentials: true })).toEqual({ autoSignup: true, shareCredentials: true })
+      expect(fileSettings(file).get()).toEqual({ autoSignup: true, shareCredentials: true })
       chmodSync(file, 0o620)
-      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false, shareCredentials: false })
       chmodSync(file, 0o600)
       writeFileSync(file, '{pas du json')
-      expect(fileSettings(file).get()).toEqual({ autoSignup: false })
+      expect(fileSettings(file).get()).toEqual({ autoSignup: false, shareCredentials: false })
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

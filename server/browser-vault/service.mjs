@@ -95,6 +95,8 @@ export function createBrowserVault(options = {}) {
   const store = options.store ?? new KeychainStore()
   // Without a settings file, the defaults: every sign-up waits for the user's card.
   const settings = options.settings ?? memorySettings()
+  // "Share credentials between all bots" (Settings, Vault): a login given to one bot serves them all.
+  const sharing = () => settings.get().shareCredentials === true
   const requests = new BrowserVaultRequests()
   // One Chrome per bot team: one CDP client per origin, chosen by the bot making the request.
   const cdpClients = new Map()
@@ -156,8 +158,8 @@ export function createBrowserVault(options = {}) {
   async function command(action, body) {
     const bot = validateBot(body.bot)
     if (action === 'list') {
-      // A bot only sees the credentials it is allowed to use.
-      const entries = (await store.list(bot)).map(({ bots: _bots, ...entry }) => entry)
+      // A bot only sees the credentials it is allowed to use; with sharing on, all of them.
+      const entries = (await store.list(sharing() ? null : bot)).map(({ bots: _bots, ...entry }) => entry)
       audit(action, bot, null, 'ok')
       return { status: 'ok', entries }
     }
@@ -177,8 +179,8 @@ export function createBrowserVault(options = {}) {
       if (action === 'fill') {
         const known = await store.find(origin)
         if (!known) throw new BrowserVaultError('origin_not_found', 404)
-        // Each credential is reserved for the bots the user chose.
-        if (!botAllowed(known, bot)) throw new BrowserVaultError('bot_not_allowed', 403)
+        // Each credential is reserved for the bots the user chose, unless the user shares them all.
+        if (!sharing() && !botAllowed(known, bot)) throw new BrowserVaultError('bot_not_allowed', 403)
         const entry = await store.get(origin)
         const fields = await cdpFor(bot).fillCredentials(entry, targetId)
         audit(action, bot, origin, 'filled')
@@ -351,7 +353,9 @@ export function createBrowserVault(options = {}) {
     }
     if (pathname === '/admin/v1/settings') {
       const next = await settings.set(body)
-      audit('admin_settings', 'hermesbot', null, next.autoSignup ? 'auto_signup_on' : 'auto_signup_off')
+      // One word per changed setting (keys already checked by `settings.set`).
+      const words = { autoSignup: 'auto_signup', shareCredentials: 'share_credentials' }
+      audit('admin_settings', 'hermesbot', null, Object.keys(body).map((key) => `${words[key]}_${next[key] ? 'on' : 'off'}`).join(','))
       return { settings: next }
     }
     if (pathname === '/admin/v1/entries/remove') {

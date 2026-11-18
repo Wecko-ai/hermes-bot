@@ -6,13 +6,16 @@ import { BrowserVaultError } from './errors.mjs'
 /**
  * Vault settings chosen by the user in the app (Settings, Vault). Only the vault reads them, at each
  * bot command: the app never decides for the vault. Any doubt (missing, unreadable, foreign or
- * group-writable file, unknown value) gives the defaults: every sign-up waits for the user's card.
+ * group-writable file, unknown value) gives the defaults: every sign-up waits for the user's card,
+ * and each credential stays reserved for the bots chosen for it.
+ * - `autoSignup`: sign-ups go through without a card.
+ * - `shareCredentials`: every bot may list and fill every stored credential, whatever its bot list.
  */
-export const DEFAULT_SETTINGS = Object.freeze({ autoSignup: false })
+export const DEFAULT_SETTINGS = Object.freeze({ autoSignup: false, shareCredentials: false })
 
 /** Known keys only, strict booleans: anything else is the default. */
 export function parseSettings(value) {
-  return { autoSignup: value?.autoSignup === true }
+  return { autoSignup: value?.autoSignup === true, shareCredentials: value?.shareCredentials === true }
 }
 
 /** What the app sends: every key it changes must be a boolean, unknown keys are refused. */

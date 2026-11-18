@@ -32,7 +32,7 @@ node <path to HermesBot>/scripts/browser-vault.mjs <list|save|fill|code|signup> 
 
 ## Steps
 
-1. `list --bot <profile>`: the sites you are allowed to use (origin and username, never a password).
+1. `list --bot <profile>`: the sites you are allowed to use (origin and username, never a password). When the user shares credentials between all bots (Settings, Vault), it also lists those stored for other bots. Run it before asking the user for any login, even in the chat: never ask for the username or password of a site it lists (a Google sign-in is `https://accounts.google.com`).
 2. Open the login page in your tab and check `location.origin`.
 3. If the origin is listed: `fill --bot <profile> --target <targetId>`. Response `{"status":"filled","fields":["identifier","password"]}`. Then click the login button yourself.
 4. Otherwise: `save --bot <profile> --target <targetId>`. The user receives "<bot> needs your credentials" in HermesBot. The command waits up to 6 minutes.

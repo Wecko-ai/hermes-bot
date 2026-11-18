@@ -22,17 +22,28 @@ const hostOf = (origin: string) => {
 }
 
 /**
- * "Create accounts without asking": the vault keeps this setting and reads it itself at each sign-up.
- * Unknown (vault unreachable): shown off and locked.
+ * A vault setting ("Create accounts without asking", "Share credentials between all bots"): the vault
+ * keeps it and reads it itself at each bot command. Unknown (vault unreachable): shown off and locked.
  */
-export function AutoSignupSetting({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {
-  const { t } = useTranslation()
+function VaultSwitch({ className, label, hint, checked, disabled, onChange }: { className: string; label: string; hint: string; checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {
   return (
-    <label className="settings-row vault-auto-signup">
-      <span className="settings-row-copy"><strong>{t('vault.autoSignup')}</strong><span>{t('vault.autoSignupHint')}</span></span>
+    <label className={`settings-row ${className}`}>
+      <span className="settings-row-copy"><strong>{label}</strong><span>{hint}</span></span>
       <input className="settings-switch" type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
     </label>
   )
+}
+
+type SwitchProps = { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }
+
+export function AutoSignupSetting(props: SwitchProps) {
+  const { t } = useTranslation()
+  return <VaultSwitch className="vault-auto-signup" label={t('vault.autoSignup')} hint={t('vault.autoSignupHint')} {...props} />
+}
+
+export function ShareCredentialsSetting(props: SwitchProps) {
+  const { t } = useTranslation()
+  return <VaultSwitch className="vault-share" label={t('vault.shareCredentials')} hint={t('vault.shareCredentialsHint')} {...props} />
 }
 
 /**
@@ -63,15 +74,15 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
     getVaultSettings().then(setSettings).catch(() => setSettings(null))
   }, [])
 
-  const changeAutoSignup = async (autoSignup: boolean) => {
+  const changeSetting = async (key: keyof VaultSettings, value: boolean) => {
     if (settingsSaving || !settings) return
     // The switch moves at once; the vault's answer has the last word, a refusal puts it back.
     const previous = settings
-    setSettings({ ...settings, autoSignup })
+    setSettings({ ...settings, [key]: value })
     setSettingsSaving(true)
     setError('')
     try {
-      setSettings(await saveVaultSettings({ autoSignup }))
+      setSettings(await saveVaultSettings({ [key]: value }))
     } catch (reason) {
       setSettings(previous)
       setError(reason instanceof Error ? reason.message : t('vault.settingsFailed'))
@@ -124,14 +135,15 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
     }
   }
 
-  const botLabel = (entry: VaultEntry) => entry.bots.includes('*')
+  const botLabel = (entry: VaultEntry) => settings?.shareCredentials || entry.bots.includes('*')
     ? t('vault.allBots')
     : entry.bots.map((slug) => names.get(slug) || slug).join(', ')
 
   return (
     <>
       <p className="settings-note">{t('vault.note')}</p>
-      <AutoSignupSetting checked={settings?.autoSignup === true} disabled={!settings || settingsSaving} onChange={(checked) => void changeAutoSignup(checked)} />
+      <ShareCredentialsSetting checked={settings?.shareCredentials === true} disabled={!settings || settingsSaving} onChange={(checked) => void changeSetting('shareCredentials', checked)} />
+      <AutoSignupSetting checked={settings?.autoSignup === true} disabled={!settings || settingsSaving} onChange={(checked) => void changeSetting('autoSignup', checked)} />
       {error && <p className="settings-error" role="alert">{error}</p>}
       {!draft && (
         <div className="vault-tools">

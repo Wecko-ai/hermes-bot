@@ -144,9 +144,14 @@ export async function removeVaultEntry(origin: string) {
 export interface VaultSettings {
   /** Sign-ups go through without a card; the user is told afterwards. Off by default. */
   autoSignup: boolean
+  /** Every bot may list and fill every stored credential, whatever its bot list. Off by default. */
+  shareCredentials: boolean
 }
 
-const vaultSettings = (value: unknown): VaultSettings => ({ autoSignup: (value as Partial<VaultSettings> | null)?.autoSignup === true })
+const vaultSettings = (value: unknown): VaultSettings => {
+  const raw = value as Partial<VaultSettings> | null
+  return { autoSignup: raw?.autoSignup === true, shareCredentials: raw?.shareCredentials === true }
+}
 
 export async function getVaultSettings() {
   const result = await vaultRequest<{ settings?: VaultSettings }>('/api/browser-vault/settings')
