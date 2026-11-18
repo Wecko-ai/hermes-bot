@@ -27,6 +27,11 @@ describe('modes de travail', () => {
     for (const kept of ['emails', 'posts', 'messages to others', 'negations exact', 'irreversible actions']) expect(note).toContain(kept)
   })
 
+  it('donne une longueur et dit qu’elle passe avant le format habituel', () => {
+    const note = cavemanApiText('x', undefined, true)
+    for (const rule of ['1 to 3 short lines', 'overrides your usual reply length and format', 'Example:']) expect(note).toContain(rule)
+  })
+
   it('adapte le champ de saisie', () => {
     expect(modePlaceholder('brain', 'Nova')).toBe('Réfléchir avec Nova')
     expect(modePlaceholder('plan', 'Nova')).toBe('Préparer un plan avec Nova')

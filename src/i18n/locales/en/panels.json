@@ -116,7 +116,7 @@
     "showUsage": "Show context and speed",
     "showUsageHint": "Below the composer",
     "caveman": "Caveman mode",
-    "cavemanHint": "Bots answer you in few words, with the same facts. For the messages you send from here; what they write elsewhere stays normal.",
+    "cavemanHint": "Bots answer you in 1 to 3 lines: the result, then what you need to decide. For the messages you send from here; what they write elsewhere stays normal.",
     "guide": {
       "title": "Chat guide",
       "send": "Send the message",

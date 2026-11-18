@@ -28,11 +28,13 @@ export function modeApiText(text: string, mode: ChatMode) {
 }
 
 /**
- * Caveman mode (Settings > Conversations): the bot tells the user the same facts in fewer words.
+ * Caveman mode (Settings > Conversations): the bot answers in 1 to 3 short lines.
  * Like a work mode, it is an instruction read with the turn: the bot's profile is never changed.
  * It only covers what the bot says in the chat. What it writes elsewhere keeps its normal style.
+ * A loose "few words" was not enough: bots kept writing full status reports. The note gives a
+ * length, says it overrides the usual format, and shows an example.
  */
-const CAVEMAN_NOTE = '[HermesBot style: caveman. For this turn only, write to the user in few words: answer first, no greeting, filler, recap or closing offer. Keep facts, numbers, paths, commands and negations exact, in the user\'s language. Only your chat replies change: your work, files, code, emails, posts and messages to others stay normal. Use full sentences for warnings and irreversible actions.]'
+const CAVEMAN_NOTE = '[HermesBot style: caveman. For this turn only, the user switched on caveman mode in the app: it overrides your usual reply length and format. Reply in 1 to 3 short lines, under about 50 words: the result first, then only what the user must decide or do. Fragments are fine. No greeting, filler, recap, list of what you checked, headings or bullet lists (unless the user asked for steps or a list), and no closing offer. Example: "Video v2 started, 4 fixes in. Waiting for the render." Keep numbers, names, paths, commands and negations exact, in the user\'s language. Only your chat replies change: your work, files, code, emails, posts and messages to others stay normal. Use full sentences for warnings and irreversible actions.]'
 
 /** What the model reads with caveman mode on: the mode text if there is one, then the style note. */
 export function cavemanApiText(text: string, modeText: string | undefined, enabled: boolean) {
