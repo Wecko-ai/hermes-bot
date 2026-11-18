@@ -1170,8 +1170,9 @@ try {
   })
   const notificationsSent = () => page.evaluate(() => window.__notifications.map(({ title, body, tag }) => ({ title, body, tag })))
   // A finished-turn notification waits for the turn's user row (read from the history): give it a moment.
+  // Up to 8 s: a finished-turn notification first re-reads the turn's user row (slow on a CI runner).
   const notificationsSince = async (before, expected = 1) => {
-    for (let wait = 0; wait < 40 && (await notificationsSent()).length - before < expected; wait++) await page.waitForTimeout(50)
+    for (let wait = 0; wait < 160 && (await notificationsSent()).length - before < expected; wait++) await page.waitForTimeout(50)
     return (await notificationsSent()).slice(before)
   }
   const errors = []
