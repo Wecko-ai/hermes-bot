@@ -69,8 +69,10 @@ export interface VoiceSessionOptions {
   onEnd: () => void
   phrase: (key: VoicePhraseKey, language: SpokenLanguage) => string
   isOffline?: () => boolean
-  /** Silence that ends a tap-to-talk listen. */
-  pauseForMs?: number
+  /** Silence after the last words that ends a listen (never while the Talk button is held). */
+  endSilenceMs?: number
+  /** A listen in which nothing is said for this long is given up (tap, or hands-free without its own window). */
+  noSpeechMs?: number
   /** A press held longer than this is push-to-talk: the release ends the listen. */
   holdMs?: number
   /** Without any turn event for this long after the bot stopped, expected replies are dropped. */
@@ -114,7 +116,15 @@ export class VoiceSession {
   private echoRetries = 0
   /** What the voice said last, to recognize it if the microphone hears it back. */
   private recentSpoken: string[] = []
-  private followUpTimer: ReturnType<typeof setTimeout> | undefined
+  private endpointTimer: ReturnType<typeof setInterval> | undefined
+  /** The Talk button (or Enter) is held: the listen never ends by itself. */
+  private holding = false
+  /** The current press started while a listen was already running (hands-free). */
+  private pressedWhileListening = false
+  private listenStartedAt = 0
+  private lastWordsAt: number | null = null
+  /** Give up the current listen when nothing is said by then (from its start). */
+  private noSpeechWindowMs = 8_000
   private relistenTimer: ReturnType<typeof setTimeout> | undefined
   private voiceList: SpeechVoice[] = []
   /** Turn ends still expected, oldest first: `mine` is spoken, `foreign` is not. */
@@ -146,7 +156,9 @@ export class VoiceSession {
       isOffline: options.isOffline,
       onNotice: (notice) => this.onDictationNotice(notice),
       listenForMs: 60_000,
-      pauseForMs: options.pauseForMs ?? 1_600,
+      // The end of speech is decided here (see `checkEndpoint`), not by the engine: its pause counts from
+      // the start of the listen, so a short one cut people off before they started talking.
+      pauseForMs: 60_000,
       finalWaitMs: 800,
       now: this.now,
     })
@@ -174,12 +186,17 @@ export class VoiceSession {
   pressTalk() {
     if (this.disposed) return
     if (this.dictation.active) {
-      // A second tap while listening: that is all, send what was heard.
-      void this.dictation.stop()
+      // Already listening (hands-free): the press means "I'm talking". The release decides: held, it sends;
+      // a quick tap sends only if words were heard; otherwise the listen goes on.
+      this.holding = true
+      this.pressedWhileListening = true
+      this.pressedAt = this.now()
       return
     }
     if (this.spoken.size) this.stopSpeaking()
     this.pendingReply = null
+    this.holding = true
+    this.pressedWhileListening = false
     this.pressedAt = this.now()
     this.echoRetries = 0
     if (this.snapshot.standby) this.update({ standby: false })
@@ -219,9 +236,17 @@ export class VoiceSession {
   /** Talk button released: after a long press, the release ends the listen (push-to-talk). */
   releaseTalk() {
     const pressedAt = this.pressedAt
+    const whileListening = this.pressedWhileListening
     this.pressedAt = null
+    this.holding = false
+    this.pressedWhileListening = false
     if (pressedAt === null || !this.dictation.active) return
-    if (this.now() - pressedAt >= (this.options.holdMs ?? 450)) void this.dictation.stop()
+    const held = this.now() - pressedAt >= (this.options.holdMs ?? 450)
+    // Push-to-talk: the release sends. A tap: the silence after the words decides, or "send now" if
+    // the tap came while words were already heard.
+    if (held || (whileListening && this.heard.trim())) void this.dictation.stop()
+    // The silence clock starts at the release, not during the hold.
+    else if (this.lastWordsAt !== null) this.lastWordsAt = this.now()
   }
 
   /** Stops the voice now. The bot is told, with the next message, that its reply was cut short. */
@@ -243,7 +268,7 @@ export class VoiceSession {
     if (this.disposed) return
     this.disposed = true
     clearTimeout(this.staleTimer)
-    clearTimeout(this.followUpTimer)
+    clearInterval(this.endpointTimer)
     clearTimeout(this.relistenTimer)
     if (this.conversationOpen) this.options.conversation?.close()
     this.conversationOpen = false
@@ -323,6 +348,7 @@ export class VoiceSession {
   // ── Inside ─────────────────────────────────────────────────────────────────
 
   private onTranscript(text: string) {
+    if (text.trim() !== this.heard.trim()) this.lastWordsAt = this.now()
     this.heard = text
     this.update({ transcript: text })
   }
@@ -346,7 +372,7 @@ export class VoiceSession {
     this.pendingReply = null
     const auto = this.autoListening
     this.autoListening = false
-    clearTimeout(this.followUpTimer)
+    clearInterval(this.endpointTimer)
     if (!text) {
       // Nothing said: a reply that came in while listening is spoken now; hands-free waits for a press.
       if (pending) this.speak(pending.text, pending.maxSentences)
@@ -504,7 +530,7 @@ export class VoiceSession {
   }
 
   private closeConversation() {
-    clearTimeout(this.followUpTimer)
+    clearInterval(this.endpointTimer)
     clearTimeout(this.relistenTimer)
     if (!this.conversationOpen) return
     this.conversationOpen = false
@@ -514,16 +540,38 @@ export class VoiceSession {
   /** One listen. `withoutGesture`: inside the conversation; `windowMs`: give up when nothing is said by then. */
   private startListen(withoutGesture: boolean, windowMs: number | null) {
     if (this.disposed || this.dictation.active) return
-    clearTimeout(this.followUpTimer)
+    clearInterval(this.endpointTimer)
     this.autoListening = windowMs !== null
     this.lastWithoutGesture = withoutGesture
     this.options.dictation.setWithoutGesture?.(withoutGesture)
+    this.listenStartedAt = this.now()
+    this.lastWordsAt = null
+    this.noSpeechWindowMs = windowMs ?? this.options.noSpeechMs ?? 8_000
     void this.dictation.start()
-    if (windowMs === null) return
-    this.followUpTimer = setTimeout(() => {
-      if (this.disposed || !this.dictation.active || this.heard.trim()) return
+    this.endpointTimer = setInterval(() => this.checkEndpoint(), 150)
+  }
+
+  /**
+   * End of speech, decided here: after the user has spoken, `endSilenceMs` without new words ends the listen;
+   * before any word, the listen is given up after its window. Never while the button is held.
+   */
+  private checkEndpoint() {
+    if (this.disposed) return
+    if (!this.dictation.active) {
+      if (this.dictation.phase === 'idle') clearInterval(this.endpointTimer)
+      return
+    }
+    if (this.holding || this.dictation.phase !== 'listening') return
+    const now = this.now()
+    if (this.heard.trim()) {
+      if (this.lastWordsAt !== null && now - this.lastWordsAt >= (this.options.endSilenceMs ?? 1_800)) {
+        clearInterval(this.endpointTimer)
+        void this.dictation.stop()
+      }
+    } else if (now - this.listenStartedAt >= this.noSpeechWindowMs) {
+      clearInterval(this.endpointTimer)
       this.dictation.cancel()
-    }, windowMs)
+    }
   }
 
   private listenAuto(windowMs: number) {

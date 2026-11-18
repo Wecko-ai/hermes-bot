@@ -1916,7 +1916,7 @@ try {
   }
   if (!lastApiText?.startsWith('Résume ma journée\n\n[HermesBot voice mode. For this turn only')) throw new Error(`Mode voix : api_text ${lastApiText}`)
   const voiceStart = (await dictationCalls('start')).at(-1)
-  if (voiceStart?.localeId !== 'fr-FR' || voiceStart.pauseForMs !== 1_600) throw new Error(`Mode voix : écoute ${JSON.stringify(voiceStart)}`)
+  if (voiceStart?.localeId !== 'fr-FR' || voiceStart.pauseForMs !== 60_000) throw new Error(`Mode voix : écoute ${JSON.stringify(voiceStart)}`)
   for (let attempt = 0; attempt < 80 && (await speechSaid()).length < 2; attempt += 1) await delay(25)
   await voiceState.getByText('Parle').waitFor({ timeout: 2_000 })
   // The HUD draws while the voice plays.
