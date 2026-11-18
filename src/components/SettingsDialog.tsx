@@ -6,6 +6,7 @@ import { version } from '../../package.json'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
+import { isFreeModel } from '../lib/free-models'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from '../lib/shared-settings'
@@ -246,6 +247,7 @@ type ModelsDraft = ReturnType<typeof useHiddenModelsDraft>
 
 function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, draft: editor }: Pick<SettingsDialogProps, 'models' | 'modelsLoading' | 'modelsError' | 'onLoadModels'> & { demo: boolean; draft: ModelsDraft }) {
   const { t } = useTranslation()
+  const { freeMode } = useSettings()
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   // A single read when the tab opens: the models from the gateway, the hidden list from its shared file.
@@ -276,6 +278,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
 
   return (
     <>
+      <Toggle label={t('settings.freeMode')} hint={t('settings.freeModeHint')} checked={freeMode} onChange={(freeMode) => updateSettings({ freeMode })} />
       <p className="settings-note">{t('settings.modelsNote')}</p>
       <div className="settings-model-tools">
         <div className="settings-search">
@@ -318,6 +321,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
                   <span className="settings-model-label">{modelLabel(option.model)}</span>
                   <code>{option.model}</code>
                   {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
+                  {isFreeModel(option) && <span className="model-option-tag is-free">{t('settings.freeTag')}</span>}
                   {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                 </label>
               ))}

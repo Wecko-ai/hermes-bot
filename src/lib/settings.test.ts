@@ -12,7 +12,7 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], localModel: '', notifications: true })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], freeMode: false, localModel: '', notifications: true })
   })
 
   it('garde les bots épinglés dans leur ordre, sans valeur étrangère', () => {
@@ -60,6 +60,15 @@ describe('modèles proposés', () => {
   it('garde le modèle actif et celui du profil, même masqués', () => {
     const hidden = options.map(hiddenModelKey)
     expect(selectableModels(options, hidden, ['claude-opus-5-5', 'claude-haiku-5-5']).map((item) => item.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
+  })
+
+  it('en mode gratuit, ne propose que les modèles gratuits, sauf le modèle actif', () => {
+    const all = [...options, option('nvidia/nemotron-3-ultra-550b-a55b:free', 'openrouter'), option('gemini-3.5-flash', 'gemini'), option('gemini-4-carbon', 'gemini')]
+    expect(selectableModels(all, [], [], true).map(hiddenModelKey)).toEqual(['openrouter:nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini:gemini-3.5-flash'])
+    expect(selectableModels(all, [], ['claude-opus-5-5'], true).map((item) => item.model)).toEqual(['claude-opus-5-5', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini-3.5-flash'])
+    expect(selectableModels(all, ['gemini:gemini-3.5-flash'], [], true).map((item) => item.model)).toEqual(['nvidia/nemotron-3-ultra-550b-a55b:free'])
+    expect(parseSettings('{"freeMode":true}').freeMode).toBe(true)
+    expect(parseSettings('{"freeMode":"oui"}').freeMode).toBe(false)
   })
 
   it('laisse proposé un modèle qui vient d’apparaître', () => {

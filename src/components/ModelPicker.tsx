@@ -4,10 +4,13 @@ import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } f
 import type { ModelOption } from '../types'
 import { modelLabel } from '../lib/model'
 import { providerBrand } from '../lib/providers'
+import { isFreeModel } from '../lib/free-models'
 import { isImeComposition } from '../lib/keyboard'
 
 interface ModelPickerProps {
   options: ModelOption[]
+  /** Free mode: the options are the free models; a kept paid model says it is paid. */
+  freeMode?: boolean
   current: string
   profileModel: string
   loading: boolean
@@ -68,7 +71,7 @@ function saveOpenGroups(slugs: string[]) {
   try { localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(slugs)) } catch { /* storage unavailable */ }
 }
 
-export function ModelPicker({ options, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
+export function ModelPicker({ options, freeMode = false, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState(initialQuery)
   const [openGroups, setOpenGroups] = useState(readOpenGroups)
@@ -195,6 +198,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, un
         </div>
         <div className="model-picker-list" id="model-picker-list" ref={listRef}>
           {loading && options.length === 0 && <div className="model-picker-skeleton" aria-label={t('models.loading')}><span /><span /><span /><span /></div>}
+          {freeMode && <p className="model-picker-note">{t('models.freeModeOn')}</p>}
           {error && <p className="model-picker-note is-error">{error}</p>}
           {!loading && !error && filtered.length === 0 && <p className="model-picker-note">{t('models.none')}</p>}
           {groups.map((group) => {
@@ -239,6 +243,7 @@ export function ModelPicker({ options, current, profileModel, loading, error, un
                           <span className="model-option-name">{modelLabel(option.model)}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
+                          {freeMode && !isFreeModel(option) && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
                           {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
                           {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                           {isCurrent && <Check className="model-option-check" size={15} />}

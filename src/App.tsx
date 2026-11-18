@@ -1867,7 +1867,8 @@ export default function App() {
         onOpenSubagentHistory={openSubagentHistory}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
-            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model])}
+            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model], settings.freeMode)}
+            freeMode={settings.freeMode}
             current={chatModel || selectedBot.model}
             profileModel={selectedBot.model}
             loading={modelsLoading}

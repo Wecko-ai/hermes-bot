@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { ModelOption, ModelOverride } from '../types'
 import { LANGUAGES, type LanguageChoice } from '../i18n'
+import { isFreeModel } from './free-models'
 
 export const THEMES = ['system', 'light', 'dark'] as const
 export const TEXT_SIZES = ['small', 'normal', 'large'] as const
@@ -31,6 +32,8 @@ export interface AppSettings {
   pinnedBots: string[]
   /** Hide list, not an allow list: a newly released model is still offered. */
   hiddenModels: string[]
+  /** Free mode: the picker offers only the models that cost nothing (see free-models.ts). Kept on this Mac only. */
+  freeMode: boolean
   /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
   localModel: string
   /** macOS notification when a bot finishes a turn or waits on an answer, unless its chat is in view. */
@@ -65,6 +68,7 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     showHidden: flag(value.showHidden, false),
     pinnedBots: strings(value.pinnedBots),
     hiddenModels: strings(value.hiddenModels),
+    freeMode: flag(value.freeMode, false),
     localModel: typeof value.localModel === 'string' ? value.localModel : '',
     notifications: flag(value.notifications, true),
   }
@@ -113,10 +117,13 @@ export function withPinned(pinned: readonly string[], slug: string, pin: boolean
 /** The same model at two providers is set separately. */
 export const hiddenModelKey = (option: ModelOverride) => `${option.provider}:${option.model}`
 
-/** The active model and the profile's stay offered: the picker must always be able to show them. */
-export function selectableModels(options: ModelOption[], hidden: string[], keep: string[]) {
+/**
+ * The active model and the profile's stay offered: the picker must always be able to show them.
+ * In free mode, the paid models go too (the kept ones excepted).
+ */
+export function selectableModels(options: ModelOption[], hidden: string[], keep: string[], freeOnly = false) {
   const masked = new Set(hidden)
-  return options.filter((option) => !masked.has(hiddenModelKey(option)) || keep.includes(option.model))
+  return options.filter((option) => keep.includes(option.model) || (!masked.has(hiddenModelKey(option)) && (!freeOnly || isFreeModel(option))))
 }
 
 export function withModelsVisible(hidden: string[], options: ModelOverride[], visible: boolean) {

@@ -10,6 +10,8 @@ export interface ModelOption extends ModelOverride {
   tag?: string
   inputPrice?: string
   outputPrice?: string
+  /** The gateway's price says the model costs nothing (OpenRouter's free variants). */
+  free?: boolean
 }
 
 export interface SessionUsage {

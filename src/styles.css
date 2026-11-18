@@ -419,6 +419,7 @@ a { color: inherit; }
 .model-option-tag { flex: none; padding: 1px 6px; border-radius: 6px; background: var(--hover); color: var(--text-secondary); font-size: 12px; font-weight: 550; }
 .model-option-tag.is-plan { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
 .model-option-tag.is-unusable { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.model-option-tag.is-free { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
 .model-option.is-unusable .model-option-name { color: var(--text-tertiary); }
 .model-option-price { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .model-option-check { flex: none; margin-left: auto; color: var(--accent); }

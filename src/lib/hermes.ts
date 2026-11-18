@@ -726,6 +726,7 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
         providerName: asString(provider.name, slug),
         inputPrice: asString(price.input) || undefined,
         outputPrice: asString(price.output) || undefined,
+        free: price.free === true || undefined,
       })
     }
   }
