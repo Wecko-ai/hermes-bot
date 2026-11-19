@@ -5,7 +5,7 @@ import type { SubagentTail } from '../lib/background'
 import { formatDuration, subagentDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, subagentTitle, type SubagentEntry } from '../lib/subagent-history'
 import { toolLabel } from '../lib/work-summary'
-import { runLabel, currentAgentProgress, parseAgentProgress } from '../lib/agent-process'
+import { DSH_TOOL, runLabel, currentAgentProgress, parseAgentProgress, parseDshProgress } from '../lib/agent-process'
 import { documentUrl, openableDocument, type MediaRef } from '../lib/media'
 
 /** What is kept of a transcript on screen: its end, where the child is now. */
@@ -225,7 +225,9 @@ export function SubagentsPanel({ entries, profile, processes, onLoadTail, onOpen
 function SubagentItem({ entry, profile, now, open, onOpen, onLoadTail, onOpenDocument }: { entry: SubagentEntry; profile: string; now: number; open: boolean; onOpen: (open: boolean) => void; onLoadTail: SubagentsPanelProps['onLoadTail']; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   const [tail, setTail] = useState<TailState | null>(null)
-  const progress = useAgentProgress(entry, profile, open)
+  const journal = useAgentProgress(entry, profile, open)
+  const stream = entry.run?.tool === DSH_TOOL && entry.process?.outputTail ? parseDshProgress(entry.process.outputTail) : []
+  const progress = journal.length ? journal : stream
   const duration = entryDuration(entry, now)
   const live = entry.live
   const active = isEntryActive(entry)
@@ -300,7 +302,8 @@ export function PromptView({ entry, onOpenDocument }: { entry: SubagentEntry; on
 export function ProcessOutput({ entry, progress = [], onOpenDocument }: { entry: SubagentEntry; progress?: string[]; onOpenDocument?: (media: MediaRef) => void }) {
   const { t } = useTranslation()
   if (!entry.run) return null
-  const tail = isEntryActive(entry) ? entry.process?.outputTail : undefined
+  const rawTail = isEntryActive(entry) ? entry.process?.outputTail : undefined
+  const tail = rawTail && !(entry.run?.tool === DSH_TOOL && progress.length) ? rawTail : undefined
   if (!tail && !entry.run.logFile && !progress.length) return null
   return (
     <div className="subagent-tail">

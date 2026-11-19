@@ -92,7 +92,16 @@ export function commandKey(command: string) {
   return hash.toString(16).padStart(8, '0')
 }
 
+
+/** `dsh headless` or `dsh --profile headless`, flags allowed before the word. */
+function isDshHeadless(words: string[]) {
+  const profileAt = words.indexOf('--profile')
+  if (profileAt >= 0) return words[profileAt + 1] === 'headless'
+  const headlessAt = words.indexOf('headless')
+  return headlessAt >= 0 && words.slice(0, headlessAt).every((word) => word.startsWith('-'))
+}
 const CLAUDE = 'Claude Code'
+export const DSH_TOOL = 'DeepSeek Harness'
 /** Program name to tool, and what makes it headless (otherwise it would be an interactive session). */
 const AGENTS: Record<string, { tool: string; headless: (words: string[]) => boolean; promptFlags?: string[] }> = {
   claude: { tool: CLAUDE, headless: (words) => words.some((word) => word === '-p' || word === '--print'), promptFlags: ['-p', '--print'] },
@@ -106,6 +115,7 @@ const AGENTS: Record<string, { tool: string; headless: (words: string[]) => bool
   aider: { tool: 'Aider', headless: (words) => words.some((word) => word === '-m' || word === '--message'), promptFlags: ['-m', '--message'] },
   kimi: { tool: 'Kimi CLI', headless: (words) => words.some((word) => word === '-p' || word === '--print' || word === '-c' || word === '--command'), promptFlags: ['-p', '--print', '-c', '--command'] },
   'office-agent': { tool: 'Office agent', headless: () => true },
+  dsh: { tool: DSH_TOOL, headless: isDshHeadless },
 }
 
 /** Wrappers that run the command after them. `mq run … -- cmd` is the shared queue of the machine. */
@@ -114,6 +124,22 @@ const SHELLS = new Set(['bash', 'zsh', 'sh'])
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
+const DSH_FLAGS_WITH_VALUE = new Set(['--profile', '--permission-mode', '--approval-policy', '--session-id', '--add-dir', '--patch'])
+
+/** Bare task words of `dsh headless`, flags and their values skipped. */
+function dshTask(args: Token[]) {
+  const parts: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]
+    if (token.kind !== 'word') continue
+    if (token.value === 'headless' || token.value === '--json' || token.value === '-') continue
+    if (DSH_FLAGS_WITH_VALUE.has(token.value)) { index += 1; continue }
+    if (token.value.startsWith('-')) continue
+    parts.push(token.value)
+  }
+  const task = parts.join(' ').trim()
+  return task || undefined
+}
 
 /** `$(cat file)`, `$(< file)`: the file a prompt is read from. */
 function catFile(value: string) {
@@ -263,6 +289,12 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
       if (file) run.promptFile = file
       else if (candidate.value.trim() && !candidate.value.startsWith('-')) run.prompt = candidate.value.trim()
     }
+    if (name === 'dsh' && !run.prompt && !run.promptFile) {
+      const task = dshTask(args)
+      const file = task ? catFile(task) : undefined
+      if (file) run.promptFile = file
+      else if (task) run.prompt = task
+    }
     return resolveRunFiles(run)
   }
   return null
@@ -294,6 +326,48 @@ export function parseAgentProgress(text: string): string[] {
 
 export function currentAgentProgress(lines: string[]): string | undefined {
   return [...lines].reverse().find((line) => PROGRESS_CURRENT.test(line))
+}
+
+const DSH_HINT_KEYS = ['command', 'path', 'file', 'query', 'pattern', 'url']
+
+function dshHint(input: unknown) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return ''
+  const record = input as Record<string, unknown>
+  for (const key of DSH_HINT_KEYS) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim().replace(/\s+/g, ' ').slice(0, 80)
+  }
+  return ''
+}
+
+/** `dsh headless --json` events, as the same numbered steps a task journal uses. */
+export function parseDshProgress(text: string): string[] {
+  const done: string[] = []
+  let pending = ''
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line.startsWith('{')) continue
+    let event: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(line)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      event = parsed as Record<string, unknown>
+    } catch { continue }
+    const type = event.type
+    if (type === 'tool_call' && typeof event.tool === 'string') {
+      const hint = dshHint(event.input)
+      pending = `[EN COURS] ${event.tool}${hint ? ` — ${hint}` : ''}`
+    } else if (type === 'tool_result') {
+      const mark = event.status === 'error' ? 'BLOQUÉ' : 'FAIT'
+      const tool = pending.replace(/^\[(?:EN COURS|BLOQUÉ)\]\s*/, '').split(' — ')[0] || 'outil'
+      pending = ''
+      done.push(`[${mark}] ${tool}`)
+    } else if ((type === 'text' || type === 'final') && typeof event.text === 'string' && event.text.trim()) {
+      done.push(`[FAIT] ${event.text.trim().replace(/\s+/g, ' ').slice(0, 160)}`)
+    }
+  }
+  const steps = pending ? [...done, pending] : done
+  return parseAgentProgress(steps.map((step, index) => `${index + 1}. ${step}`).join('\n'))
 }
 
 // ── Background processes: the gateway's end message and `process.list` ──────────────────────────────────────

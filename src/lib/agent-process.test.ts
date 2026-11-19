@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
+import { agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseDshProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
 
 // As a bot launched it on 2026-11-13 (paths changed).
 const REAL = 'cd /Users/test/projects/site-affilies && claude -p "$(cat /Users/test/.hermes/profiles/site/cache/scratch/prompt-front-fix.md)" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" > /Users/test/.hermes/profiles/site/cache/scratch/front-fix.log 2>&1'
@@ -76,6 +76,25 @@ describe('commande d’un agent de code', () => {
     expect(currentAgentProgress(parseAgentProgress(text))).toBe('5. [EN COURS 19:21] Script de rendu et tests.')
     expect(currentAgentProgress(parseAgentProgress('1. [FAIT] Terminé.'))).toBeUndefined()
     expect(parseAgentProgress('Rien de structuré.')).toEqual([])
+  })
+
+  it('lit la tâche et les étapes de dsh headless --json', () => {
+    expect(agentRun('dsh headless --json "Corrige le test login"')).toMatchObject({ tool: 'DeepSeek Harness', prompt: 'Corrige le test login' })
+    expect(agentRun('cd /tmp/app && dsh --profile headless --json --permission-mode workspace-write "Ajoute les tests"')).toMatchObject({ tool: 'DeepSeek Harness', cwd: '/tmp/app', prompt: 'Ajoute les tests' })
+    expect(agentRun('dsh tui')).toBeNull()
+    expect(agentRun('dsh web --help')).toBeNull()
+    const lines = parseDshProgress([
+      JSON.stringify({ type: 'tool_call', tool: 'read_file', input: { path: 'src/App.tsx' } }),
+      JSON.stringify({ type: 'tool_result', status: 'completed' }),
+      JSON.stringify({ type: 'tool_call', tool: 'bash', input: { command: 'npm test' } }),
+      'pas du json',
+    ].join('\n'))
+    expect(lines).toEqual([
+      '1. [FAIT] read_file',
+      '2. [EN COURS] bash — npm test',
+    ])
+    expect(currentAgentProgress(lines)).toBe('2. [EN COURS] bash — npm test')
+    expect(parseDshProgress(JSON.stringify({ type: 'final', text: 'Corrigé.' }))).toEqual(['1. [FAIT] Corrigé.'])
   })
 
   it('reconnaît les autres agents sans ligne de commande interactive', () => {
