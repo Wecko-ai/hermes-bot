@@ -125,8 +125,9 @@ export function EntryNow({ entry, progress = [] }: { entry: SubagentEntry; progr
   const { t } = useTranslation()
   if (!isEntryActive(entry)) return null
   const text = currentAgentProgress(progress)
+    || (entry.run?.tool === DSH_TOOL ? progress.at(-1) : '')
     || (entry.live?.lastTool ? t('subagents.lastTool', { tool: toolLabel(entry.live.lastTool) }) : '')
-    || (entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
+    || (entry.run?.tool !== DSH_TOOL && entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
   if (!text) return null
   return <span className="subagent-now subagent-live-box"><Activity size={12} aria-hidden="true" /><span>{text}</span></span>
 }

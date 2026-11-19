@@ -3871,6 +3871,8 @@ try {
     { session_id: 'proc_claude', command: 'cd /Users/test/projects/site && ANTHROPIC_API_KEY=sk-test-secret claude -p "Ajoute les tests du formulaire partenaire" --permission-mode acceptEdits', status: 'running', started_epoch: Date.now() / 1000 - 30, output_tail: 'Lecture de SPEC.md\nÉcriture des tests' },
     { session_id: 'proc_cck', command: `zsh -ic 'cck -p "Exécute intégralement le brief /Users/test/projects/final/BRIEF.md"' > '/Users/test/projects/final/work/cck-session.log' 2>&1`, status: 'running', started_epoch: Date.now() / 1000 - 60, output_tail: '' },
     { session_id: 'proc_dsh', command: 'cd /Users/test/projects/site && dsh headless --json "Corrige le test login"', status: 'running', started_epoch: Date.now() / 1000 - 20, output_tail: '{"type":"tool_call","tool":"read_file","input":{"path":"src/App.tsx"}}\n{"type":"tool_result","status":"completed"}\n{"type":"tool_call","tool":"bash","input":{"command":"npm test"}}' },
+    { session_id: 'proc_dsh_between', command: 'dsh headless --json "Relis les tests"', status: 'running', started_epoch: Date.now() / 1000 - 10, output_tail: '{"type":"tool_call","tool":"read_file","input":{"path":"src/App.tsx"}}\n{"type":"tool_result","status":"completed"}' },
+    { session_id: 'proc_dsh_done', command: 'dsh headless --json "Vérifie le rendu"', status: 'exited', exit_code: 0, started_epoch: Date.now() / 1000 - 10, output_tail: '{"type":"final","text":"Tests verts."}' },
   ]
   const claudeRow = panel.locator('.subagent-row.is-running', { hasText: 'Ajoute les tests du formulaire partenaire' })
   await claudeRow.waitFor({ timeout: 8_000 })
@@ -3885,6 +3887,11 @@ try {
   const dshRow = panel.locator('.subagent-row.is-running', { hasText: 'Corrige le test login' })
   await dshRow.getByText('DeepSeek Harness', { exact: false }).waitFor({ timeout: 8_000 })
   await dshRow.locator('.subagent-now').getByText('2. [EN COURS] bash — npm test', { exact: true }).waitFor({ timeout: 5_000 })
+  const dshBetweenRow = panel.locator('.subagent-row.is-running', { hasText: 'Relis les tests' })
+  await dshBetweenRow.locator('.subagent-now').getByText('1. [FAIT] read_file', { exact: true }).waitFor({ timeout: 5_000 })
+  const dshDoneCard = history.locator('.subagent-card.is-completed', { hasText: 'Vérifie le rendu' })
+  await dshDoneCard.getByText('Tests verts.', { exact: false }).waitFor({ timeout: 5_000 })
+  if (await dshDoneCard.getByText('"type":"final"', { exact: false }).count()) throw new Error('Le flux JSON brut de DSH est affiché comme résultat.')
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}subagents-agent-run.png` })
   // From the history (terminal call, end of process): its prompt file and its log open in a tab beside the chat.

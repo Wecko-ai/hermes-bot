@@ -155,6 +155,16 @@ describe('agents de code lancés du terminal', () => {
     const entries = subagentHistory([message('d', { role: 'tool', delegation: [{ goal: 'Go' }] })], [], [{ id: 'proc_9', run: agentRun('claude -p "Go"')!, status: 'failed', exitCode: 1, finishedAt: 5 }])
     expect(entries.map((entry) => [entry.id, entry.status, entry.exitCode])).toEqual([['d:0', 'ended', undefined], ['process:proc_9', 'failed', 1]])
   })
+
+  it('donne la réponse finale de DSH, jamais son flux JSON brut', () => {
+    const outputTail = [
+      JSON.stringify({ type: 'tool_call', callId: 'call_1', tool: 'bash', input: { command: 'npm test' } }),
+      JSON.stringify({ type: 'tool_result', callId: 'call_1', status: 'completed' }),
+      JSON.stringify({ type: 'final', text: 'Tests verts.' }),
+    ].join('\n')
+    const [entry] = subagentHistory([], [], [{ id: 'proc_dsh', run: agentRun('dsh headless --json "Go"')!, status: 'completed', exitCode: 0, outputTail }])
+    expect(entry).toMatchObject({ status: 'completed', result: 'Tests verts.' })
+  })
 })
 
 describe('affichage', () => {

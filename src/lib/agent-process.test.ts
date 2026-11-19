@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseDshProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
+import { agentResult, agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseDshProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
 
 // As a bot launched it on 2026-11-13 (paths changed).
 const REAL = 'cd /Users/test/projects/site-affilies && claude -p "$(cat /Users/test/.hermes/profiles/site/cache/scratch/prompt-front-fix.md)" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" > /Users/test/.hermes/profiles/site/cache/scratch/front-fix.log 2>&1'
@@ -95,6 +95,14 @@ describe('commande d’un agent de code', () => {
     ])
     expect(currentAgentProgress(lines)).toBe('2. [EN COURS] bash — npm test')
     expect(parseDshProgress(JSON.stringify({ type: 'final', text: 'Corrigé.' }))).toEqual(['1. [FAIT] Corrigé.'])
+    const run = agentRun('dsh headless --json "Corrige le test login"')!
+    expect(agentResult(run, [
+      JSON.stringify({ type: 'text', text: 'Je corrige.' }),
+      JSON.stringify({ type: 'final', text: 'Corrigé.\nTests verts.' }),
+    ].join('\n'))).toBe('Corrigé.\nTests verts.')
+    expect(agentResult(run, JSON.stringify({ type: 'tool_result', status: 'completed' }))).toBeUndefined()
+    expect(agentResult(run, JSON.stringify({ type: 'error', message: 'Quota atteint' }))).toBe('Quota atteint')
+    expect(agentResult(agentRun('claude -p "Go"')!, 'Sortie brute')).toBe('Sortie brute')
   })
 
   it('reconnaît les autres agents sans ligne de commande interactive', () => {

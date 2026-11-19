@@ -1,6 +1,6 @@
 import type { ChatMessage, DelegationTask } from '../types'
 import { isSubagentActive, type SubagentRow, type SubagentState } from './subagents'
-import { parseProcessEnd, type AgentProcess, type AgentRun } from './agent-process'
+import { agentResult, parseProcessEnd, type AgentProcess, type AgentRun } from './agent-process'
 
 type Json = Record<string, unknown>
 const asObject = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {})
@@ -231,7 +231,7 @@ export function subagentHistory(messages: ChatMessage[], live: SubagentRow[], pr
       const end = parseProcessEnd(message.content)
       if (!end?.run) continue
       const at = time(message.createdAt)
-      const outcome = { status: end.status, exitCode: end.exitCode, finishedAt: at, result: end.output, processId: end.processId, done: true }
+      const outcome = { status: end.status, exitCode: end.exitCode, finishedAt: at, result: agentResult(end.run, end.output), processId: end.processId, done: true }
       const target = entries.find((entry) => entry.run && !entry.done && entry.run.key === end.key)
       if (target) Object.assign(target, outcome)
       else add({ id: `${message.id}:end`, goal: end.run.prompt ?? '', run: end.run, taskIndex: 0, taskCount: 1, ...outcome })
@@ -324,7 +324,7 @@ export function subagentHistory(messages: ChatMessage[], live: SubagentRow[], pr
     target.status = process.status
     target.exitCode = process.exitCode
     target.finishedAt = active ? undefined : process.finishedAt
-    if (!active && process.outputTail) target.result ??= process.outputTail
+    if (!active && process.outputTail) target.result ??= agentResult(process.run, process.outputTail)
   }
 
   for (const entry of entries) {

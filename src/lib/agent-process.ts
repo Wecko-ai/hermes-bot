@@ -370,6 +370,28 @@ export function parseDshProgress(text: string): string[] {
   return parseAgentProgress(steps.map((step, index) => `${index + 1}. ${step}`).join('\n'))
 }
 
+/** A run's printable result: the final answer of a JSON stream, never its raw events. */
+export function agentResult(run: Pick<AgentRun, 'tool'>, output: string | undefined): string | undefined {
+  if (!output?.trim()) return undefined
+  if (run.tool !== DSH_TOOL) return output
+  let final = ''
+  let text = ''
+  let error = ''
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line.startsWith('{')) continue
+    try {
+      const event: unknown = JSON.parse(line)
+      if (!event || typeof event !== 'object' || Array.isArray(event)) continue
+      const record = event as Record<string, unknown>
+      if (record.type === 'final' && typeof record.text === 'string' && record.text.trim()) final = record.text
+      else if (record.type === 'text' && typeof record.text === 'string' && record.text.trim()) text = record.text
+      else if (record.type === 'error' && typeof record.message === 'string' && record.message.trim()) error = record.message
+    } catch { continue }
+  }
+  return final || text || error || undefined
+}
+
 // ── Background processes: the gateway's end message and `process.list` ──────────────────────────────────────
 
 export interface ProcessEnd {
