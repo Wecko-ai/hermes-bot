@@ -12,7 +12,7 @@ import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
-import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from '../lib/shared-settings'
+import { mergeHiddenModels, saveHiddenModels, saveZeroSpend, syncSharedSettings } from '../lib/shared-settings'
 import type { LanguageChoice } from '../i18n'
 import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
@@ -71,11 +71,11 @@ function Segments<T extends string>({ label, value, options, onChange }: { label
   )
 }
 
-function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function Toggle({ label, hint, checked, disabled = false, onChange }: { label: string; hint?: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
   return (
     <label className="settings-row">
       <span className="settings-row-copy"><strong>{label}</strong>{hint && <span>{hint}</span>}</span>
-      <input className="settings-switch" type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <input className="settings-switch" type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
     </label>
   )
 }
@@ -362,6 +362,8 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
   const { t } = useTranslation()
   const { freeMode } = useSettings()
   const { ui } = useAppConfig()
+  const [zeroSpendBusy, setZeroSpendBusy] = useState(false)
+  const [zeroSpendFailed, setZeroSpendFailed] = useState(false)
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const scores = useScores()
@@ -391,10 +393,20 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
     if (!next.delete(slug)) next.add(slug)
     return next
   })
+  const changeZeroSpend = async (zeroSpend: boolean) => {
+    if (zeroSpendBusy || zeroSpend === freeMode) return
+    if (!zeroSpend && !window.confirm(t('settings.zeroSpendDisableConfirm'))) return
+    setZeroSpendBusy(true)
+    setZeroSpendFailed(false)
+    const saved = await saveZeroSpend(zeroSpend, { local: demo })
+    setZeroSpendBusy(false)
+    setZeroSpendFailed(!saved)
+  }
 
   return (
     <>
-      <Toggle label={t('settings.freeMode')} hint={t('settings.freeModeHint')} checked={freeMode} onChange={(freeMode) => updateSettings({ freeMode })} />
+      <Toggle label={t('settings.freeMode')} hint={t('settings.freeModeHint')} checked={freeMode} disabled={zeroSpendBusy} onChange={(zeroSpend) => void changeZeroSpend(zeroSpend)} />
+      {zeroSpendFailed && <p className="settings-note is-error" role="alert">{t('settings.zeroSpendSaveFailed')}</p>}
       <p className="settings-note">{t('settings.modelsNote')}</p>
       <ScoresSection />
       <div className="settings-model-tools">

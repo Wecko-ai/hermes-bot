@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { parseSharedSettings, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText } from './shared-settings.mjs'
+import { parseSharedSettings, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, withKeptCompaction } from './shared-settings.mjs'
 
 describe('réglages partagés', () => {
   it('ne garde que les champs connus, bien typés', () => {
-    expect(sharedSettingsFrom({ hiddenModels: ['a:b', 'a:b', 3, '', 'c:d'], token: 'x' })).toEqual({ hiddenModels: ['a:b', 'c:d'] })
+    expect(sharedSettingsFrom({ hiddenModels: ['a:b', 'a:b', 3, '', 'c:d'], zeroSpend: true, token: 'x' })).toEqual({ hiddenModels: ['a:b', 'c:d'], zeroSpend: true })
     expect(sharedSettingsFrom(null)).toEqual({})
-    expect(sharedSettingsFrom({ hiddenModels: 'a:b' })).toEqual({})
+    expect(sharedSettingsFrom({ hiddenModels: 'a:b', zeroSpend: 'true' })).toEqual({})
   })
   it('relit le fichier écrit, et un fichier illisible vaut vide', () => {
-    expect(parseSharedSettings(sharedSettingsText({ hiddenModels: ['x:y'] }))).toEqual({ hiddenModels: ['x:y'] })
+    expect(parseSharedSettings(sharedSettingsText({ hiddenModels: ['x:y'], zeroSpend: false }))).toEqual({ hiddenModels: ['x:y'], zeroSpend: false })
     expect(JSON.parse(sharedSettingsText({ hiddenModels: [] })).version).toBe(1)
     expect(parseSharedSettings('{oops')).toEqual({})
+  })
+
+  it('conserve zéro frais face à un ancien client qui n’écrit que les modèles', () => {
+    const existing = { hiddenModels: ['p:a'], zeroSpend: true, compaction: { mode: 'manual', gauge: 0.4, snapshot: {} } }
+    expect(withKeptCompaction(existing, { hiddenModels: ['p:b'] })).toEqual({ hiddenModels: ['p:b'], zeroSpend: true, compaction: existing.compaction })
+    expect(withKeptCompaction(existing, { hiddenModels: ['p:b'], zeroSpend: false }).zeroSpend).toBe(false)
   })
 
   it('drops the upstream body on every answer, including 404 and a successful write', async () => {
@@ -26,8 +32,8 @@ describe('réglages partagés', () => {
     const broken = upstream(500, '')
     expect(await relaySharedSettingsGet(broken)).toEqual({ status: 500, body: { error: 'shared_settings_unreadable' } })
     expect(broken.cancelled).toBe(true)
-    const found = upstream(200, sharedSettingsText({ hiddenModels: ['a:b'] }))
-    expect(await relaySharedSettingsGet(found)).toEqual({ status: 200, body: { exists: true, settings: { hiddenModels: ['a:b'] } } })
+    const found = upstream(200, sharedSettingsText({ hiddenModels: ['a:b'], zeroSpend: true }))
+    expect(await relaySharedSettingsGet(found)).toEqual({ status: 200, body: { exists: true, settings: { hiddenModels: ['a:b'], zeroSpend: true } } })
     expect(found.cancelled).toBe(true)
     const saved = upstream(200, '')
     expect((await relaySharedSettingsPut(saved, { hiddenModels: [] })).status).toBe(200)

@@ -11,18 +11,21 @@ export function sharedSettingsFrom(value) {
   if (value && typeof value === 'object' && Array.isArray(value.hiddenModels)) {
     settings.hiddenModels = [...new Set(value.hiddenModels.filter((key) => typeof key === 'string' && key.length > 0 && key.length < 400))].slice(0, 5000)
   }
+  if (typeof value?.zeroSpend === 'boolean') settings.zeroSpend = value.zeroSpend
   const compaction = compactionFrom(value?.compaction)
   if (compaction && typeof value.compaction === 'object') settings.compaction = compaction
   return settings
 }
 
 /**
- * The settings a PUT writes: the body's own fields, with the compaction setting always the file's.
- * The compaction setting (with its snapshots) is written only by `/api/compaction`, never by this route.
+ * The settings a PUT writes: the body's own fields, with protected fields kept from the file.
+ * Compaction (with its snapshots) is written only by `/api/compaction`. An old client that writes only
+ * hiddenModels must not erase zeroSpend; turning it off always sends the explicit boolean false.
  */
 export function withKeptCompaction(existing, body) {
   const own = { ...body }
   delete own.compaction
+  if (typeof own.zeroSpend !== 'boolean' && typeof existing?.zeroSpend === 'boolean') own.zeroSpend = existing.zeroSpend
   return existing?.compaction ? { ...own, compaction: existing.compaction } : own
 }
 

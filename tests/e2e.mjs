@@ -3139,15 +3139,23 @@ try {
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
-  // Free mode: the picker keeps what costs nothing more (here the local models and the Kimi
-  // subscription); the active and profile models stay offered, marked Paid. The switch writes
-  // nothing to the gateway's shared file.
+  // Zero-spend mode: the picker keeps what costs nothing more (here the local models and the Kimi
+  // subscription); the active and profile models stay offered, marked Paid. Each switch saves the shared
+  // boolean at once; turning it off requires confirmation. Hidden models and compaction stay untouched.
   const setFreeMode = async (on) => {
     await openSettings()
     await settingsDialog.getByRole('button', { name: 'Modèles', exact: true }).click()
-    const freeSwitch = settingsDialog.getByRole('switch', { name: /Mode gratuit/ })
-    if (await freeSwitch.isChecked() === on) throw new Error(`Le mode gratuit devrait être ${on ? 'coupé' : 'actif'} avant le clic.`)
-    await freeSwitch.setChecked(on)
+    const freeSwitch = settingsDialog.getByRole('switch', { name: /Mode zéro frais/ })
+    if (await freeSwitch.isChecked() === on) throw new Error(`Le mode zéro frais devrait être ${on ? 'coupé' : 'actif'} avant le clic.`)
+    if (!on) page.once('dialog', (dialog) => {
+      if (!dialog.message().includes('payants') || !dialog.message().includes('frais')) throw new Error(`Confirmation zéro frais incomplète : ${dialog.message()}`)
+      void dialog.accept()
+    })
+    await freeSwitch.click()
+    for (let wait = 0; wait < 30 && JSON.parse(sharedSettingsFile).zeroSpend !== on; wait++) await page.waitForTimeout(100)
+    if (JSON.parse(sharedSettingsFile).zeroSpend !== on) throw new Error(`Zéro frais non enregistré dans le fichier partagé : ${sharedSettingsFile}`)
+    for (let wait = 0; wait < 30 && await freeSwitch.isChecked() !== on; wait++) await page.waitForTimeout(100)
+    if (await freeSwitch.isChecked() !== on) throw new Error('L’interrupteur zéro frais ne suit pas le réglage enregistré.')
     if (on) {
       await settingsDialog.locator('.settings-model-toggle', { hasText: 'Local LLM' }).click()
       await settingsDialog.locator('.settings-model[data-model="qwen-local-27b"] .model-option-tag.is-free').waitFor({ timeout: 3_000 })
@@ -3161,20 +3169,21 @@ try {
   const sharedBeforeFree = sharedSettingsFile
   await setFreeMode(true)
   await page.getByRole('button', { name: 'Choisir le modèle' }).click()
-  await page.locator('.model-picker-note', { hasText: 'Mode gratuit' }).waitFor({ timeout: 5_000 })
+  await page.locator('.model-picker-note', { hasText: 'Mode zéro frais' }).waitFor({ timeout: 5_000 })
   await page.waitForTimeout(350)
   const offeredFree = await page.locator('.model-picker .model-option').evaluateAll((rows) => rows.map((row) => ({ model: row.dataset.model, paid: Boolean(row.querySelector('.is-paid')) })))
   const unpaidOffered = offeredFree.filter((row) => !row.paid).map((row) => row.model).sort()
-  if (unpaidOffered.join() !== 'gemma-local,k3.1-pro,kimi-for-coding,kimi-k3,qwen-local-27b') throw new Error(`Mode gratuit : modèles proposés ${JSON.stringify(offeredFree)}`)
-  if (!offeredFree.some((row) => row.paid)) throw new Error(`Mode gratuit : le modèle actif doit rester proposé, marqué Payant : ${JSON.stringify(offeredFree)}`)
+  if (unpaidOffered.join() !== 'gemma-local,k3.1-pro,kimi-for-coding,kimi-k3,qwen-local-27b') throw new Error(`Mode zéro frais : modèles proposés ${JSON.stringify(offeredFree)}`)
+  if (!offeredFree.some((row) => row.paid)) throw new Error(`Mode zéro frais : le modèle actif doit rester proposé, marqué Payant : ${JSON.stringify(offeredFree)}`)
   await page.screenshot({ path: `${SCREENSHOTS}model-picker-free.png` })
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-picker').waitFor({ state: 'detached', timeout: 3_000 })
   await setFreeMode(false)
-  if (sharedSettingsFile !== sharedBeforeFree) throw new Error(`Le mode gratuit a écrit dans le fichier partagé : ${sharedSettingsFile}`)
+  const sharedAfterFree = JSON.parse(sharedSettingsFile)
+  if (sharedAfterFree.zeroSpend !== false || JSON.stringify(sharedAfterFree.hiddenModels) !== JSON.stringify(JSON.parse(sharedBeforeFree).hiddenModels)) throw new Error(`Zéro frais a mal préservé le fichier partagé : ${sharedSettingsFile}`)
   await page.getByRole('button', { name: 'Choisir le modèle' }).click()
   await page.locator('.model-option[data-model="kimi-for-coding"]').waitFor({ state: 'attached', timeout: 5_000 })
-  if (await page.locator('.model-picker-note', { hasText: 'Mode gratuit' }).count()) throw new Error('Mode gratuit coupé : la note reste affichée.')
+  if (await page.locator('.model-picker-note', { hasText: 'Mode zéro frais' }).count()) throw new Error('Mode zéro frais coupé : la note reste affichée.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-picker').waitFor({ state: 'detached', timeout: 3_000 })
 
@@ -3260,6 +3269,7 @@ try {
   const sharedManual = JSON.parse(sharedSettingsFile)
   if (sharedManual.compaction?.mode !== 'manual' || sharedManual.compaction.gauge !== 0.5) throw new Error(`Compaction : réglage partagé ${sharedSettingsFile}`)
   if (JSON.stringify(sharedManual.compaction.snapshot.nova) !== '{"threshold":0.5,"threshold_tokens":200000}' || JSON.stringify(sharedManual.compaction.snapshot.orion) !== '{"threshold":null,"threshold_tokens":null}') throw new Error(`Compaction : instantané des profils ${sharedSettingsFile}`)
+  if (sharedManual.zeroSpend !== false) throw new Error('Compaction : le réglage zéro frais partagé ne doit pas changer.')
   if (JSON.stringify(sharedManual.hiddenModels) !== JSON.stringify(sharedBeforeCompaction.hiddenModels)) throw new Error('Compaction : les modèles masqués partagés ne doivent pas changer.')
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
@@ -4341,7 +4351,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode gratuit, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement.')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

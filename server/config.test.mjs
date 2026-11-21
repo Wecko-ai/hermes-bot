@@ -31,12 +31,12 @@ describe('configuration locale', () => {
     expect(config.localChat.model).toBe('')
     expect(config.browserTurn.command).toBeNull()
     expect(config.animationsDir).toBe(path.join(dataDir, 'animations'))
-    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [], voiceModeName: '' })
+    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '' })
   })
 
   it('superpose environnement, fichier utilisateur et fichier privé, dans cet ordre', () => {
     const { root, home } = fixture({
-      privateConfig: { sshHost: 'private-host', browserOrigin: 'https://private.example', ui: { defaultBot: 'orion', userInitial: 'P' } },
+      privateConfig: { sshHost: 'private-host', browserOrigin: 'https://private.example', ui: { defaultBot: 'orion', userInitial: 'P', zeroSpendDefault: true } },
       userConfig: { sshHost: 'user-host', ui: { userInitial: 'U' } },
       animations: true,
     })
@@ -45,6 +45,7 @@ describe('configuration locale', () => {
     expect(config.browserOrigin).toBe('https://private.example')
     expect(config.ui.defaultBot).toBe('orion')
     expect(config.ui.userInitial).toBe('U')
+    expect(config.ui.zeroSpendDefault).toBe(true)
     expect(config.animationsDir).toBe(path.join(root, 'private', 'animations'))
   })
 
@@ -55,7 +56,7 @@ describe('configuration locale', () => {
         browserOrigin: 'https://example.com/path',
         sshHost: '-oProxyCommand=evil',
         browserTurn: { command: ['relative/arbiter', 'statut'] },
-        ui: { defaultBot: '../x', hiddenProviders: ['ok', 'not ok', 42], subscriptionProviders: ['anthropic', 'custom:opencode-go', 'custom:cursor-(abo)', 'no/slash', 7], sectionOrder: 'Atelier' },
+        ui: { defaultBot: '../x', hiddenProviders: ['ok', 'not ok', 42], subscriptionProviders: ['anthropic', 'custom:opencode-go', 'custom:cursor-(abo)', 'no/slash', 7], zeroSpendDefault: 'true', sectionOrder: 'Atelier' },
       },
     })
     const config = loadConfig({ env: {}, platform: 'darwin', home, root })
@@ -66,6 +67,7 @@ describe('configuration locale', () => {
     expect(config.ui.defaultBot).toBe('')
     expect(config.ui.hiddenProviders).toEqual(['ok'])
     expect(config.ui.subscriptionProviders).toEqual(['anthropic', 'custom:opencode-go', 'custom:cursor-(abo)'])
+    expect(config.ui.zeroSpendDefault).toBe(false)
     expect(config.ui.sectionOrder).toEqual([])
   })
 

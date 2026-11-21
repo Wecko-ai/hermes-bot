@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mergeHiddenModels, saveHiddenModels, syncSharedSettings } from './shared-settings'
+import { mergeHiddenModels, saveHiddenModels, saveZeroSpend, syncSharedSettings } from './shared-settings'
 import { getSettings, updateSettings } from './settings'
+import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
 
 describe('modèles masqués partagés', () => {
   it('n’envoie que les changements de cette fenêtre, sur la copie la plus récente', () => {
@@ -25,13 +26,14 @@ describe('modèles masqués partagés', () => {
 
 describe('enregistrement des modèles masqués', () => {
   const calls: Array<{ method: string; body?: unknown }> = []
-  let remote: { exists: boolean; settings: { hiddenModels: string[] } } = { exists: true, settings: { hiddenModels: [] } }
+  let remote: { exists: boolean; settings: { hiddenModels: string[]; zeroSpend?: boolean; compaction?: unknown } } = { exists: true, settings: { hiddenModels: [] } }
   let putOk = true
 
   beforeEach(() => {
     calls.length = 0
     putOk = true
-    updateSettings({ hiddenModels: [] })
+    setAppConfig(DEFAULT_APP_CONFIG)
+    updateSettings({ hiddenModels: [], freeMode: false })
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
       const method = init?.method || 'GET'
       calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
@@ -42,11 +44,11 @@ describe('enregistrement des modèles masqués', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
   it('lit la copie de la gateway avant d’écrire, et garde le résultat dans la fenêtre', async () => {
-    remote = { exists: true, settings: { hiddenModels: ['p:other'] } }
+    remote = { exists: true, settings: { hiddenModels: ['p:other'], zeroSpend: true } }
     const result = await saveHiddenModels([], ['p:mine'])
     expect(result).toEqual({ ok: true, hiddenModels: ['p:other', 'p:mine'] })
     expect(calls.map((call) => call.method)).toEqual(['GET', 'PUT'])
-    expect(calls[1].body).toEqual({ hiddenModels: ['p:other', 'p:mine'] })
+    expect(calls[1].body).toEqual({ hiddenModels: ['p:other', 'p:mine'], zeroSpend: true })
     expect(getSettings().hiddenModels).toEqual(['p:other', 'p:mine'])
   })
 
@@ -74,6 +76,44 @@ describe('enregistrement des modèles masqués', () => {
     await syncSharedSettings()
     expect(getSettings()).toMatchObject({ compactionMode: 'manual', compactionGauge: 0.4 })
     expect(calls.map((call) => call.method)).toEqual(['GET'])
+  })
+
+  it('suit le réglage zéro frais partagé, sans écraser les modèles masqués', async () => {
+    remote = { exists: true, settings: { hiddenModels: ['p:a'], zeroSpend: true } }
+    expect(await saveZeroSpend(false)).toBe(true)
+    expect(calls.map((call) => call.method)).toEqual(['GET', 'PUT'])
+    expect(calls[1].body).toEqual({ hiddenModels: ['p:a'], zeroSpend: false })
+    expect(getSettings().freeMode).toBe(false)
+  })
+
+  it('en cas d’échec, conserve le réglage zéro frais précédent', async () => {
+    updateSettings({ freeMode: true })
+    remote = { exists: true, settings: { hiddenModels: ['p:a'], zeroSpend: true } }
+    putOk = false
+    expect(await saveZeroSpend(false)).toBe(false)
+    expect(getSettings().freeMode).toBe(true)
+  })
+
+  it('utilise le défaut de l’installation quand le fichier partagé n’a pas encore de booléen', async () => {
+    setAppConfig(parseAppConfig({ ui: { zeroSpendDefault: true } }))
+    remote = { exists: true, settings: { hiddenModels: [] } }
+    await syncSharedSettings()
+    expect(getSettings().freeMode).toBe(true)
+    expect(calls.map((call) => call.method)).toEqual(['GET'])
+  })
+
+  it('conserve l’ancien mode gratuit local comme repli tant que le partagé est absent', async () => {
+    updateSettings({ freeMode: true })
+    remote = { exists: true, settings: { hiddenModels: [] } }
+    await syncSharedSettings()
+    expect(getSettings().freeMode).toBe(true)
+    expect(calls.map((call) => call.method)).toEqual(['GET'])
+  })
+
+  it('en démo, zéro frais reste local et ne fait aucune requête', async () => {
+    expect(await saveZeroSpend(true, { local: true })).toBe(true)
+    expect(getSettings().freeMode).toBe(true)
+    expect(calls).toEqual([])
   })
 
   it('en démo, enregistre dans la fenêtre seulement', async () => {

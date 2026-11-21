@@ -11,8 +11,10 @@ export interface AppConfig {
     userName: string
     /** Providers never offered in the model picker. */
     hiddenProviders: string[]
-    /** Providers paid by a flat subscription: the free mode keeps their models (they cost nothing more). */
+    /** Providers paid by a flat subscription: zero-spend mode keeps their models (they cost nothing more). */
     subscriptionProviders: string[]
+    /** Initial zero-spend choice when neither the shared file nor the old local setting has one. */
+    zeroSpendDefault: boolean
     /** Bots drawn in the contrast color (black in light theme) when their profile sets no color. */
     contrastAvatars: string[]
     /** Name shown for the voice mode; empty: the interface's own name for it. */
@@ -24,7 +26,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], contrastAvatars: [], voiceModeName: '' },
+  ui: { defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '' },
   animatedBots: [],
   localChat: { name: '' },
 }
@@ -47,6 +49,7 @@ export function parseAppConfig(value: unknown): AppConfig {
       userName: text(ui.userName),
       hiddenProviders: strings(ui.hiddenProviders),
       subscriptionProviders: strings(ui.subscriptionProviders),
+      zeroSpendDefault: ui.zeroSpendDefault === true,
       contrastAvatars: strings(ui.contrastAvatars),
       voiceModeName: text(ui.voiceModeName).slice(0, 32),
     },

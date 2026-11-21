@@ -32,7 +32,7 @@ export interface AppSettings {
   pinnedBots: string[]
   /** Hide list, not an allow list: a newly released model is still offered. */
   hiddenModels: string[]
-  /** Free mode: the picker offers only the models that cost nothing more: free ones and subscriptions (see free-models.ts). Kept on this Mac only. */
+  /** Zero-spend mode: free and subscription models only. Local mirror of shared `zeroSpend`; also its legacy fallback. */
   freeMode: boolean
   /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
   localModel: string

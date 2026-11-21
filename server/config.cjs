@@ -153,8 +153,10 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       userInitial: text(ui.userInitial, 2),
       userName: text(ui.userName, 64),
       hiddenProviders: slugs(ui.hiddenProviders),
-      // Providers paid by a flat subscription: the free mode keeps them, as they cost nothing more.
+      // Providers paid by a flat subscription: zero-spend mode keeps them, as they cost nothing more.
       subscriptionProviders: providers(ui.subscriptionProviders),
+      // Used only until the shared file has a zeroSpend value. Generic installs keep the old default.
+      zeroSpendDefault: ui.zeroSpendDefault === true,
       contrastAvatars: slugs(ui.contrastAvatars),
       // Name shown for the voice mode (empty: the interface's own name for it).
       voiceModeName: text(ui.voiceModeName, 32),

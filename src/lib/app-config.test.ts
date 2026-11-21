@@ -9,11 +9,12 @@ describe('réglages de l’installation', () => {
   })
 
   it('ne garde que des textes', () => {
-    const config = parseAppConfig({ ui: { defaultBot: 'orion', sectionOrder: ['Atelier', 3, ''], userInitial: 'ABC', hiddenProviders: ['x'] }, animatedBots: ['orion', null] })
+    const config = parseAppConfig({ ui: { defaultBot: 'orion', sectionOrder: ['Atelier', 3, ''], userInitial: 'ABC', hiddenProviders: ['x'], zeroSpendDefault: true }, animatedBots: ['orion', null] })
     expect(config.ui.defaultBot).toBe('orion')
     expect(config.ui.sectionOrder).toEqual(['Atelier'])
     expect(config.ui.userInitial).toBe('AB')
     expect(config.ui.hiddenProviders).toEqual(['x'])
+    expect(config.ui.zeroSpendDefault).toBe(true)
     expect(config.animatedBots).toEqual(['orion'])
   })
 
