@@ -2,36 +2,39 @@ import { useSyncExternalStore } from 'react'
 import type { ModelOption } from '../types'
 import { modelMatchKey, modelQualifiers } from './model-names'
 
-/** One model of the Artificial Analysis list, as the local server serves it (`/api/model-scores`). */
+/** One model of the LLM Stats list, as the local server serves it (`/api/model-scores`). */
 export interface ScoredModel {
   slug: string
   name: string
   creator: string
-  /** Artificial Analysis Intelligence Index. */
+  /** LLM Stats general conservative rating. */
   intelligence: number
+  /** LLM Stats coding, code or frontend_development category score. */
   coding?: number
+  /** LLM Stats agents or tool_calling category score. */
   agentic?: number
-  engineering?: number
-  /** Median output tokens per second. */
-  outputSpeed?: number
-  /** USD per million tokens, 3 parts input for 1 part output. */
-  priceBlended?: number
+}
+
+export interface ScoreQuota {
+  limit: number | null
+  remaining: number | null
+  used: number | null
 }
 
 export interface ScoresState {
   models: ScoredModel[]
   updatedAt: string
-  /** The server has no Artificial Analysis key (or none can be stored). */
+  /** The server has no LLM Stats key. Cached or snapshot data can still be shown. */
   keyMissing: boolean
   configured: boolean
-  canStore: boolean
-  keySource: 'stored' | 'env' | 'none'
+  keySource: 'env' | 'command' | 'keychain' | 'none'
+  quota: ScoreQuota | null
   /** Short code of the last failed refresh, when the list shown is stale. */
   error: string
   loaded: boolean
 }
 
-export const EMPTY_SCORES: ScoresState = { models: [], updatedAt: '', keyMissing: false, configured: false, canStore: false, keySource: 'none', error: '', loaded: false }
+export const EMPTY_SCORES: ScoresState = { models: [], updatedAt: '', keyMissing: false, configured: false, keySource: 'none', quota: null, error: '', loaded: false }
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
 
@@ -43,20 +46,26 @@ export function parseScores(value: unknown): ScoresState {
     const intelligence = num(entry.intelligence)
     if (typeof entry.slug !== 'string' || typeof entry.name !== 'string' || intelligence === undefined) continue
     const model: ScoredModel = { slug: entry.slug, name: entry.name, creator: typeof entry.creator === 'string' ? entry.creator : '', intelligence }
-    for (const key of ['coding', 'agentic', 'engineering', 'outputSpeed', 'priceBlended'] as const) {
+    for (const key of ['coding', 'agentic'] as const) {
       const found = num(entry[key])
       if (found !== undefined) model[key] = found
     }
     models.push(model)
   }
-  const keySource = raw.keySource === 'stored' || raw.keySource === 'env' ? raw.keySource : 'none'
+  const keySource = raw.keySource === 'keychain' || raw.keySource === 'command' || raw.keySource === 'env' ? raw.keySource : 'none'
+  const rawQuota = raw.quota && typeof raw.quota === 'object' ? raw.quota as Record<string, unknown> : null
+  const quota = rawQuota ? {
+    limit: num(rawQuota.limit) ?? null,
+    remaining: num(rawQuota.remaining) ?? null,
+    used: num(rawQuota.used) ?? null,
+  } : null
   return {
     models,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
     keyMissing: raw.keyMissing === true,
     configured: raw.configured === true,
-    canStore: raw.canStore === true,
     keySource,
+    quota,
     error: typeof raw.error === 'string' ? raw.error : '',
     loaded: true,
   }
@@ -64,7 +73,7 @@ export function parseScores(value: unknown): ScoresState {
 
 // ---------------------------------------------------------------- matching
 
-// Gateway ids whose spelling differs from the Artificial Analysis slug in a way the name parser cannot bridge.
+// Gateway ids whose spelling differs from the LLM Stats slug in a way the name parser cannot bridge.
 const ALIASES: Record<string, string> = {
   'k3.1-pro': 'kimi-k3.1-pro',
 }
@@ -107,24 +116,18 @@ export function buildScoreIndex(models: readonly ScoredModel[]): ScoreIndex {
 
 // ---------------------------------------------------------------- recommendations
 
-export type Recommendation = 'agentic' | 'coding' | 'engineering' | 'reasoning' | 'fast' | 'cheap'
+export type Recommendation = 'agentic' | 'coding' | 'reasoning'
 
 /**
- * Thresholds, in one place. "Top" means the best fifth of the scored models of the list (at least 5 scored
- * models are needed, or nothing is ranked). A model gets at most MAX_CHIPS, in this order:
- * agentic, coding, engineering, reasoning (the same top fifth of the Intelligence Index), fast, cheap.
- * - agentic / coding / engineering: top fifth of that index among the models that have it. Agentic and coding
- *   are only in Artificial Analysis' paid tiers today, so they appear only when the API sends them.
- * - reasoning: top fifth of the Intelligence Index.
- * - fast: at least FAST_TPS output tokens per second and in the top third for speed.
- * - cheap: blended price at most CHEAP_PRICE USD per million tokens and an Intelligence Index of at least
- *   half the best one of the list: cheap and useless is not a recommendation.
+ * "Top" means the best fifth of the scored models of the list (at least 5 scored models are needed).
+ * A model gets at most MAX_CHIPS, in this order: agentic, coding, reasoning (the top fifth of the general score).
+ * No speed or price recommendation is inferred: LLM Stats does not supply those fields here.
  */
-export const RECOMMENDATION_RULES = { topShare: 0.2, minScored: 5, fastTps: 100, fastShare: 1 / 3, cheapPrice: 1, cheapIntelligenceShare: 0.5, maxChips: 2 } as const
+export const RECOMMENDATION_RULES = { topShare: 0.2, minScored: 5, maxChips: 2 } as const
 
-export const RECOMMENDATION_ORDER: Recommendation[] = ['agentic', 'coding', 'engineering', 'reasoning', 'fast', 'cheap']
+export const RECOMMENDATION_ORDER: Recommendation[] = ['agentic', 'coding', 'reasoning']
 
-type Field = 'agentic' | 'coding' | 'engineering' | 'intelligence' | 'outputSpeed'
+type Field = 'agentic' | 'coding' | 'intelligence'
 
 function threshold(values: number[], share: number) {
   if (values.length < RECOMMENDATION_RULES.minScored) return Infinity
@@ -136,16 +139,12 @@ function threshold(values: number[], share: number) {
 export function recommendations(population: readonly ScoredModel[]): (model: ScoredModel) => Recommendation[] {
   const rules = RECOMMENDATION_RULES
   const cut = (field: Field, share: number = rules.topShare) => threshold(population.map((model) => model[field]).filter((value): value is number => value !== undefined), share)
-  const cuts = { agentic: cut('agentic'), coding: cut('coding'), engineering: cut('engineering'), intelligence: cut('intelligence'), speed: cut('outputSpeed', rules.fastShare) }
-  const best = Math.max(0, ...population.map((model) => model.intelligence))
+  const cuts = { agentic: cut('agentic'), coding: cut('coding'), intelligence: cut('intelligence') }
   return (model) => {
     const chips: Recommendation[] = []
     if (model.agentic !== undefined && model.agentic >= cuts.agentic) chips.push('agentic')
     if (model.coding !== undefined && model.coding >= cuts.coding) chips.push('coding')
-    if (model.engineering !== undefined && model.engineering >= cuts.engineering) chips.push('engineering')
     if (model.intelligence >= cuts.intelligence) chips.push('reasoning')
-    if (model.outputSpeed !== undefined && model.outputSpeed >= rules.fastTps && model.outputSpeed >= cuts.speed) chips.push('fast')
-    if (model.priceBlended !== undefined && model.priceBlended <= rules.cheapPrice && model.intelligence >= best * rules.cheapIntelligenceShare) chips.push('cheap')
     return chips.slice(0, rules.maxChips)
   }
 }
@@ -195,33 +194,6 @@ export function ensureScores(force = false) {
     })()
   }
   return loading
-}
-
-export type KeyResult = 'ok' | 'invalid' | 'unavailable' | 'failed'
-
-/** The key goes once to the server, which stores it encrypted and never sends it back. */
-export async function saveScoreKey(key: string): Promise<KeyResult> {
-  try {
-    const response = await fetch('/api/model-scores/key', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) })
-    if (response.status === 400) return 'invalid'
-    if (response.status === 501) return 'unavailable'
-    if (!response.ok) return 'failed'
-  } catch {
-    return 'failed'
-  }
-  await ensureScores(true)
-  return 'ok'
-}
-
-export async function removeScoreKey(): Promise<KeyResult> {
-  try {
-    const response = await fetch('/api/model-scores/key', { method: 'DELETE', credentials: 'same-origin' })
-    if (!response.ok) return 'failed'
-  } catch {
-    return 'failed'
-  }
-  await ensureScores(true)
-  return 'ok'
 }
 
 export function useScores() {

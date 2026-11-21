@@ -191,30 +191,21 @@
     "notificationsHint": "Quand un bot a fini ou attend ta réponse, sauf si son chat est sous tes yeux",
     "scores": {
       "title": "Scores des modèles",
-      "hint": "Affiche l’indice d’intelligence d’Artificial Analysis et un conseil d’usage (agentique, code, rapide, économique) sur chaque modèle. Clé gratuite, une requête par jour.",
-      "keyLabel": "Clé API Artificial Analysis",
-      "keyPlaceholder": "Colle ta clé",
-      "getKey": "Obtenir une clé gratuite",
-      "save": "Enregistrer la clé",
-      "saving": "Enregistrement…",
-      "remove": "Retirer la clé",
-      "saved": "Clé enregistrée. Les scores arrivent.",
-      "removed": "Clé retirée.",
-      "storedState": "Une clé est enregistrée, chiffrée sur ce Mac.",
-      "envState": "La clé vient de la variable d’environnement ARTIFICIAL_ANALYSIS_API_KEY.",
-      "missing": "Pas encore de clé : les modèles n’affichent aucun score.",
-      "browserOnly": "Cette version ne peut pas chiffrer de clé : utilise la variable d’environnement ARTIFICIAL_ANALYSIS_API_KEY.",
-      "invalid": "Cela ne ressemble pas à une clé valide.",
-      "unavailable": "Cette version ne peut pas garder de clé.",
-      "failed": "La clé n’a pas pu être enregistrée.",
+      "hint": "Affiche le score général LLM Stats et un conseil d’usage (agentique, code, raisonnement) sur chaque modèle identifié sans doute. Au plus une requête API du top 50 par jour ; cache et instantané local restent disponibles hors ligne.",
+      "envState": "La clé vient de la variable d’environnement LLM_STATS_API_KEY.",
+      "commandState": "La clé vient de la commande LLM Stats privée de cette installation.",
+      "keychainState": "La clé LLM Stats vient du trousseau de ce Mac.",
+      "snapshotState": "Données LLM Stats locales affichées ; aucune clé API n’est configurée.",
+      "missing": "Ni clé LLM Stats ni instantané local : les modèles n’affichent aucun score.",
       "updated": "Mis à jour {{date}}",
+      "quota": "Quota API quotidien : {{remaining}}/{{limit}} réponses restantes.",
       "error": {
-        "invalid_key": "Artificial Analysis a refusé la clé.",
-        "rate_limited": "Limite d’Artificial Analysis atteinte, dernière liste affichée.",
-        "too_large": "Artificial Analysis a envoyé une réponse inattendue.",
-        "upstream_failed": "Artificial Analysis est injoignable, dernière liste affichée."
+        "invalid_key": "LLM Stats a refusé la clé.",
+        "rate_limited": "Limite de LLM Stats atteinte, dernières données disponibles affichées.",
+        "too_large": "LLM Stats a envoyé une réponse inattendue.",
+        "upstream_failed": "LLM Stats est injoignable, dernières données disponibles affichées."
       },
-      "attribution": "Scores : Artificial Analysis"
+      "attribution": "Data by LLM Stats"
     }
   },
   "vault": {
@@ -266,23 +257,17 @@
     "contextPercent": "Contexte {{percent}} % ({{used}}/{{max}})",
     "contextNone": "Contexte —",
     "freeTag": "Gratuit",
-    "scoreLabel": "Indice d’intelligence Artificial Analysis : {{score}}",
-    "scoresBy": "Scores : ",
+    "scoreLabel": "Score général LLM Stats : {{score}}",
+    "scoresBy": "Data by ",
     "rec": {
       "agentic": "Agentique",
       "coding": "Code",
-      "engineering": "Ingénierie",
-      "reasoning": "Raisonnement",
-      "fast": "Rapide",
-      "cheap": "Économique"
+      "reasoning": "Raisonnement"
     },
     "recHint": {
-      "agentic": "Parmi les meilleurs de cette liste sur l’indice agentique d’Artificial Analysis",
-      "coding": "Parmi les meilleurs de cette liste sur l’indice de code d’Artificial Analysis",
-      "engineering": "Parmi les meilleurs de cette liste sur l’indice d’ingénierie d’Artificial Analysis",
-      "reasoning": "Parmi les plus hauts indices d’intelligence de cette liste",
-      "fast": "Rapide : 100 tokens par seconde ou plus, parmi les plus rapides de cette liste",
-      "cheap": "Économique : 1 $ ou moins le million de tokens (3 d’entrée pour 1 de sortie), avec au moins la moitié du meilleur score de cette liste"
+      "agentic": "Parmi les meilleurs de cette liste sur le score agents ou appels d’outils de LLM Stats",
+      "coding": "Parmi les meilleurs de cette liste sur le score de code de LLM Stats",
+      "reasoning": "Parmi les plus hauts scores généraux LLM Stats de cette liste"
     }
   },
   "providers": {},

@@ -58,7 +58,7 @@ writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProv
 // Models the simulated proxy answered (tiny live check before a switch).
 const modelProbeCalls = []
 const scoresCalls = []
-const AA_TEST_KEY = 'e2e-key-e2e-key'
+const LLM_STATS_TEST_KEY = 'e2e-key-e2e-key'
 mkdirSync(TEST_ANIMATIONS)
 const TINY_WEBP = Buffer.from('UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==', 'base64')
 for (const slug of ['nova', 'orion']) for (const phase of ['working', 'done']) writeFileSync(path.join(TEST_ANIMATIONS, `${slug}-${phase}.webp`), TINY_WEBP)
@@ -213,18 +213,21 @@ const mock = http.createServer((request, response) => {
   const authenticated = localMode
     ? request.headers['x-hermes-session-token'] === LOCAL_TOKEN
     : Number(/hermes_session=test-(\d+)/.exec(String(request.headers.cookie || ''))?.[1] || 0) > expiredBefore
-  // Stand-in for the Artificial Analysis API (the real one is never called): free-tier shape.
-  if (url.pathname === '/api/v2/language/models/free') {
-    scoresCalls.push({ key: String(request.headers['x-api-key'] || ''), page: url.searchParams.get('page') })
-    if (request.headers['x-api-key'] !== AA_TEST_KEY) { response.statusCode = 401; return response.end('{}') }
-    const entry = (slug, intelligence, extra = {}, evaluations = {}) => ({ slug, name: slug, model_creator: { name: 'Lab' }, evaluations: { artificial_analysis_intelligence_index: intelligence, ...evaluations }, pricing: { price_1m_input_tokens: 3, price_1m_output_tokens: 15 }, performance: { median_output_tokens_per_second: 50 }, ...extra })
-    return response.end(JSON.stringify({ tier: 'free', pagination: { page: 1, page_size: 200, has_more: false }, data: [
-      entry('claude-opus-5-5', 80.4, {}, { artificial_analysis_agentic_index: 90 }),
-      entry('claude-sonnet-5-5', 70, {}, { artificial_analysis_agentic_index: 60 }),
-      entry('claude-haiku-4-5', 30, {}, { artificial_analysis_agentic_index: 20 }),
-      entry('claude-haiku-5-5', 50, { pricing: { price_1m_input_tokens: 0.2, price_1m_output_tokens: 1 }, performance: { median_output_tokens_per_second: 220 } }, { artificial_analysis_agentic_index: 40 }),
-      entry('gpt-6-1-sol', 60, {}, { artificial_analysis_agentic_index: 50 }),
-      entry('kimi-k3', 40, {}, { artificial_analysis_agentic_index: 30 }),
+  // Stand-in for the LLM Stats API (the real one is never called): one general top-50 response.
+  if (url.pathname === '/stats/v1/rankings') {
+    scoresCalls.push({ authorization: String(request.headers.authorization || ''), category: url.searchParams.get('category'), limit: url.searchParams.get('limit') })
+    if (request.headers.authorization !== `Bearer ${LLM_STATS_TEST_KEY}`) { response.statusCode = 401; return response.end('{}') }
+    response.setHeader('x-quota-limit', '250')
+    response.setHeader('x-quota-remaining', '249')
+    response.setHeader('x-quota-used', '1')
+    const entry = (slug, score, categories = {}) => ({ model_id: slug, model_name: slug, organization: 'Lab', conservative_rating: score, rank: 1, open_weight: false, categories })
+    return response.end(JSON.stringify({ ranked_at: '2026-11-21T00:00:00Z', models: [
+      entry('claude-opus-5-5', 80.4, { agents: { score: 90 }, code: { score: 85 } }),
+      entry('claude-sonnet-5-5', 70, { agents: { score: 60 }, code: { score: 65 } }),
+      entry('claude-haiku-4-5', 30, { agents: { score: 20 }, code: { score: 25 } }),
+      entry('claude-haiku-5-5', 50, { agents: { score: 40 }, code: { score: 45 } }),
+      entry('gpt-6-1-sol', 60, { agents: { score: 50 }, code: { score: 55 } }),
+      entry('kimi-k3', 40, { agents: { score: 30 }, code: { score: 35 } }),
     ] }))
   }
   if (url.pathname === '/v1/responses' && request.method === 'POST') {
@@ -1088,12 +1091,12 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
       HERMESBOT_TEST_SESSION_FILE: SESSION_FILE,
-      HERMESBOT_TEST_MEMORY_KEYSTORE: '1', HERMESBOT_TEST_SCORES_ORIGIN: E2E_GATEWAY_ORIGIN,
+      LLM_STATS_API_KEY: LLM_STATS_TEST_KEY, HERMESBOT_TEST_SCORES_ORIGIN: E2E_GATEWAY_ORIGIN,
       ...TEST_ENV,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -3043,33 +3046,21 @@ try {
   await settingsDialog.getByRole('button', { name: 'Conversations' }).click()
   await settingsDialog.getByRole('radio', { name: 'Entrée', exact: true }).click()
   await settingsDialog.getByRole('button', { name: 'Modèles' }).click()
-  // Model scores (Artificial Analysis): no key, no badge, the key field is there. The picker is checked below.
-  await settingsDialog.getByTestId('scores-state').getByText('Pas encore de clé', { exact: false }).waitFor({ timeout: 5_000 })
-  if (await settingsDialog.locator('.model-score').count()) throw new Error('Un score est affiché sans clé.')
+  // Model scores (LLM Stats): environment key, no key editor, score and attribution. The picker is checked below.
+  await settingsDialog.getByTestId('scores-state').getByText('LLM_STATS_API_KEY', { exact: false }).waitFor({ timeout: 5_000 })
+  await settingsDialog.getByTestId('scores-quota').getByText('249/250', { exact: false }).waitFor({ timeout: 3_000 })
+  if (await settingsDialog.locator('.settings-scores input').count()) throw new Error('Le réglage LLM Stats ne doit pas proposer de champ de clé.')
   await settingsDialog.getByRole('textbox', { name: 'Rechercher dans les modèles' }).fill('opus')
   await settingsDialog.locator('.settings-model[data-model="claude-opus-5-5"]').waitFor({ timeout: 5_000 })
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/model-scores`)).status !== 401) throw new Error('/api/model-scores répond sans session.')
-  if (scoresCalls.length) throw new Error('L’API de scores est appelée sans clé.')
-  const keyField = settingsDialog.getByRole('textbox', { name: 'Clé API Artificial Analysis' })
-  if (await keyField.getAttribute('type') !== 'password') throw new Error('La clé doit être masquée à la saisie.')
-  await keyField.fill('trop court')
-  await settingsDialog.getByRole('button', { name: 'Enregistrer la clé' }).click()
-  await settingsDialog.getByText('Cela ne ressemble pas à une clé valide.').waitFor({ timeout: 5_000 })
-  await keyField.fill(AA_TEST_KEY)
-  await settingsDialog.getByRole('button', { name: 'Enregistrer la clé' }).click()
-  await settingsDialog.getByTestId('scores-state').getByText('chiffrée sur ce Mac', { exact: false }).waitFor({ timeout: 5_000 })
   await settingsDialog.locator('.settings-model[data-model="claude-opus-5-5"] .model-score').getByText('80', { exact: true }).waitFor({ timeout: 5_000 })
-  await settingsDialog.getByText('Scores : Artificial Analysis').first().waitFor({ timeout: 3_000 })
-  if (!scoresCalls.length || scoresCalls.some((call) => call.key !== AA_TEST_KEY)) throw new Error(`Appels de scores inattendus : ${JSON.stringify(scoresCalls)}`)
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/model-scores`)).status !== 401) throw new Error('/api/model-scores répond sans session.')
+  if (!scoresCalls.length || scoresCalls.some((call) => call.authorization !== `Bearer ${LLM_STATS_TEST_KEY}` || call.category !== 'general' || call.limit !== '50')) throw new Error(`Appels de scores inattendus : ${JSON.stringify(scoresCalls)}`)
+  await settingsDialog.getByText('Data by LLM Stats').first().waitFor({ timeout: 3_000 })
   const scoresBody = await page.evaluate(async () => (await fetch('/api/model-scores', { credentials: 'same-origin' })).text())
-  if (scoresBody.includes(AA_TEST_KEY) || !scoresBody.includes('"claude-opus-5-5"')) throw new Error('/api/model-scores doit servir les scores sans jamais renvoyer la clé.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/model-scores/key`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: E2E_APP_ORIGIN }, body: JSON.stringify({ key: 'aaaaaaaaaaaa' }) })).status !== 401) throw new Error('La clé peut être écrite sans session.')
-  await settingsDialog.getByRole('button', { name: 'Retirer la clé' }).click()
-  await settingsDialog.getByTestId('scores-state').getByText('Pas encore de clé', { exact: false }).waitFor({ timeout: 5_000 })
-  await settingsDialog.locator('.model-score').first().waitFor({ state: 'detached', timeout: 5_000 })
-  await keyField.fill(AA_TEST_KEY)
-  await settingsDialog.getByRole('button', { name: 'Enregistrer la clé' }).click()
-  await settingsDialog.locator('.settings-model[data-model="claude-opus-5-5"] .model-score').waitFor({ timeout: 5_000 })
+  if (scoresBody.includes(LLM_STATS_TEST_KEY) || !scoresBody.includes('"claude-opus-5-5"')) throw new Error('/api/model-scores doit servir les scores sans jamais renvoyer la clé.')
+  if ((await fetch(`${E2E_APP_ORIGIN}/api/model-scores/key`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: E2E_APP_ORIGIN }, body: JSON.stringify({ key: 'aaaaaaaaaaaa' }) })).status !== 401) throw new Error('L’ancienne route de clé répond sans session.')
+  const retiredKeyStatus = await page.evaluate(async () => (await fetch('/api/model-scores/key', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'aaaaaaaaaaaa' }) })).status)
+  if (retiredKeyStatus !== 410) throw new Error('L’ancienne écriture de clé doit être retirée (410).')
   await settingsDialog.screenshot({ path: `${SCREENSHOTS}settings-models-scores.png` })
   await settingsDialog.getByRole('textbox', { name: 'Rechercher dans les modèles' }).fill('')
   const settingsSearch = settingsDialog.getByRole('textbox', { name: 'Rechercher dans les modèles' })
@@ -3104,7 +3095,7 @@ try {
   // Readable names: Family Tier Version; the exact id stays in the tooltip.
   const nameOf = (model) => page.locator(`.model-option[data-model="${model}"] .model-option-name`).innerText()
   if (await nameOf('kimi-for-coding') !== 'Kimi for Coding') throw new Error(`Nom de modèle inattendu : ${await nameOf('kimi-for-coding')}`)
-  if (await page.locator('.model-option[data-model="kimi-for-coding"] .model-score').count()) throw new Error('Un modèle inconnu d’Artificial Analysis affiche un score.')
+  if (await page.locator('.model-option[data-model="kimi-for-coding"] .model-score').count()) throw new Error('Un modèle inconnu de LLM Stats affiche un score.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
   if (await nameOf('gpt-6.1-sol') !== 'GPT Sol 6.1') throw new Error(`Nom de modèle inattendu : ${await nameOf('gpt-6.1-sol')}`)
   if (await page.locator('.model-option[data-model="gpt-6.1-sol"]').getAttribute('title') !== 'gpt-6.1-sol') throw new Error('L’identifiant exact doit rester dans l’infobulle.')
@@ -3113,8 +3104,8 @@ try {
   await opusRow.locator('.model-score').getByText('80', { exact: true }).waitFor({ timeout: 5_000 })
   await opusRow.locator('.model-option-tag.is-agentic').getByText('Agentique').waitFor({ timeout: 3_000 })
   if (await opusRow.locator('.model-option-tag.is-rec').count() > 2) throw new Error('Plus de deux conseils sur une ligne.')
-  await page.locator('.model-option[data-model="claude-haiku-5-5"] .model-option-tag.is-fast').getByText('Rapide').waitFor({ timeout: 3_000 })
-  await page.locator('.model-picker-footer').getByRole('link', { name: 'Scores : Artificial Analysis' }).waitFor({ timeout: 3_000 })
+  await opusRow.locator('.model-option-tag.is-coding').getByText('Code').waitFor({ timeout: 3_000 })
+  await page.locator('.model-picker-footer').getByRole('link', { name: 'Data by LLM Stats' }).waitFor({ timeout: 3_000 })
   await page.getByRole('button', { name: 'Gérer les modèles' }).click()
   await settingsDialog.waitFor({ timeout: 3_000 })
   await settingsDialog.locator('.settings-model-toggle', { hasText: 'Anthropic' }).click()
@@ -3947,7 +3938,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
@@ -4272,7 +4263,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,

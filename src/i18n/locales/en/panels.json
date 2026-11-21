@@ -191,30 +191,21 @@
     "notificationsHint": "When a bot is done or waits on your answer, unless its chat is in view",
     "scores": {
       "title": "Model scores",
-      "hint": "Shows the Artificial Analysis Intelligence Index and a usage tip (agentic, coding, fast, cheap) on each model. Free key, one request a day.",
-      "keyLabel": "Artificial Analysis API key",
-      "keyPlaceholder": "Paste your key",
-      "getKey": "Get a free key",
-      "save": "Save key",
-      "saving": "Saving…",
-      "remove": "Remove key",
-      "saved": "Key saved. Scores load in a moment.",
-      "removed": "Key removed.",
-      "storedState": "A key is stored, encrypted on this Mac.",
-      "envState": "The key comes from the ARTIFICIAL_ANALYSIS_API_KEY environment variable.",
-      "missing": "No key yet: models show no score.",
-      "browserOnly": "This build cannot encrypt a key: use the ARTIFICIAL_ANALYSIS_API_KEY environment variable.",
-      "invalid": "This does not look like a valid key.",
-      "unavailable": "This build cannot store a key.",
-      "failed": "The key could not be saved.",
+      "hint": "Shows the LLM Stats general score and a usage tip (agentic, coding, reasoning) on each confidently matched model. At most one top-50 API request a day; cached and local snapshot data stay available offline.",
+      "envState": "Using the key from the LLM_STATS_API_KEY environment variable.",
+      "commandState": "Using the key from this installation’s private LLM Stats command.",
+      "keychainState": "Using the LLM Stats key from this Mac’s keychain.",
+      "snapshotState": "Showing local LLM Stats data; no API key is configured.",
+      "missing": "No LLM Stats key or local snapshot: models show no score.",
       "updated": "Updated {{date}}",
+      "quota": "Daily API quota: {{remaining}}/{{limit}} responses remaining.",
       "error": {
-        "invalid_key": "Artificial Analysis refused the key.",
-        "rate_limited": "Artificial Analysis rate limit reached, showing the last list.",
-        "too_large": "Artificial Analysis sent an unexpected answer.",
-        "upstream_failed": "Artificial Analysis is unreachable, showing the last list."
+        "invalid_key": "LLM Stats refused the key.",
+        "rate_limited": "LLM Stats rate limit reached, showing the last available data.",
+        "too_large": "LLM Stats sent an unexpected answer.",
+        "upstream_failed": "LLM Stats is unreachable, showing the last available data."
       },
-      "attribution": "Scores: Artificial Analysis"
+      "attribution": "Data by LLM Stats"
     }
   },
   "vault": {
@@ -266,23 +257,17 @@
     "contextPercent": "Context {{percent}}% ({{used}}/{{max}})",
     "contextNone": "Context —",
     "freeTag": "Free",
-    "scoreLabel": "Artificial Analysis Intelligence Index: {{score}}",
-    "scoresBy": "Scores: ",
+    "scoreLabel": "LLM Stats general score: {{score}}",
+    "scoresBy": "Data by ",
     "rec": {
       "agentic": "Agentic",
       "coding": "Coding",
-      "engineering": "Engineering",
-      "reasoning": "Reasoning",
-      "fast": "Fast",
-      "cheap": "Cheap"
+      "reasoning": "Reasoning"
     },
     "recHint": {
-      "agentic": "Among the best of this list on Artificial Analysis’ agentic index",
-      "coding": "Among the best of this list on Artificial Analysis’ coding index",
-      "engineering": "Among the best of this list on Artificial Analysis’ engineering index",
-      "reasoning": "Among the highest Intelligence Index scores of this list",
-      "fast": "Fast: 100 tokens per second or more, among the quickest of this list",
-      "cheap": "Cheap: $1 or less per million tokens (3:1 input to output), with at least half the best score of this list"
+      "agentic": "Among the best of this list on the LLM Stats agents or tool-calling score",
+      "coding": "Among the best of this list on the LLM Stats coding score",
+      "reasoning": "Among the highest LLM Stats general scores of this list"
     }
   },
   "providers": {},

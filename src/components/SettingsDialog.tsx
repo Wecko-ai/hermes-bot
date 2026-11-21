@@ -6,7 +6,7 @@ import { version } from '../../package.json'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
-import { ensureScores, removeScoreKey, saveScoreKey, scoreModels, useScores, type KeyResult } from '../lib/model-scores'
+import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
@@ -306,54 +306,25 @@ function useHiddenModelsDraft(demo: boolean) {
 
 type ModelsDraft = ReturnType<typeof useHiddenModelsDraft>
 
-/** Artificial Analysis key: sent once to the local server, which stores it encrypted and never returns it. */
+/** LLM Stats source, freshness and quota. Keys are configured outside the app. */
 function ScoresSection() {
   const { t } = useTranslation()
   const scores = useScores()
-  const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
   useEffect(() => { void ensureScores() }, [])
-  const report = (result: KeyResult, done: string) => setMessage(result === 'ok' ? done : t(`settings.scores.${result === 'invalid' ? 'invalid' : result === 'unavailable' ? 'unavailable' : 'failed'}`))
-  const save = async () => {
-    setBusy(true)
-    const result = await saveScoreKey(key.trim())
-    setBusy(false)
-    if (result === 'ok') setKey('')
-    report(result, t('settings.scores.saved'))
-  }
-  const remove = async () => {
-    setBusy(true)
-    report(await removeScoreKey(), t('settings.scores.removed'))
-    setBusy(false)
-  }
-  const state = scores.keySource === 'stored' ? t('settings.scores.storedState')
-    : scores.keySource === 'env' ? t('settings.scores.envState')
-      : scores.loaded && !scores.canStore ? t('settings.scores.browserOnly') : t('settings.scores.missing')
+  const state = scores.keySource === 'command' ? t('settings.scores.commandState')
+    : scores.keySource === 'keychain' ? t('settings.scores.keychainState')
+      : scores.keySource === 'env' ? t('settings.scores.envState')
+        : scores.models.length > 0 ? t('settings.scores.snapshotState') : t('settings.scores.missing')
+  const quota = scores.quota?.remaining !== null && scores.quota?.remaining !== undefined && scores.quota.limit !== null && scores.quota.limit !== undefined
+    ? t('settings.scores.quota', { remaining: scores.quota.remaining, limit: scores.quota.limit }) : ''
   return (
     <section className="settings-scores" aria-label={t('settings.scores.title')}>
       <h3 className="settings-scores-title">{t('settings.scores.title')}</h3>
       <p className="settings-note">{t('settings.scores.hint')}</p>
       <p className="settings-note" data-testid="scores-state">{state}{scores.updatedAt && scores.models.length > 0 ? ` ${t('settings.scores.updated', { date: new Date(scores.updatedAt).toLocaleDateString() })}` : ''}</p>
+      {quota && <p className="settings-note" data-testid="scores-quota">{quota}</p>}
       {scores.error && <p className="settings-note is-error">{t(`settings.scores.error.${scores.error}`, { defaultValue: t('settings.scores.error.upstream_failed') })}</p>}
-      {scores.canStore && scores.keySource !== 'env' && (
-        <div className="settings-scores-key">
-          <input
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={key}
-            placeholder={t('settings.scores.keyPlaceholder')}
-            aria-label={t('settings.scores.keyLabel')}
-            onChange={(event) => setKey(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter' && key.trim() && !busy) void save() }}
-          />
-          <button type="button" className="settings-button" disabled={busy || !key.trim()} onClick={() => void save()}>{busy ? t('settings.scores.saving') : t('settings.scores.save')}</button>
-          {scores.keySource === 'stored' && <button type="button" className="settings-button" disabled={busy} onClick={() => void remove()}>{t('settings.scores.remove')}</button>}
-        </div>
-      )}
-      {message && <p className="settings-note" role="status">{message}</p>}
-      <p className="settings-note"><a className="settings-link" href="https://artificialanalysis.ai/documentation" target="_blank" rel="noreferrer noopener">{t('settings.scores.getKey')}</a> · <ScoresAttribution /></p>
+      <p className="settings-note"><ScoresAttribution /></p>
     </section>
   )
 }

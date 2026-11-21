@@ -428,8 +428,6 @@ a { color: inherit; }
 .settings-scores { margin: 4px 0 14px; padding: 10px 12px; border-radius: 12px; background: var(--surface-soft); }
 .settings-scores-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
 .settings-scores .settings-note { margin: 2px 0 6px; }
-.settings-scores-key { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-.settings-scores-key input { flex: 1; min-width: 0; padding: 6px 9px; border: .5px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12.5px; }
 .model-option-price { flex: none; margin-left: auto; color: var(--text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .model-option-check { flex: none; margin-left: auto; color: var(--accent); }
 .model-option-price + .model-option-check { margin-left: 0; }

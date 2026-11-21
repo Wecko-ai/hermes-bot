@@ -30,6 +30,7 @@ describe('configuration locale', () => {
     expect(config.ollamaOrigin).toBe('http://127.0.0.1:11434')
     expect(config.localChat.model).toBe('')
     expect(config.browserTurn.command).toBeNull()
+    expect(config.llmStats).toEqual({ snapshotPath: '', keyCommand: null })
     expect(config.animationsDir).toBe(path.join(dataDir, 'animations'))
     expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '' })
   })
@@ -118,6 +119,23 @@ describe('configuration locale', () => {
     const notABooleanFixture = fixture({ userConfig: { allowRemoteGateway: 'true', gatewayOrigin: 'http://203.0.113.5:9120' } })
     const notABoolean = loadConfig({ env: {}, platform: 'darwin', home: notABooleanFixture.home, root: notABooleanFixture.root })
     expect(notABoolean.gatewayOrigin).toBe('http://127.0.0.1:9120')
+  })
+
+  it('accepts an absolute LLM Stats snapshot path from the environment', () => {
+    const { root, home } = fixture({ userConfig: { llmStats: { snapshotPath: 'relative.json' } } })
+    const config = loadConfig({ env: { HERMESBOT_LLM_STATS_SNAPSHOT: '/tmp/llm-stats.json' }, platform: 'darwin', home, root })
+    expect(config.llmStats.snapshotPath).toBe('/tmp/llm-stats.json')
+    expect(loadConfig({ env: {}, platform: 'darwin', home, root }).llmStats.snapshotPath).toBe('')
+  })
+
+  it('accepts only an absolute argv array for the LLM Stats key command', () => {
+    const valid = fixture({ privateConfig: { llmStats: { keyCommand: ['/usr/bin/ssh', '-o', 'ConnectTimeout=12', 'host', 'secret-command'] } } })
+    expect(loadConfig({ env: {}, platform: 'darwin', home: valid.home, root: valid.root }).llmStats.keyCommand)
+      .toEqual(['/usr/bin/ssh', '-o', 'ConnectTimeout=12', 'host', 'secret-command'])
+    for (const keyCommand of [['relative/command'], [], ['/usr/bin/ssh', ''], 'ssh', [42]]) {
+      const invalid = fixture({ privateConfig: { llmStats: { keyCommand } } })
+      expect(loadConfig({ env: {}, platform: 'darwin', home: invalid.home, root: invalid.root }).llmStats.keyCommand).toBeNull()
+    }
   })
 
   it('range les données selon le système', () => {

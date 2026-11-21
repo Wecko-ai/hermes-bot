@@ -70,6 +70,13 @@ function command(value) {
   return argv.length && path.isAbsolute(argv[0]) ? argv : null
 }
 
+/** Secret-reading commands are stricter: no empty/non-string argument is silently dropped. */
+function secretCommand(value) {
+  return Array.isArray(value) && value.length > 0 && value.length <= 32
+    && value.every((argument) => typeof argument === 'string' && argument.trim().length > 0 && argument.length <= 128)
+    && path.isAbsolute(value[0]) ? [...value] : null
+}
+
 /**
  * Models checked by a tiny live request before the app switches a chat to them: model-id prefix to the
  * base URL of an OpenAI Responses-compatible endpoint on this machine (a local proxy, keyless). A provider
@@ -115,6 +122,7 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
   const ui = raw.ui && typeof raw.ui === 'object' ? raw.ui : {}
   const localChat = raw.localChat && typeof raw.localChat === 'object' ? raw.localChat : {}
   const browserTurn = raw.browserTurn && typeof raw.browserTurn === 'object' ? raw.browserTurn : {}
+  const llmStats = raw.llmStats && typeof raw.llmStats === 'object' ? raw.llmStats : {}
 
   const allowRemoteGateway = raw.allowRemoteGateway === true
   const gatewayOrigin = pinnedOrigin(env.HERMES_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.gatewayOrigin, allowRemoteGateway) || 'http://127.0.0.1:9120'
@@ -144,6 +152,13 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       remoteCommand: env.BROWSER_TOUR_COMMAND ? null : command(browserTurn.remoteCommand),
     },
     modelProbes: modelProbes(raw.modelProbes, allowRemoteGateway),
+    llmStats: {
+      // Optional local LLM Stats snapshot, for offline display. Empty on a generic install.
+      snapshotPath: [text(env.HERMESBOT_LLM_STATS_SNAPSHOT, 4096), text(llmStats.snapshotPath, 4096)]
+        .find((value) => path.isAbsolute(value)) || '',
+      // Trusted installation setting: argv only, never a shell string. Its stdout is the key.
+      keyCommand: secretCommand(llmStats.keyCommand),
+    },
     animationsDir: text(env.HERMESBOT_ANIMATIONS, 4096) || text(raw.animationsDir, 4096)
       || (usePrivate && fs.existsSync(defaultAnimations) ? defaultAnimations : path.join(dataDir, 'animations')),
     // Interface preferences, sent as is to the window by /api/app-config.

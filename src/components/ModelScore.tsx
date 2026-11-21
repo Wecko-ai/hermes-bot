@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { ModelScoreInfo } from '../lib/model-scores'
 
-/** Artificial Analysis score and up to two usage chips of a model row. */
+/** LLM Stats score and up to two usage chips of a model row. */
 export function ModelScoreMeta({ info }: { info: ModelScoreInfo | undefined }) {
   const { t } = useTranslation()
   if (!info) return null
@@ -14,8 +14,8 @@ export function ModelScoreMeta({ info }: { info: ModelScoreInfo | undefined }) {
   )
 }
 
-/** The attribution Artificial Analysis requires. Opens in the browser through the app's link guard. */
+/** The attribution LLM Stats requires. Opens in the browser through the app's link guard. */
 export function ScoresAttribution() {
   const { t } = useTranslation()
-  return <a className="model-picker-manage" href="https://artificialanalysis.ai/" target="_blank" rel="noreferrer noopener">{t('settings.scores.attribution')}</a>
+  return <a className="model-picker-manage" href="https://llm-stats.com/" target="_blank" rel="noreferrer noopener">{t('settings.scores.attribution')}</a>
 }

@@ -601,39 +601,23 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
 // the model cannot execute anything. From another Mac, 127.0.0.1:11434 may be a tunnel to the Ollama machine.
 const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
 const modelProbe = createModelProbe({ probes: CONFIG.modelProbes })
-// Artificial Analysis scores: the key is stored encrypted by the app (safeStorage), or comes from the environment.
-// Tests only (never in production): an in-memory key store and a local stand-in for the API.
-let memoryScoreKey = ''
-const testKeyStore = DEVELOPMENT && process.env.HERMESBOT_TEST_MEMORY_KEYSTORE === '1'
-  ? { load: () => memoryScoreKey, save: (value) => { memoryScoreKey = value }, clear: () => { memoryScoreKey = '' } }
-  : null
+// LLM Stats scores: trusted private key command, then environment or macOS Keychain.
+// Tests only (never in production): a local stand-in for the API.
 const testScoresOrigin = DEVELOPMENT && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.HERMESBOT_TEST_SCORES_ORIGIN || '') ? process.env.HERMESBOT_TEST_SCORES_ORIGIN : undefined
 const modelScores = createModelScores({
-  keyStore: globalThis.__hermesBotModelScoreKeyStore || testKeyStore,
   apiOrigin: testScoresOrigin,
-  cacheFile: path.join(CONFIG.dataDir, 'model-scores-cache.json'),
+  cacheFile: path.join(CONFIG.dataDir, 'llm-stats-scores-cache.json'),
+  snapshotFile: CONFIG.llmStats.snapshotPath,
+  keyCommand: CONFIG.llmStats.keyCommand,
   env: process.env,
 })
-const SCORE_KEY_ERRORS = { invalid_key: 400, storage_unavailable: 501, storage_failed: 503 }
 
 async function handleModelScores(request, response, url) {
-  // A real HermesBot session only: the list is the user's own data, and the key route writes a secret.
+  // A real HermesBot session only: the list is the user's own data.
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  if (url.pathname === '/api/model-scores') {
-    if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
-    return json(response, 200, await modelScores.get())
-  }
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  let error
-  if (request.method === 'PUT') {
-    let body
-    try { body = await bodyJson(request, 1_024) } catch { return json(response, 400, { error: 'invalid_body' }) }
-    error = modelScores.setKey(body?.key)
-  } else if (request.method === 'DELETE') error = modelScores.removeKey()
-  else return json(response, 405, { error: 'method_not_allowed' })
-  if (error) return json(response, SCORE_KEY_ERRORS[error] || 400, { error })
-  // Never the key itself: only whether one is set.
-  return json(response, 200, { ok: true, ...modelScores.status() })
+  if (url.pathname === '/api/model-scores/key') return json(response, 410, { error: 'key_management_removed' })
+  if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
+  return json(response, 200, await modelScores.get())
 }
 const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
 const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/

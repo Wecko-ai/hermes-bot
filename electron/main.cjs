@@ -86,9 +86,6 @@ function configureSessionPersistence() {
   }
   // Local chat. `null`: no file yet. An unreadable file throws: the server then refuses to write over it.
   globalThis.__hermesBotLocalChatStore = bind(path.join(directory, 'local-chat.bin'), null)
-  // Artificial Analysis API key (model scores): encrypted like the credentials, never sent to the page.
-  const scoreKey = path.join(directory, 'model-scores-key.bin')
-  globalThis.__hermesBotModelScoreKeyStore = { ...bind(scoreKey, ''), clear: () => fs.rmSync(scoreKey, { force: true }) }
 }
 
 function hermesReady() {
