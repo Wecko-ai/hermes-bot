@@ -289,6 +289,16 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
     setTimeout(() => setCopied(false), 1400)
   }
   if (message.agent) return <AgentNote message={message} profile={profile} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
+  if (message.progress) {
+    return (
+      <div className="progress-bubble">
+        <span className="progress-bubble-mark" aria-hidden="true" />
+        <span className="visually-hidden">{t('messages.progress')}</span>
+        <p>{message.content}</p>
+        {message.createdAt ? <time dateTime={message.createdAt}>{shortTime(message.createdAt)}</time> : null}
+      </div>
+    )
+  }
   if (message.role === 'system' || message.role === 'tool') {
     return <div className="system-message">{message.content}</div>
   }
@@ -299,7 +309,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
   // Answers sent from a questions card: a tight question / answer list, not the raw numbered text.
   const sentAnswers = message.role === 'user' ? parseAnswersPrompt(message.content) : null
   return (
-    <article className={`message message-${message.role} ${message.streaming ? 'is-streaming' : ''} ${message.failed ? 'is-failed' : ''} ${isEntering(message) ? 'is-entering' : ''}`}>
+    <article className={`message message-${message.role} ${message.ack ? 'is-ack' : ''} ${message.streaming ? 'is-streaming' : ''} ${message.failed ? 'is-failed' : ''} ${isEntering(message) ? 'is-entering' : ''}`}>
       <div className="message-content">
         {sentAnswers
           ? <dl className="sent-answers" aria-label={sentAnswers.intro}>
@@ -325,7 +335,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
       {!message.streaming && (
         <div className="message-meta">
           <span>{message.pending ? t('messages.sending') : message.failed ? t('messages.sendFailed') : shortTime(message.createdAt)}</span>
-          {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? t('messages.priority') : t('messages.queued')}</span>}
+          {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? t('messages.priority') : message.delivery === 'steer' ? t('messages.steered') : t('messages.queued')}</span>}
           {message.role === 'assistant' && <button className="message-copy" aria-label={t('messages.copyReply')} onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
         </div>
       )}

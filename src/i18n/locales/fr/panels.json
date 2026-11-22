@@ -117,6 +117,9 @@
     "showUsageHint": "Sous la zone de saisie",
     "caveman": "Mode caveman",
     "cavemanHint": "Les bots te répondent en 1 à 3 lignes : le résultat, puis ce que tu dois décider. Pour les messages envoyés d’ici ; ce qu’ils écrivent ailleurs reste normal.",
+    "teammate": "Consigne coéquipier",
+    "teammateHint": "Note partagée, lue avec chaque message des bots qui ont Équipe activé (activé par défaut ; on le coupe dans le champ de ce bot). Le bot accuse réception en une phrase, poste une courte progression à une vraie étape, puis un résultat clair. Tu peux modifier le texte, ou le remettre d’origine.",
+    "teammateReset": "Réinitialiser",
     "guide": {
       "title": "Mode d’emploi du chat",
       "send": "Envoyer le message",
@@ -127,7 +130,7 @@
       "brain": "Réfléchir ensemble, rien ne s’exécute",
       "plan": "Construire un plan avant toute exécution",
       "exec": "Exécuter la tâche",
-      "delivery": "Pendant que le bot travaille : brouillon, file ou interruption",
+      "delivery": "Pendant que le bot travaille : écrire dans le tour, file, ou interruption",
       "files": "Ajouter des fichiers : glisser-déposer, coller, ou le bouton +",
       "mic": "Dicter avec la reconnaissance vocale du Mac : Stop pour retoucher le texte, Envoyer pour l’envoyer tout de suite",
       "search": "Chercher dans la conversation",

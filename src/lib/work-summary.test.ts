@@ -30,6 +30,12 @@ describe('résumé du travail', () => {
     expect(run([{ type: 'message.interim', payload: { text: 'NOREPLY' } }])).toBeUndefined()
   })
 
+  it('prend une progression pour note, sans le préfixe', () => {
+    expect(workLine(run([{ type: 'progress', payload: { text: 'PROGRESS: Les tests passent, il reste la doc.' } }]))).toBe('Les tests passent, il reste la doc.')
+    expect(workLine(run([{ type: 'message.interim', payload: { text: 'PROGRESS: Je relance le parcours complet.' } }]))).toBe('Je relance le parcours complet.')
+    expect(workLine(run([{ type: 'message.progress', payload: { text: 'Deux échecs restent.' } }]))).toBe('Deux échecs restent.')
+  })
+
   it('oublie l’étape finie et le résumé à la fin du tour', () => {
     const step = run([{ type: 'tool.start', payload: { name: 'patch', context: 'a.ts' } }, { type: 'tool.complete', payload: { name: 'patch' } }])
     expect(workLine(step, 'Tâche de fond')).toBe('Tâche de fond')

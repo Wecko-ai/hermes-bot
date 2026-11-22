@@ -117,8 +117,12 @@ export interface ChatMessage {
   streaming?: boolean
   /** Message between two bots (`message_agent`): an “Orion messaged Iris” line in the thread. */
   agent?: AgentMessage
-  /** Sent during a turn: queued, or priority (the turn was interrupted for it). */
-  delivery?: 'queue' | 'priority'
+  /** Sent during a turn: queued, priority (the turn was interrupted), or steered into the running turn. */
+  delivery?: 'queue' | 'priority' | 'steer'
+  /** Milestone posted while the bot works: a compact bubble, not the final answer. */
+  progress?: boolean
+  /** One-sentence acknowledgement at the start of a turn. Stays in the thread while work continues. */
+  ack?: boolean
   /** Images the user sent with the message: paths on the gateway's machine. */
   images?: string[]
   /** `delegate_task` call: the prompt of each child the bot started (Subagents tab). */

@@ -11,6 +11,7 @@
     "stopBot": "Stop the bot",
     "sendPriority": "Send as priority",
     "sendQueue": "Add to queue",
+    "sendSteer": "Send into this turn",
     "send": "Send",
     "modeGroup": "Work mode",
     "deliveryGroup": "Sending while working",
@@ -39,6 +40,8 @@
     "sendFailed": "Failed to send",
     "priority": "Priority",
     "queued": "Queued",
+    "steered": "In this turn",
+    "progress": "Progress",
     "copyReply": "Copy the reply",
     "copyCode": "Copy",
     "copiedCode": "Copied",
@@ -220,13 +223,19 @@
   },
   "delivery": {
     "wait": { "label": "Wait", "title": "The message stays a draft until the turn ends" },
+    "steer": { "label": "Chat", "title": "Send it into the running turn. The bot keeps working and reads it after the current step." },
     "queue": { "label": "Queue", "title": "The message sends by itself once the bot has finished its task" },
     "priority": { "label": "Prio", "title": "The bot stops, reads this message, then resumes its task" },
     "placeholder": {
       "queue": "Message for {{name}}, sent at the end of its turn",
       "priority": "Priority message: {{name}} stops to read it",
-      "wait": "Write to {{name}}: the message waits for the end of its turn"
+      "wait": "Write to {{name}}: the message waits for the end of its turn",
+      "steer": "Message {{name}} while they keep working"
     }
+  },
+  "teammate": {
+    "label": "Team",
+    "title": "Teammate mode: one short acknowledgement, a progress note at real milestones, then a clear result. You can keep chatting while the work runs."
   },
   "modes": {
     "brain": { "label": "BRAIN", "title": "Thinks it through with you and looks for the best solutions, without running anything" },

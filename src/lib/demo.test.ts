@@ -57,6 +57,8 @@ describe('demo data', () => {
       expect(bot('orion')?.status).toBe('working')
       // Nothing of the thread folds into the working line.
       expect(stepIds(chat, true, 'orion').size).toBe(0)
+      expect(chat.some((message) => message.ack)).toBe(true)
+      expect(chat.some((message) => message.progress)).toBe(true)
     })
 
     it('opens the local chat on a fictional model, with a fixed reply', () => {

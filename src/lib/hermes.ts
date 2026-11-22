@@ -10,6 +10,7 @@ import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
 import { UNASSIGNED_SECTION_ID, UNASSIGNED_SECTION_NAME } from './roster-groups'
 import { i18n } from '../i18n'
 import { readModelMemory, withRememberedModels, writeModelMemory } from './model-memory'
+import { splitAssistantPieces } from './teammate'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -134,7 +135,7 @@ const isoDate = (value: unknown): string | null => {
 
 /** What the user wrote, without the app-only notes added for the bot or a compaction prefix. */
 const COMPACTION_REQUEST = /^(?:\[STILL IN PROGRESS\b[^\]]*\]\s*)+/
-const TURN_INSTRUCTION = /\n?[ \t]*\[HermesBot (?:mode|style):[^\]]*\][ \t]*(?=\n|$)/g
+const TURN_INSTRUCTION = /\n?[ \t]*\[HermesBot (?:mode|style|teammate):[^\]]*\][ \t]*(?=\n|$)/g
 const cleanUserText = (text: string) => withoutFileRefs(withoutMentionNote(splitUserImages(text).text))
   .replace(COMPACTION_REQUEST, '')
   .replace(TURN_INSTRUCTION, '')
@@ -193,13 +194,27 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   const fromGateway = role === 'user' && isGatewayMessage(content, asString(message.display_kind))
   // The first turn of a bot created here: Activity only, never a bubble of the user.
   const kickoff = role === 'user' && isKickoffMessage(content)
+  const technical = silent || fromGateway || kickoff || role === 'system' || role === 'tool'
+  // A PROGRESS line is a milestone bubble, kept apart from the answer around it.
+  if (role === 'assistant' && !silent) {
+    const pieces = splitAssistantPieces(content)
+    if (pieces.length > 1 || pieces.some((piece) => piece.progress)) {
+      return [...pieces.map((piece, index) => ({
+        id: index === 0 ? id : `${id}~${index}`,
+        role: 'assistant' as const,
+        content: piece.text,
+        createdAt,
+        ...(piece.progress ? { progress: true as const } : {}),
+      })), ...agents]
+    }
+  }
   // Raw history: the assistant’s text, then its `message_agent` calls.
   return [{
     id,
     role,
     content,
     createdAt,
-    technical: silent || fromGateway || kickoff || role === 'system' || role === 'tool',
+    technical,
     ...(sent.images.length ? { images: sent.images } : {}),
   }, ...agents]
 }

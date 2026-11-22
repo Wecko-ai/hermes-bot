@@ -13,6 +13,7 @@ describe('envoi pendant le travail', () => {
     expect(deliveryPlaceholder('wait', 'Nova')).toContain('attend la fin de son tour')
     expect(deliveryPlaceholder('queue', 'Nova')).toContain('à la fin de son tour')
     expect(deliveryPlaceholder('priority', 'Nova')).toContain('s’interrompt')
+    expect(deliveryPlaceholder('steer', 'Nova')).toContain('le travail continue')
   })
 
   it('garde un brouillon par bot et l’oublie une fois vide', () => {

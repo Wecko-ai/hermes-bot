@@ -3,19 +3,27 @@ import { i18n } from '../i18n'
 /**
  * Sending a message while a bot is working (user request of 2026-11-10):
  * - `wait` (default): nothing is sent. The message stays a draft; the user finishes it after seeing the result.
+ * - `steer`: `session.steer` while teammate mode is on. The bot keeps working and reads the message
+ *   after its current step. This is the default while that bot is working.
  * - `queue`: `prompt.submit` with `queued`; Hermes runs it when the current turn is over.
  * - `priority`: the same queue, with a resume instruction in `api_text`, then `session.interrupt` of the
  *   current turn. The bot reads this message right away, then resumes the interrupted task.
  * When the bot is idle, a message is sent normally.
  */
-export type DeliveryMode = 'wait' | 'queue' | 'priority'
+export type DeliveryMode = 'wait' | 'steer' | 'queue' | 'priority'
 
 export const DELIVERY_MODES: { id: DeliveryMode; label: string; title: string }[] = [
   // Getters: the text follows the interface language at read time.
   { id: 'wait', get label() { return i18n.t('delivery.wait.label') }, get title() { return i18n.t('delivery.wait.title') } },
+  { id: 'steer', get label() { return i18n.t('delivery.steer.label') }, get title() { return i18n.t('delivery.steer.title') } },
   { id: 'queue', get label() { return i18n.t('delivery.queue.label') }, get title() { return i18n.t('delivery.queue.title') } },
   { id: 'priority', get label() { return i18n.t('delivery.priority.label') }, get title() { return i18n.t('delivery.priority.title') } },
 ]
+
+/** While a teammate works, Chat replaces Wait: the message goes into the running turn. */
+export function deliveryChoices(teammate: boolean) {
+  return DELIVERY_MODES.filter((item) => teammate ? item.id !== 'wait' : item.id !== 'steer')
+}
 
 const PRIORITY_NOTE = '[HermesBot priority: the user stopped your current task to send this message. Handle it first. Then resume the interrupted task from where it stopped, unless this message changes or cancels it.]'
 

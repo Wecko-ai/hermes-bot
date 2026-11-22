@@ -22,6 +22,7 @@ describe('send guard', () => {
     expect(sendBlockedWhileRunning(true, undefined)).toBe(true)
     expect(sendBlockedWhileRunning(true, 'queue')).toBe(false)
     expect(sendBlockedWhileRunning(true, 'priority')).toBe(false)
+    expect(sendBlockedWhileRunning(true, 'steer')).toBe(false)
     expect(sendBlockedWhileRunning(false, undefined)).toBe(false)
   })
 

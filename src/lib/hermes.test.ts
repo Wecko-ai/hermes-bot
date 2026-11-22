@@ -107,7 +107,7 @@ describe('messages de la gateway', () => {
 
   it('retire les consignes du tour, la reprise après compaction et les marqueurs de silence du fil', async () => {
     const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, messages: [
-      { row_id: 1, role: 'user', content: '[STILL IN PROGRESS — this is the active request, restated after the compaction boundary.]\nPrépare deux couvertures.\n\n[HermesBot style: caveman. For this turn only, answer first.]\n\n[HermesBot mode: EXEC. For this turn only, work.]', timestamp: 1_000 },
+      { row_id: 1, role: 'user', content: '[STILL IN PROGRESS — this is the active request, restated after the compaction boundary.]\nPrépare deux couvertures.\n\n[HermesBot style: caveman. For this turn only, answer first.]\n\n[HermesBot mode: EXEC. For this turn only, work.]\n\n[HermesBot teammate: You work in the background like a teammate.]', timestamp: 1_000 },
       { row_id: 2, role: 'assistant', content: 'Passe horaire terminée.\n\n[SILENT]', timestamp: 2_000 },
       { row_id: 3, role: 'assistant', content: '[SILENT]', timestamp: 3_000 },
     ] } : {})
@@ -116,6 +116,18 @@ describe('messages de la gateway', () => {
       ['Prépare deux couvertures.', false],
       ['Passe horaire terminée.', false],
       ['[SILENT]', true],
+    ])
+  })
+
+  it('détache une ligne PROGRESS de la réponse, en bulle à part', async () => {
+    const request = vi.fn(async (method: string) => method === 'session.resume' ? { revision: 1, messages: [
+      { row_id: 4, role: 'assistant', content: 'Je m’en occupe.\n\nPROGRESS: Les tests tournent.\n\nTout est vert.', timestamp: 4_000 },
+    ] } : {})
+    const { messages } = await openChat({ request, generation: 1 } as unknown as HermesClient, 'orion', 'chat-orion')
+    expect(messages.map((message) => [message.content, Boolean(message.progress)])).toEqual([
+      ['Je m’en occupe.', false],
+      ['Les tests tournent.', true],
+      ['Tout est vert.', false],
     ])
   })
 

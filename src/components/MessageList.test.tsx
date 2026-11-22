@@ -98,6 +98,25 @@ describe('MessageList', () => {
     expect(assistant).toContain('<pre>')
   })
 
+  it('renders a progress note as a compact bubble, separate from the answer', () => {
+    const html = renderToStaticMarkup(list({
+      messages: [
+        message({ id: 'k', role: 'assistant', content: 'On it.', ack: true }),
+        message({ id: 'p', role: 'assistant', content: 'Tests are running.', progress: true }),
+        message({ id: 'a', role: 'assistant', content: 'All green.' }),
+      ],
+    }))
+    expect(html).toContain('progress-bubble')
+    expect(html).toContain('Tests are running.')
+    expect(html).toContain('is-ack')
+    expect(html).toContain('All green.')
+    const progressAt = html.indexOf('progress-bubble')
+    const answerAt = html.indexOf('All green.')
+    expect(progressAt).toBeGreaterThan(html.indexOf('is-ack'))
+    expect(answerAt).toBeGreaterThan(progressAt)
+    expect(html.slice(progressAt, answerAt)).not.toContain('message-copy')
+  })
+
   it('does not turn a data url into an image', () => {
     const html = renderToStaticMarkup(list({
       messages: [message({ id: 'a', role: 'assistant', content: 'Look ![Shot](data:image/png;base64,aaaa)' })],

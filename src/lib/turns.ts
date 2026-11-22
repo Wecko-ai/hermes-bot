@@ -1,8 +1,9 @@
 import type { ChatMessage } from '../types'
 import { findMediaTags } from './media'
 import { MAIL_FENCE } from './mail'
+import { isAcknowledgement, teammateEnabled } from './teammate'
 
-const isAnswerText = (message: ChatMessage) => message.role === 'assistant' && !message.agent && !message.technical && !message.streaming
+const isAnswerText = (message: ChatMessage) => message.role === 'assistant' && !message.agent && !message.technical && !message.streaming && !message.progress && !message.ack
 // A tool call of the bot: its result row, or the line of a message it sent to another bot. A message
 // received from another bot, or a reply delivered back, starts a turn of its own instead.
 const isToolRow = (message: ChatMessage, profile: string) => message.role === 'tool' || (message.agent?.kind === 'message' && message.agent.from === profile)
@@ -15,19 +16,31 @@ const carriesSomething = (message: ChatMessage) => findMediaTags(message.content
  * thread folds into the working line. A step is a text written just before a tool call, so it is
  * followed by a tool row before the next text or user message. While a turn runs, its last text is
  * still a step: the answer only comes with the end of the turn. A step that carries a file or a
- * mail card is never folded.
+ * mail card is never folded. A progress bubble is never a step. With teammate mode on, the first
+ * short sentence of the turn is the acknowledgement and stays in the thread.
  */
 export function stepIds(messages: ChatMessage[], running: boolean, profile: string): Set<string> {
   const steps = new Set<string>()
   let pending: ChatMessage | null = null
+  let sawAssistant = false
+  const teammate = teammateEnabled(profile)
   for (const message of messages) {
     if (isAnswerText(message)) {
+      const acknowledgement = message.ack || (!sawAssistant && teammate && isAcknowledgement(message.content))
+      sawAssistant = true
+      if (acknowledgement) {
+        pending = null
+        continue
+      }
       pending = message
+    } else if (message.progress || message.ack) {
+      continue
     } else if (isToolRow(message, profile)) {
       if (pending && !carriesSomething(pending)) steps.add(pending.id)
       pending = null
     } else if (startsTurn(message)) {
       pending = null
+      sawAssistant = false
     }
   }
   if (running && pending && !carriesSomething(pending)) {

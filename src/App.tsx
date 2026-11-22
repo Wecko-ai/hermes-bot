@@ -58,6 +58,7 @@ import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilenc
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
+import { narrationFromEvent, nextNarration, progressBubble, settleAnswer, teammateApiText, teammateEnabled } from './lib/teammate'
 
 const MemoSidebar = memo(Sidebar)
 
@@ -77,9 +78,12 @@ function voiceConversation() {
   }
 }
 
-const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle) => style.voice
-  ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
-  : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
+const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle, profile?: string) => {
+  const base = style.voice
+    ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
+    : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
+  return profile ? teammateApiText(prompt, base, teammateEnabled(profile)) : base
+}
 const DEMO_ROOM = DEMO && new URLSearchParams(location.search).get('room') === '1'
 const DEMO_ROOM_CAPABILITIES: RoomCapabilities = {
   protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'demo',
@@ -158,6 +162,8 @@ export default function App() {
   const initializedRef = useRef(false)
   /** Off-screen streaming text, keyed by session id, used when a completion arrives with empty text. */
   const backgroundStreams = useRef(new Map<string, string>())
+  /** Acknowledgement and progress already shown for the running turn, keyed by session id. */
+  const narrationRef = useRef(new Map<string, { ack?: string; progress: string[] }>())
   /** Profiles with a send between the click and the last await. Checked before any await. */
   const sendsInFlight = useRef(new Set<string>())
   /** The open voice mode, read by the gateway event handler. */
@@ -366,6 +372,21 @@ export default function App() {
         if (isCurrent) setMessages((items) => [...items, ...freshNotes(items, agentNotes)])
         appendCachedNotes(workOwner, agentNotes)
       }
+      // Acknowledgement and milestone notes, for the open chat and for a bot working in the background.
+      if (workOwner && event.session_id && (event.type === 'message.start' || event.type === 'message.interim' || event.type === 'progress' || event.type === 'message.progress')) {
+        const sessionId = event.session_id
+        const next = nextNarration(narrationRef.current.get(sessionId), event, {
+          teammate: teammateEnabled(workOwner),
+          sessionId,
+          now: new Date().toISOString(),
+          silent: isSilentMessage,
+        })
+        narrationRef.current.set(sessionId, next.state)
+        if (next.bubbles.length) {
+          if (isCurrent) setMessages((items) => [...items, ...next.bubbles])
+          for (const bubble of next.bubbles) appendCachedMessage(workOwner, bubble)
+        }
+      }
       // A bot that is already open and starts a turn in the background goes “working” right away,
       // without waiting for the roster re-read (30 s). The cache is not marked: if the end of the turn
       // got lost, the next re-read would restore the right status instead of freezing it.
@@ -385,32 +406,40 @@ export default function App() {
         const owner = useRosterStore.getState().bots.find((bot) => bot.sessionId === event.session_id)
         const finalText = completedText(payload.text, takeSessionStream(backgroundStreams.current, event.session_id))
         const visibleText = withoutSilentMarkers(finalText)
+        const prior = narrationRef.current.get(event.session_id)
+        const settled = settleAnswer(visibleText, prior?.progress ?? [], prior?.ack)
+        narrationRef.current.delete(event.session_id)
+        const answer = settled.answer
+        const headline = answer || settled.progress.at(-1) || ''
         if (owner && owner.slug !== useRosterStore.getState().selected) {
-          const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
+          const createdAt = new Date().toISOString()
+          settled.progress.forEach((line, index) => appendCachedMessage(owner.slug, progressBubble(line, `progress-${event.session_id}-final-${index}`, createdAt)))
+          const meaningful = Boolean(answer) && !isSilentMessage(answer)
           const status = typeof payload.status === 'string' ? payload.status : ''
           if (meaningful) {
             appendCachedMessage(owner.slug, {
-              id: `background-${Date.now()}`, role: 'assistant', content: visibleText, createdAt: new Date().toISOString(),
+              id: `background-${Date.now()}`, role: 'assistant', content: answer, createdAt,
             })
-          } else if (finalText.trim()) {
+          } else if (finalText.trim() && !settled.progress.length && !prior?.ack) {
             appendCachedMessage(owner.slug, {
-              id: `background-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true,
+              id: `background-${Date.now()}`, role: 'system', content: finalText, createdAt, technical: true,
             })
-          } else if (status === 'interrupted') {
+          } else if (status === 'interrupted' && !finalText.trim() && !settled.progress.length) {
             appendCachedMessage(owner.slug, {
               id: `background-${Date.now()}`, role: 'system', content: i18n.t('app.turnInterrupted'), createdAt: new Date().toISOString(),
             })
           }
           updateCachedChat(owner.slug, { running: false })
-          noteTurnSilence(owner.slug, finalText)
-          noteTurnReply(owner.slug, finalText)
+          noteTurnSilence(owner.slug, headline || finalText)
+          noteTurnReply(owner.slug, headline)
           markDone(owner.slug)
           const finishedAt = new Date().toISOString()
+          const worthOpening = Boolean(headline) && !isSilentMessage(headline)
           // While a worker is running, the unread mark waits for the re-read that sees the bot stopped.
-          if (meaningful) setBots((items) => items.map((bot) => bot.slug === owner.slug ? {
+          if (worthOpening) setBots((items) => items.map((bot) => bot.slug === owner.slug ? {
             ...bot,
             unread: bot.unread + (owner.workerActive ? 0 : 1),
-            preview: visibleText,
+            preview: headline,
             timestamp: finishedAt,
             seenAt: owner.workerActive ? bot.seenAt : finishedAt,
             status: owner.workerActive ? 'working' : 'done',
@@ -457,7 +486,8 @@ export default function App() {
       if (event.type === 'tool.complete') setActivity('')
       // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
       if (event.type === 'message.interim') {
-        const step = typeof payload.text === 'string' ? withoutSilentMarkers(payload.text) : ''
+        const spoken = narrationFromEvent(event)
+        const step = withoutSilentMarkers(spoken.progress.at(-1) || spoken.interim)
         if (step && !isSilentMessage(step) && voiceRef.current?.profile === current.profile) voiceRef.current.session.turnStep(step)
         setStreaming('')
         if (current.sessionId) backgroundStreams.current.set(current.sessionId, '')
@@ -469,14 +499,25 @@ export default function App() {
         const buffered = current.sessionId ? takeSessionStream(backgroundStreams.current, current.sessionId) : ''
         const finalText = completedText(payload.text, useChatStore.getState().streaming || buffered)
         const visibleText = withoutSilentMarkers(finalText)
-        const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
-        if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: visibleText, meaningful })
+        const prior = current.sessionId ? narrationRef.current.get(current.sessionId) : undefined
+        const settled = settleAnswer(visibleText, prior?.progress ?? [], prior?.ack)
+        if (current.sessionId) narrationRef.current.delete(current.sessionId)
+        const answer = settled.answer
+        const headline = answer || settled.progress.at(-1) || ''
+        const meaningful = Boolean(answer) && !isSilentMessage(answer)
+        const createdAt = new Date().toISOString()
+        const progressMessages = settled.progress.map((line, index) => progressBubble(line, `progress-${current.sessionId}-final-${index}`, createdAt))
+        if (progressMessages.length) {
+          setMessages((items) => [...items, ...progressMessages])
+          for (const bubble of progressMessages) appendCachedMessage(current.profile, bubble)
+        }
+        if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: headline, meaningful: Boolean(headline) && !isSilentMessage(headline) })
         if (meaningful) {
           const message: ChatMessage = {
             id: useChatStore.getState().streamKey || `live-${Date.now()}`,
             role: 'assistant',
-            content: visibleText,
-            createdAt: new Date().toISOString(),
+            content: answer,
+            createdAt,
             failed: status === 'error',
           }
           setMessages((items) => [...items, message])
@@ -484,9 +525,11 @@ export default function App() {
           updateCachedChat(current.profile, { running: false })
           // No status here: markDone below sets it. An “idle” in between would hide the end of the turn
           // from the notifications, which only see a working bot become “done”.
-          updateBot(current.profile, { preview: visibleText, timestamp: message.createdAt })
+          updateBot(current.profile, { preview: answer, timestamp: message.createdAt })
+        } else if (headline) {
+          updateBot(current.profile, { preview: headline, timestamp: createdAt })
         }
-        if (finalText.trim() && !meaningful) {
+        if (finalText.trim() && !meaningful && !progressMessages.length && !prior?.ack) {
           const message: ChatMessage = { id: `silent-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true }
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)
@@ -502,8 +545,8 @@ export default function App() {
         updateCachedChat(current.profile, { running: false })
         setActivity('')
         setCompactionLabel('')
-        noteTurnSilence(current.profile, finalText)
-        noteTurnReply(current.profile, finalText)
+        noteTurnSilence(current.profile, headline || finalText)
+        noteTurnReply(current.profile, headline)
         markDone(current.profile)
         if (event.execution_generation) setActiveChat({ ...current, executionGeneration: event.execution_generation, running: false })
       }
@@ -1414,9 +1457,9 @@ export default function App() {
     const now = new Date().toISOString()
     if (DEMO) {
       // During a turn, only a queued or priority message goes in: it waits in the thread, with its label.
-      if (running && delivery !== 'queue' && delivery !== 'priority') return false
+      if (running && delivery !== 'queue' && delivery !== 'priority' && delivery !== 'steer') return false
       if (running) {
-        setMessages((items) => [...items, { id: `demo-user-${Date.now()}`, role: 'user', content: text, createdAt: now, delivery: delivery as 'queue' | 'priority' }])
+        setMessages((items) => [...items, { id: `demo-user-${Date.now()}`, role: 'user', content: text, createdAt: now, ...(delivery === 'queue' || delivery === 'priority' || delivery === 'steer' ? { delivery } : {}) }])
         return true
       }
       setMessages((items) => [...items,
@@ -1454,9 +1497,11 @@ export default function App() {
       if (sendBlockedWhileRunning(runningNow, delivery)) return false
       const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
       clearDoneTimer(profile)
-      const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(runningNow ? { delivery: delivery as 'queue' | 'priority' } : {}) }
+      const duringTurn = runningNow && (delivery === 'queue' || delivery === 'priority' || delivery === 'steer') ? delivery : undefined
+      const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(duringTurn ? { delivery: duringTurn } : {}) }
       if (onScreen()) setMessages((items) => [...items, userMessage])
       appendCachedMessage(profile, userMessage)
+      if (runningNow && delivery === 'steer') return await steerTurn(chat, text, attachments, userMessage, mode, style)
       if (runningNow) return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority')
       updateCachedChat(profile, { running: true })
       updateBot(profile, { preview: text, timestamp: now, status: 'working' })
@@ -1468,7 +1513,7 @@ export default function App() {
         const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
         if (onScreen()) setActivity('')
         const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, profile)
-        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: styledApiText(prompt, mode, style) })
+        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: styledApiText(prompt, mode, style, profile) })
         updateCachedChat(profile, { ...submitted, running: true })
         if (onScreen()) {
           const open = useChatStore.getState().activeChat
@@ -1539,6 +1584,44 @@ export default function App() {
   }
 
   /**
+   * A follow-up while the bot is already working: `session.steer` delivers it inside the running turn,
+   * after the latest tool result, without interrupting the work. Files cannot ride along, so they queue.
+   * A rejection means no turn was running: the message starts a normal turn instead.
+   */
+  const steerTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, style: TurnStyle) => {
+    const onScreen = () => stillOnProfile(useRosterStore.getState().selected, chat.profile)
+    if (attachments.length) {
+      if (onScreen()) setMessages((items) => items.map((item) => item.id === userMessage.id ? { ...item, delivery: 'queue' } : item))
+      useChatStore.getState().patchCachedMessage(chat.profile, userMessage.id, { delivery: 'queue' })
+      return queueTurn(chat, text, attachments, { ...userMessage, delivery: 'queue' }, mode, style, false)
+    }
+    const asNormalTurn = async () => {
+      if (onScreen()) setMessages((items) => items.map((item) => item.id === userMessage.id ? { ...item, delivery: undefined } : item))
+      useChatStore.getState().patchCachedMessage(chat.profile, userMessage.id, { delivery: undefined })
+      updateCachedChat(chat.profile, { running: true })
+      updateBot(chat.profile, { status: 'working' })
+      if (onScreen()) setRunning(true)
+      const prompt = withMentionNote(text, useRosterStore.getState().bots, chat.profile)
+      const submitted = await submitPromptResuming(chat, prompt, [], { apiText: styledApiText(prompt, mode, style, chat.profile) })
+      updateCachedChat(chat.profile, { ...submitted, running: true })
+      if (onScreen()) {
+        const open = useChatStore.getState().activeChat
+        if (!open || open.sessionId === submitted.sessionId) setActiveChat({ ...(open ?? submitted), ...submitted, running: true })
+      }
+      return true
+    }
+    try {
+      const prompt = withMentionNote(text, useRosterStore.getState().bots, chat.profile)
+      const status = await steerSession(client, { profile: chat.profile, sessionId: chat.sessionId }, prompt)
+      if (status === 'queued') return true
+      return await asNormalTurn()
+    } catch (error) {
+      markSendFailed(chat.profile, userMessage, error)
+      return false
+    }
+  }
+
+  /**
    * Message sent during a turn: queued, Hermes starts it when the turn ends. Priority, it goes into
    * the same queue with a resume instruction, then the current turn is interrupted: so it runs right after.
    */
@@ -1550,7 +1633,7 @@ export default function App() {
       const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
       if (onScreen()) setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      const modeText = styledApiText(prompt, mode, style)
+      const modeText = styledApiText(prompt, mode, style, chat.profile)
       await submitPromptResuming(chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
       if (priority) {
         const open = useChatStore.getState().activeChat

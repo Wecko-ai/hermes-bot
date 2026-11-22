@@ -1,6 +1,7 @@
 import { isSilentMessage } from './hermes'
 import { cleanPreview } from './time'
 import { i18n } from '../i18n'
+import { narrationFromEvent, progressSentence } from './teammate'
 
 type Json = Record<string, unknown>
 
@@ -80,7 +81,15 @@ export function applyWorkEvent(current: WorkSummary | undefined, event: { type?:
       return withTodos(base, payload.todos)
     case 'message.interim': {
       const text = typeof payload.text === 'string' ? payload.text : ''
-      return text.trim() && !isSilentMessage(text) ? { ...base, note: firstSentence(text) } : current
+      const narration = narrationFromEvent({ type: 'message.interim', payload: { text } })
+      const source = narration.progress.at(-1) || narration.interim
+      return source.trim() && !isSilentMessage(source) ? { ...base, note: firstSentence(source) } : current
+    }
+    case 'progress':
+    case 'message.progress': {
+      const text = typeof payload.text === 'string' ? payload.text : ''
+      const body = progressSentence(text)
+      return body && !isSilentMessage(body) ? { ...base, note: firstSentence(body) } : current
     }
     case 'message.delta':
       return typeof payload.text === 'string' && payload.text ? { ...base, step: i18n.t('work.writing') } : current

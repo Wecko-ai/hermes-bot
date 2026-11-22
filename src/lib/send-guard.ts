@@ -17,9 +17,9 @@ export function releaseSend(inFlight: Set<string>, profile: string) {
   inFlight.delete(profile)
 }
 
-/** A live turn blocks a normal send. Queue and priority still go through. */
+/** A live turn blocks a normal send. Queue, priority and a steer into the running turn still go through. */
 export function sendBlockedWhileRunning(running: boolean, delivery?: string) {
-  return running && delivery !== 'queue' && delivery !== 'priority'
+  return running && delivery !== 'queue' && delivery !== 'priority' && delivery !== 'steer'
 }
 
 /** A model-list response applies only to the request that is still the latest for the bot on screen. */

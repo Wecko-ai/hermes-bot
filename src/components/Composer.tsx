@@ -6,7 +6,8 @@ import { formatUsage } from '../lib/model'
 import { defaultPrompt, filterAttachments, formatBytes, toAttachment, type PendingAttachment } from '../lib/attachments'
 import { mentionOptions, mentionTokenAt, type MentionOption, type MentionToken } from '../lib/mentions'
 import { CHAT_MODES, loadModes, modePlaceholder, saveModes, type ChatMode } from '../lib/modes'
-import { DELIVERY_MODES, deliveryPlaceholder, loadDraft, saveDraft, type DeliveryMode } from '../lib/delivery'
+import { deliveryChoices, deliveryPlaceholder, loadDraft, saveDraft, type DeliveryMode } from '../lib/delivery'
+import { setTeammateEnabled, useTeammatePrefs } from '../lib/teammate'
 import { dictationLanguageCode, getSettings, useSettings } from '../lib/settings'
 import { i18n } from '../i18n'
 import { DictationController, type DictationSnapshot } from '../lib/dictation'
@@ -87,8 +88,10 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modes, setModes] = useState(loadModes)
   const mode = modes[bot.slug] ?? 'exec'
-  // During a turn: Wait by default. Goes back to Wait after every send and at the end of every turn.
+  const teammateOn = !useTeammatePrefs().disabled.includes(bot.slug)
+  // During a turn: Wait by default, or Chat when teammate mode is on. Back to Wait when the turn ends.
   const [delivery, setDelivery] = useState<DeliveryMode>('wait')
+  const deliveryOptions = deliveryChoices(teammateOn)
   // Enter in Wait mode: nothing is sent, the selector flags itself (a toast would cover it).
   const [nudge, setNudge] = useState(0)
   const busy = running && !minimal
@@ -210,8 +213,12 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   useEffect(() => { saveDraft(botRef.current, text) }, [text])
 
   useEffect(() => {
-    if (!running) setDelivery('wait')
-  }, [running])
+    if (!running) {
+      setDelivery('wait')
+      return
+    }
+    setDelivery((current) => (current === 'wait' && teammateOn ? 'steer' : !teammateOn && current === 'steer' ? 'wait' : current))
+  }, [running, teammateOn])
 
   const addFiles = (files: File[]) => {
     if (!files.length) return
@@ -287,7 +294,8 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     setText('')
     setAttachments([])
     setMention(null)
-    setDelivery('wait')
+    // Back to the default for this bot: Chat while a teammate is still working, otherwise Wait.
+    setDelivery(busy && teammateOn ? 'steer' : 'wait')
     requestAnimationFrame(() => textareaRef.current?.focus())
     const sent = await onSend(text.trim() || defaultPrompt(attachments), attachments, mode, sentDelivery)
     if (sent !== false) {
@@ -436,7 +444,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
         )}
         {dictation && dictating && <DictationPill controller={dictation} onStop={stopDictation} />}
         {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Pause size={14} fill="currentColor" /></button>}
-        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
+        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : delivery === 'steer' ? t('composer.sendSteer') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-hint">
         {!minimal && (
@@ -448,9 +456,14 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             ))}
           </div>
         )}
+        {!minimal && (
+          <button type="button" className={`teammate-toggle ${teammateOn ? 'is-active' : ''}`} aria-pressed={teammateOn} title={t('teammate.title')} onClick={() => setTeammateEnabled(bot.slug, !teammateOn)}>
+            {t('teammate.label')}
+          </button>
+        )}
         {busy && (
           <div key={nudge} className={`delivery-switch ${nudge ? 'is-nudged' : ''}`} role="radiogroup" aria-label={t('composer.deliveryGroup')}>
-            {DELIVERY_MODES.map((item) => (
+            {deliveryOptions.map((item) => (
               <button type="button" key={item.id} role="radio" aria-checked={delivery === item.id} title={item.title} className={`delivery-${item.id} ${delivery === item.id ? 'is-active' : ''}`} onClick={() => { setDelivery(item.id); textareaRef.current?.focus() }}>
                 {item.label}
               </button>

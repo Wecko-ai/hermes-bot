@@ -11,6 +11,7 @@
     "stopBot": "Arrêter le bot",
     "sendPriority": "Envoyer en priorité",
     "sendQueue": "Mettre en file",
+    "sendSteer": "Envoyer dans ce tour",
     "send": "Envoyer",
     "modeGroup": "Mode de travail",
     "deliveryGroup": "Envoi pendant le travail",
@@ -39,6 +40,8 @@
     "sendFailed": "Échec de l’envoi",
     "priority": "Prioritaire",
     "queued": "En file",
+    "steered": "Dans ce tour",
+    "progress": "Progression",
     "copyReply": "Copier la réponse",
     "copyCode": "Copier",
     "copiedCode": "Copié",
@@ -220,13 +223,19 @@
   },
   "delivery": {
     "wait": { "label": "Attendre", "title": "Le message reste en brouillon jusqu’à la fin du tour" },
+    "steer": { "label": "Direct", "title": "Le message entre dans le tour en cours. Le bot continue de travailler et le lit après l’étape actuelle." },
     "queue": { "label": "File", "title": "Le message part tout seul quand le bot a fini sa tâche" },
     "priority": { "label": "Prio", "title": "Le bot s’interrompt, lit ce message, puis reprend sa tâche" },
     "placeholder": {
       "queue": "Message pour {{name}}, envoyé à la fin de son tour",
       "priority": "Message prioritaire : {{name}} s’interrompt pour le lire",
-      "wait": "Écrire à {{name}} : le message attend la fin de son tour"
+      "wait": "Écrire à {{name}} : le message attend la fin de son tour",
+      "steer": "Écrire à {{name}} pendant que le travail continue"
     }
+  },
+  "teammate": {
+    "label": "Équipe",
+    "title": "Mode coéquipier : un accusé court, une note de progression aux vraies étapes, puis un résultat clair. Tu peux continuer à écrire pendant le travail."
   },
   "modes": {
     "brain": { "label": "BRAIN", "title": "Réfléchit avec toi et cherche les meilleures solutions, sans rien exécuter" },

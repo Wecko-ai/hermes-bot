@@ -117,6 +117,9 @@
     "showUsageHint": "Below the composer",
     "caveman": "Caveman mode",
     "cavemanHint": "Bots answer you in 1 to 3 lines: the result, then what you need to decide. For the messages you send from here; what they write elsewhere stays normal.",
+    "teammate": "Teammate prompt",
+    "teammateHint": "Shared note read with each message, for bots that have Team on (on by default; turn it off in that bot's composer). The bot acknowledges in one sentence, posts one short progress line at a real milestone, then a clear result. Edit the text, or reset it to the built-in note.",
+    "teammateReset": "Reset",
     "guide": {
       "title": "Chat guide",
       "send": "Send the message",
@@ -127,7 +130,7 @@
       "brain": "Think it through together, nothing runs",
       "plan": "Build a plan before anything runs",
       "exec": "Run the task",
-      "delivery": "While a bot works: keep a draft, queue it, or interrupt",
+      "delivery": "While a bot works: chat into the turn, queue it, or interrupt",
       "files": "Add files: drag and drop, paste, or the + button",
       "mic": "Dictate with the Mac’s speech recognition: Stop to edit the text, Send to send it at once",
       "search": "Search in the conversation",

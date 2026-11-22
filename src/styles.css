@@ -197,6 +197,12 @@ a { color: inherit; }
 .message-user .message-content { max-width: 100%; padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: var(--bubble); color: var(--bubble-text); font-size: 14.5px; line-height: 23px; white-space: pre-wrap; box-shadow: inset 0 0 0 .5px var(--border); }
 .message-user .message-content p { margin: 0; }
 .message-assistant { align-self: flex-start; max-width: min(84%, 640px, calc(100% - 64px)); padding: 9px 13px; border-radius: 14px 14px 14px 4px; background: var(--surface-soft); box-shadow: inset 0 0 0 .5px var(--border); }
+.message.is-ack { max-width: min(72%, 480px); }
+.message.is-ack .message-content { font-size: 13.5px; }
+.progress-bubble { align-self: flex-start; display: flex; align-items: baseline; gap: 8px; max-width: min(78%, 520px); margin: 2px 0 10px; padding: 4px 10px 4px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; }
+.progress-bubble p { margin: 0; }
+.progress-bubble time { flex: none; color: var(--text-tertiary); font-size: 12px; }
+.progress-bubble-mark { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(1px); }
 .message-assistant .message-meta { margin-left: -4px; }
 .message-meta { height: 18px; margin-top: 2px; display: flex; align-items: center; gap: 5px; color: var(--text-tertiary); font-size: 12px; line-height: 18px; opacity: 0; transition: opacity 120ms; }
 .message:hover .message-meta, .message-meta:focus-within { opacity: 1; }
@@ -1097,6 +1103,12 @@ button.agent-note-name:hover { background: var(--hover); }
 .delivery-switch button.is-active { background: var(--glass-strong); box-shadow: var(--glass-highlight); color: var(--text); }
 .delivery-switch button.delivery-queue.is-active { color: var(--accent); }
 .delivery-switch button.delivery-priority.is-active { color: var(--warning); }
+.delivery-switch button.delivery-steer.is-active { color: var(--accent); }
+.teammate-toggle { flex: none; height: 22px; margin-left: 8px; padding: 0 8px; border-radius: 8px; color: var(--text-tertiary); font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+.teammate-toggle:hover { color: var(--text); }
+.teammate-toggle.is-active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.settings-teammate { display: flex; flex-direction: column; gap: 8px; }
+.settings-note { width: 100%; min-height: 96px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 12.5px; line-height: 18px; resize: vertical; }
 /* Priority delivery: the same monochrome disc, a thin ring in the warning colour around it. */
 .composer-send.is-priority { outline: 1.5px solid var(--warning); outline-offset: 2px; }
 .composer-send.is-priority:disabled { outline-color: transparent; }

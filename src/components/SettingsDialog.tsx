@@ -18,6 +18,7 @@ import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/loca
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
 import { CompactionSetting } from './CompactionSetting'
+import { saveTeammateFragment, TEAMMATE_FRAGMENT, useTeammatePrefs } from '../lib/teammate'
 
 export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
 
@@ -179,6 +180,7 @@ function ChatTab({ localModels, bots, demo, compactionContext }: { localModels?:
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
       <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />
+      <TeammatePrompt />
       <CompactionSetting slugs={bots.map((bot) => bot.slug)} context={compactionContext} demo={demo} />
       <VoiceSettings />
       <Row label={t('settings.sortBots')}>
@@ -198,6 +200,28 @@ function ChatTab({ localModels, bots, demo, compactionContext }: { localModels?:
 }
 
 const DEMO_SETTINGS = new URLSearchParams(location.search).get('demo') === '1'
+
+/** Shared teammate note. Empty storage means the built-in text, which the field shows. */
+function TeammatePrompt() {
+  const { t } = useTranslation()
+  const prefs = useTeammatePrefs()
+  const custom = Boolean(prefs.fragment.trim())
+  return (
+    <div className="settings-teammate">
+      <Row label={t('settings.teammate')} hint={t('settings.teammateHint')}>
+        <button type="button" className="settings-button" disabled={!custom} onClick={() => saveTeammateFragment('')}>{t('settings.teammateReset')}</button>
+      </Row>
+      <textarea
+        className="settings-note"
+        aria-label={t('settings.teammate')}
+        rows={5}
+        spellCheck={false}
+        value={custom ? prefs.fragment : TEAMMATE_FRAGMENT}
+        onChange={(event) => saveTeammateFragment(event.target.value)}
+      />
+    </div>
+  )
+}
 
 /** Voice mode: the voice of each language, the rate, the steps. "Test" speaks locally (free). */
 function VoiceSettings() {
