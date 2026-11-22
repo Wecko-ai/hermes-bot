@@ -97,6 +97,9 @@ const MEDIA_FIXTURES = {
   // Images the user sent: Hermes's copy, read back like the bot's media.
   '/Users/test/cache/upload_envoi.png': ['slide.png', 'image/png'],
   '/x/vignette.png': ['slide.png', 'image/png'],
+  // Photos of the `hermes-places` cards: local files served like any bot media, never a remote URL.
+  '/Users/test/lieux/cafe-araucaria.jpg': ['slide.jpg', 'image/jpeg'],
+  '/Users/test/lieux/librairie-pingouin.jpg': ['slide.jpg', 'image/jpeg'],
 }
 const VIDEO_SIZE = readFileSync(new URL('fixtures/video.mp4', import.meta.url)).length
 const mediaRequests = []
@@ -380,6 +383,8 @@ const wss = new WebSocketServer({
   handleProtocols: (protocols) => protocols.has('hermes-gateway-v1') ? 'hermes-gateway-v1' : false,
 })
 let profilesListCalls = 0
+// Timestamps of the periodic roster re-reads (30 s timer in the app): tests can align with it.
+const profilesListTimes = []
 // `profiles.configure` as Hermes writes `ui_meta`: per-key merge, `null` deletes, per-key compare-and-swap.
 const configureCalls = []
 // The next writes find that another app wrote the card just before them (a conflict, then a re-read).
@@ -528,6 +533,7 @@ wss.on('connection', (socket) => {
     }
     if (frame.method === 'profiles.list') {
       profilesListCalls += 1
+      profilesListTimes.push(Date.now())
       return reply({ profiles: emptyRoster ? [] : profiles, bot_mode_protocol: true })
     }
     if (frame.method === 'profiles.configure') {
@@ -955,6 +961,106 @@ wss.on('connection', (socket) => {
       if (frame.params.text === 'Test silence mixte') {
         at(30, 'message.start', { turn_id: 'turn-silence-mixte' })
         at(300, 'message.complete', { turn_id: 'turn-silence-mixte', text: 'Rapport terminé, rien à corriger.\n\n[SILENT]', status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Cherche un café') {
+        // Three fictional places near the station. The JSON streams in chunks: until the closing
+        // fence arrives, the block must stay inert and nothing may render as a card.
+        const walk = (lat, lon) => `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&travelmode=walking`
+        const placesBlock = {
+          version: 1,
+          generated_at: '2026-11-21T09:30:00Z',
+          attributions: ['Données © contributeurs Carte Libre (fictif)'],
+          warnings: ['Les horaires n’ont pas pu être revérifiés ce matin.'],
+          places: [
+            {
+              id: 'cafe-araucaria',
+              name: 'Café de l’Araucaria',
+              address: '12 rue des Tanneurs, 44000 Nantes',
+              latitude: 47.2186,
+              longitude: -1.5542,
+              category: 'Café',
+              directions_url: walk(47.2186, -1.5542),
+              source: { name: 'Annuaire Fictif', url: 'https://annuaire.example/cafe-de-l-araucaria', fetched_at: '2026-11-21' },
+              distance: { meters: 350, seconds: 280, kind: 'route', source: 'Carte Libre' },
+              opening: { status: 'open', label: 'Ouvert · ferme à 19 h', timezone: 'Europe/Paris' },
+              features: { wifi: true, power_outlets: null },
+              rating: { value: 4.6, count: 128, source: 'Avis Fictifs' },
+              reviews: [{ text: 'Flat white excellent, coin calme pour travailler.', rating: 5, author: 'Camille R.', source: 'Avis Fictifs', published_at: '2026-10-02' }],
+              photo: { path: '/Users/test/lieux/cafe-araucaria.jpg', attribution: 'Studio Lumen (fictif)' },
+            },
+            {
+              id: 'librairie-pingouin',
+              name: 'Librairie Le Pingouin',
+              address: '8 quai des Machines, 44000 Nantes',
+              latitude: 47.2198,
+              longitude: -1.5511,
+              category: 'Librairie',
+              directions_url: walk(47.2198, -1.5511),
+              source: { name: 'Annuaire Fictif', url: 'https://annuaire.example/librairie-le-pingouin', fetched_at: '2026-11-21' },
+              distance: { meters: 520, seconds: 410, kind: 'route', source: 'Carte Libre' },
+              opening: { status: 'open', label: 'Ouvert · ferme à 18 h 30', timezone: 'Europe/Paris' },
+              features: { wifi: true, power_outlets: true },
+              rating: { value: 4.4, count: 89, source: 'Avis Fictifs' },
+              photo: { path: '/Users/test/lieux/librairie-pingouin.jpg', attribution: 'Studio Lumen (fictif)' },
+            },
+            {
+              id: 'ceramique-tasse',
+              name: 'Céramique & Tasse',
+              address: '3 passage des Briques, 44000 Nantes',
+              latitude: 47.2159,
+              longitude: -1.5563,
+              category: 'Création',
+              directions_url: walk(47.2159, -1.5563),
+              source: { name: 'Annuaire Fictif', url: 'https://annuaire.example/ceramique-tasse-et-tasse', fetched_at: '2026-11-21' },
+              distance: { meters: 780, seconds: 620, kind: 'route', source: 'Carte Libre' },
+              opening: { status: 'closed', label: 'Fermé · ouvre à 14 h', timezone: 'Europe/Paris' },
+              rating: { value: 4.1, count: 57, source: 'Avis Fictifs' },
+            },
+          ],
+        }
+        const body = JSON.stringify(placesBlock)
+        const half = Math.floor(body.length / 2)
+        const final = `Voici trois adresses près de la gare, toutes fictives :\n\n\`\`\`hermes-places\n${body}\n\`\`\``
+        at(30, 'message.start', { turn_id: 'turn-places' })
+        at(80, 'message.delta', { turn_id: 'turn-places', text: 'Voici trois adresses près de la gare, toutes fictives :\n\n```hermes-places\n' })
+        at(700, 'message.delta', { turn_id: 'turn-places', text: body.slice(0, half) })
+        at(1300, 'message.delta', { turn_id: 'turn-places', text: `${body.slice(half)}\n\`\`\`` })
+        at(2200, 'message.complete', { turn_id: 'turn-places', text: final, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Cherche un lieu') {
+        // A wrong version, then a well-formed JSON with a remote photo URL and a driving link:
+        // both fences stay inert, and the remote photo must never be fetched.
+        const unsafe = {
+          version: 1,
+          generated_at: '2026-11-21T09:35:00Z',
+          attributions: [],
+          warnings: [],
+          places: [{
+            id: 'galerie-nordest',
+            name: 'Galerie du Nordest',
+            category: 'Galerie',
+            latitude: 47.2205,
+            longitude: -1.5528,
+            directions_url: 'https://www.google.com/maps/dir/?api=1&destination=47.2205,-1.5528&travelmode=driving',
+            source: { name: 'Annuaire Fictif', fetched_at: '2026-11-21' },
+            photo: { path: 'https://evil.example/photos/galerie.jpg', attribution: 'Inconnu' },
+          }],
+        }
+        const text = [
+          'Deux blocs restés inertes :',
+          '',
+          '```hermes-places',
+          '{"version": 2, "generated_at": "2026-11-21", "attributions": [], "warnings": [], "places": []}',
+          '```',
+          '',
+          '```hermes-places',
+          JSON.stringify(unsafe),
+          '```',
+        ].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-places-inertes' })
+        at(300, 'message.complete', { turn_id: 'turn-places-inertes', text, status: 'complete' })
         return
       }
       setTimeout(() => send(socket, event(sessionId, 'message.start', { turn_id: 'turn-test' })), 30)
@@ -2806,6 +2912,64 @@ try {
   await page.locator('[data-bot=orion] .bot-row-preview').getByText('Rapport terminé, rien à corriger.').waitFor()
   if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('[SILENT]').count()) throw new Error('Un [SILENT] ajouté à une réponse est visible dans le roster.')
 
+  // Places cards (`hermes-places` fence): the JSON streams in chunks and must never flash as a
+  // partial card; photos come from the local media proxy only, and each link is a Google Maps
+  // walking itinerary tied to the place's coordinates.
+  const messagesBeforePlaces = await page.locator('.message-assistant').count()
+  const mediaBeforePlaces = mediaRequests.length
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Cherche un café')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  // While the fence streams, the working line says a places lookup is running: neither a card nor
+  // the raw fence may appear in the thread before the turn ends.
+  await page.locator('.working-row .working-caption').getByText("Recherche d'adresses…").waitFor({ timeout: 5_000 })
+  for (let probe = 0; probe < 30; probe += 1) {
+    const leaked = await page.locator('.messages-column').evaluate((column) => column.innerText.includes('hermes-places') || Boolean(column.querySelector('.place-card')))
+    if (leaked) throw new Error('Une carte ou une clôture adresses partielle est apparue pendant le streaming.')
+    await delay(60)
+  }
+  await page.locator('.working-row').waitFor({ state: 'detached', timeout: 5_000 })
+  if (await page.locator('.message-assistant').count() !== messagesBeforePlaces + 1) throw new Error('Le tour adresses doit laisser un seul message du bot.')
+  const placeResults = page.locator('.place-results')
+  await placeResults.waitFor({ timeout: 3_000 })
+  const placeCards = placeResults.locator('.place-card')
+  if (await placeCards.count() !== 3) throw new Error('Trois cartes adresses sont attendues.')
+  const cardNames = await placeCards.locator('.place-name').evaluateAll((nodes) => nodes.map((node) => node.textContent))
+  if (JSON.stringify(cardNames) !== JSON.stringify(['Café de l’Araucaria', 'Librairie Le Pingouin', 'Céramique & Tasse'])) throw new Error(`Cartes adresses : ${JSON.stringify(cardNames)}`)
+  await placeResults.getByText('Les horaires n’ont pas pu être revérifiés ce matin.').waitFor()
+  await placeResults.getByText('Données © contributeurs Carte Libre (fictif)').waitFor()
+  await placeResults.getByText('Source : Annuaire Fictif').first().waitFor()
+  // Photos: served by the local media proxy only, and the card without a photo shows the neutral
+  // placeholder. No remote image is ever requested.
+  await placeResults.locator('.place-photo img').first().waitFor()
+  const photoSrcs = await placeResults.locator('.place-photo img').evaluateAll((images) => images.map((image) => image.getAttribute('src') || ''))
+  if (photoSrcs.length !== 2 || photoSrcs.some((src) => !src.startsWith('/api/media?profile=orion&'))) throw new Error(`Photos des cartes : ${JSON.stringify(photoSrcs)}`)
+  if (await placeResults.locator('.place-photo-fallback').count() !== 1) throw new Error('La carte sans photo doit montrer le placeholder neutre.')
+  const photoFetches = mediaRequests.slice(mediaBeforePlaces).filter((entry) => entry.path.startsWith('/Users/test/lieux/'))
+  if (photoFetches.length !== 2 || photoFetches.some((entry) => entry.profile !== 'orion' || entry.route !== 'download')) throw new Error(`Photos non servies par la gateway simulée : ${JSON.stringify(photoFetches)}`)
+  // Directions: exact Google Maps walking URLs, destination equal to the place's coordinates.
+  const walkingHrefs = await placeResults.locator('.place-directions').evaluateAll((links) => links.map((link) => link.getAttribute('href') || ''))
+  const expectedHrefs = [
+    'https://www.google.com/maps/dir/?api=1&destination=47.2186,-1.5542&travelmode=walking',
+    'https://www.google.com/maps/dir/?api=1&destination=47.2198,-1.5511&travelmode=walking',
+    'https://www.google.com/maps/dir/?api=1&destination=47.2159,-1.5563&travelmode=walking',
+  ]
+  if (JSON.stringify(walkingHrefs) !== JSON.stringify(expectedHrefs)) throw new Error(`Liens d’itinéraire : ${JSON.stringify(walkingHrefs)}`)
+  await placeResults.screenshot({ path: `${SCREENSHOTS}places-card.png` })
+
+  // A malformed or unsafe fence stays inert: plain code in the thread, no card, and the remote
+  // photo URL a bot wrote is never fetched.
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Cherche un lieu')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const inertPlaces = page.locator('.message-assistant').filter({ hasText: 'Deux blocs restés inertes' })
+  await inertPlaces.waitFor({ timeout: 5_000 })
+  if (await placeCards.count() !== 3) throw new Error('Un bloc adresses invalide a rendu une carte.')
+  if (await inertPlaces.locator('pre code').count() < 2) throw new Error('Les blocs inertes doivent rester des blocs de code visibles.')
+  await inertPlaces.getByText('https://evil.example/photos/galerie.jpg').waitFor()
+  await delay(500)
+  if (remoteRequests.some((url) => url.includes('evil.example'))) throw new Error('La photo distante d’un bloc invalide a été chargée.')
+  await page.locator('.messages-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight })
+  await delay(300)
+
   // /api/media over HTTP: session required, extensions and paths filtered, exact Range, strict headers.
   const sessionCookie = (await page.context().cookies(`${E2E_APP_ORIGIN}`)).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
   const media = (query, headers = {}) => fetch(`${E2E_APP_ORIGIN}/api/media?${new URLSearchParams(query)}`, { headers: { Cookie: sessionCookie, ...headers } })
@@ -2903,6 +3067,13 @@ try {
   const routines = await page.locator('.routine-row').count()
   if (routines !== 1) throw new Error(`Routines: ${routines} au lieu de 1`)
 
+  // The roster re-reads on a fixed 30 s timer: measure just after a tick, so the periodic refresh
+  // cannot land inside the window. (Switching bots must never re-read it on its own.)
+  for (let probe = 0; ; probe += 1) {
+    if (profilesListTimes.length && Date.now() - profilesListTimes.at(-1) < 400) break
+    if (probe > 600) throw new Error('La re-lecture périodique du roster ne tourne pas.')
+    await delay(50)
+  }
   const rosterCallsBeforeSwitch = profilesListCalls
   await page.locator('[data-bot=nova]').click()
   await page.locator('.message-assistant').getByText('Je suis ton bot Hermes de test.').waitFor()
@@ -4342,7 +4513,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement.')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement, cartes d’adresses hermes-places (cartes natives, streaming sans carte partielle, photos locales, liens à pied, blocs invalides inertes).')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

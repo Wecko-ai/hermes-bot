@@ -41,10 +41,11 @@ export function dateTime(value: string | null) {
 }
 
 export function cleanPreview(value: string) {
-  const withoutMail = value
+  const withoutCards = value
     .replace(/(`{3,})hermes-mail-approved[\s\S]*?(\1|$)/g, ` ${i18n.t('time.mailApproved')} `)
     .replace(/(`{3,})hermes-mail[\s\S]*?(\1|$)/g, ` ${i18n.t('time.mailDraft')} `)
-  return mediaPreviewText(withoutMail.replace(/```[\s\S]*?```/g, ` ${i18n.t('time.code')} `))
+    .replace(/(`{3,})hermes-places[\s\S]*?(\1|$)/g, ` ${i18n.t('time.places')} `)
+  return mediaPreviewText(withoutCards.replace(/```[\s\S]*?```/g, ` ${i18n.t('time.code')} `))
     .replace(/\[Image\]/g, i18n.t('time.image'))
     .replace(/[*_`#>]/g, '')
     .replace(/\s+/g, ' ')

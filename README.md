@@ -210,6 +210,8 @@ Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) 
 - **Local chat.** With [Ollama](https://ollama.com) running, a "Local" entry in the roster chats with a model installed on your machine. Its header shows the exact model, switches between installed models, and loads or unloads the model from memory (a loaded model stays 30 minutes after the last message). Conversations are saved on your Mac, encrypted with the Keychain, and listed in a History menu. This chat never goes through Hermes and never gets tools.
 - **Bot animations.** Put `<profile>-working.webp` and `<profile>-done.webp` in the animations folder. The bot then plays the first while it works and the second when it finishes. Without them, bots keep a still avatar.
 - **Mail approval card.** With the skill in [skills/mail-approval/](skills/mail-approval/), a bot shows an email draft as a card you can edit before it goes out (the skill uses [himalaya](https://github.com/pimalaya/himalaya)). Only the fields you approved are sent; the skill's script refuses a mail that no longer matches them, or the same mail twice.
+- **Places.** With the generic plugin in [hermes-plugins/places/](hermes-plugins/places/), a bot can answer "what's near X" with up to 3 real places from OpenStreetMap (Overture Maps fallback), a walking distance that says when it is a route and when it is only a straight-line estimate, and a Google Maps walking-directions link. A fenced `hermes-places` block in a reply is rendered by the app as a native card (name, map link, distance, opening, features, photos served by the local media proxy). Ratings and reviews appear on the card only when the plugin sourced them from real data: they are never invented, and there is no paid Google integration — Google appears only as plain directions links. The plugin needs no API key and makes no change to Hermes itself.
+- **Resilient free web search.** With the generic plugin in [hermes-plugins/web-resilient/](hermes-plugins/web-resilient/), a bot gets a keyless web provider that fails over between a local SearXNG instance and the free `ddgs` package, plus bounded local page extraction (time, size and redirect caps, private addresses refused after DNS resolution, Trafilatura used only when installed). Both plugins are optional, self-contained and covered by offline test suites.
 - **Vault for a shared Chrome.** For bots that drive a Chrome over CDP: a small service (`server/browser-vault/`) keeps site logins in the macOS login keychain and types them into the bot's tab itself, so the password never reaches the bot's context. It needs your own setup (a launchd agent for `server/browser-vault/standalone.mjs`, and the skill in [skills/browser-vault/](skills/browser-vault/)). Read "Security" below before using it.
 
 ## How it works
@@ -223,6 +225,8 @@ window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4
 - `electron/`: the macOS shell. It runs the same server in its main process, keeps sessions in the Keychain and opens the SSH tunnel.
 - `tests/e2e.mjs`: an end-to-end run against a fake gateway and a fake Chrome. No model is ever called.
 - `skills/`: optional Hermes skills that go with the app.
+- `hermes-plugins/`: optional generic Hermes plugins (places, web-resilient) with offline `unittest` suites; no third-party package is required for the tests.
+- `scripts/places/`: offline tooling that builds local places extracts (OpenStreetMap, Overture Maps) for the places plugin.
 
 ## Security
 

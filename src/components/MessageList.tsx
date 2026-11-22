@@ -10,6 +10,7 @@ import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaE
 import { MailBlock, MailContext } from './MailCard'
 import { QuestionsCard } from './QuestionsCard'
 import { TweetCard } from './TweetCard'
+import { PlacesBlock } from './PlaceResultsCard'
 import { findQuestions, parseAnswersPrompt } from '../lib/questions'
 import { findTweets, type TweetMatch } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
@@ -17,6 +18,7 @@ import { normalizeHref } from '../lib/links'
 import { completedMessageStamp, findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
+import { PLACES_FENCE } from '../lib/places'
 import { replyAnnouncement } from '../lib/local-chat-turn'
 import { nextStick } from '../lib/scroll-stick'
 import { useScrollIntent } from '../lib/use-scroll-intent'
@@ -108,19 +110,21 @@ function CodeCopy({ text }: { text: string }) {
   )
 }
 
-/** A `hermes-mail` code block becomes the mail card to approve; any other block gets a copy button. */
+/** A fenced block becomes a card when its language says so; any other block gets a copy button. */
 function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
   const context = useContext(MediaContext)
   const tweet = atTweet(useContext(TweetContext), node?.position?.start.offset)
   if (tweet) return <TweetCard tweet={tweet} />
   const code = node?.children[0]
   const language = code?.type === 'element' && code.tagName === 'code' && Array.isArray(code.properties?.className) ? String(code.properties.className[0]) : ''
-  const approvedFence = language === `language-${MAIL_APPROVED_FENCE}`
-  const mailFence = language === `language-${MAIL_FENCE}` || approvedFence
+  const source = code?.type === 'element' ? code.children.map((child) => (child.type === 'text' ? child.value : '')).join('') : ''
   // An approved fence is a receipt only in the user's message. A note between bots keeps every fence as code.
-  if (context?.botCards !== false && code?.type === 'element' && mailFence && !(approvedFence && context?.role !== 'user')) {
-    const source = code.children.map((child) => (child.type === 'text' ? child.value : '')).join('')
-    return <MailBlock source={source} approvedBlock={approvedFence} streaming={Boolean(context?.streaming)} role={context?.role} />
+  if (context?.botCards !== false && code?.type === 'element' && source && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`) && !(language === `language-${MAIL_APPROVED_FENCE}` && context?.role !== 'user')) {
+    return <MailBlock source={source} approvedBlock={language === `language-${MAIL_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} role={context?.role} />
+  }
+  // Places cards, like mail cards, stay inert until the fence is complete and valid.
+  if (context && context.botCards !== false && code?.type === 'element' && language === `language-${PLACES_FENCE}`) {
+    return <PlacesBlock source={source} profile={context.profile} version={context.version} streaming={Boolean(context.streaming)} />
   }
   const text = code ? hastText(code as HastNode).replace(/\n$/, '') : ''
   return (
@@ -383,8 +387,8 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     ? [...visibleMessages, { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage]
     : visibleMessages
   const working = (running || Boolean(streaming)) && !liveReply
-  // A mail card being written is never shown raw: the line says so until the card arrives.
-  const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : workText) || t('messages.working', { name: bot.name })
+  // A card being written is never shown raw: the line says so until the card arrives.
+  const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : streaming.includes(PLACES_FENCE) ? t('places.drafting') : workText) || t('messages.working', { name: bot.name })
   const count = items.length
   const profile = bot.slug
   const mailContext = useMemo(() => ({ profile, running, approved: approvedMailIds(messages), onApprove: onSuggestion }), [profile, running, messages, onSuggestion])

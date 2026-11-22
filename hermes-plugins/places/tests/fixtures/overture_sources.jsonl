@@ -1,0 +1,5 @@
+{"id": "src-1", "name": "Cafe du Coin", "category": "cafe", "lat": 48.85703, "lon": 2.35153, "sources": ["foursquare", "meta"]}
+{"id": "src-2", "name": "Overture Only Roastery", "category": "cafe", "lat": 48.85690, "lon": 2.35100}
+{"id": "src-3", "name": "Long Tail House", "category": "cafe", "lat": 48.85710, "lon": 2.35220, "sources": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", "meta"]}
+{"id": "src-4", "name": "Messy Sources", "category": "cafe", "lat": 48.85680, "lon": 2.35200, "sources": ["foursquare", "FOURSQUARE", 42, " meta ", "", null]}
+{"id": "src-5", "name": "No Sources List", "category": "cafe", "lat": 48.85695, "lon": 2.35180, "sources": "foursquare"}

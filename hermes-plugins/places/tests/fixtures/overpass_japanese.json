@@ -1,0 +1,31 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62",
+  "elements": [
+    {
+      "type": "node",
+      "id": 5001,
+      "lat": 35.68140,
+      "lon": 139.76790,
+      "tags": {
+        "amenity": "cafe",
+        "name": "珈琲舎のだ 東京駅店",
+        "name:en": "Coffee Shop Noda",
+        "addr:city": "千代田区",
+        "addr:street": "丸の内一丁目",
+        "internet_access": "yes"
+      }
+    },
+    {
+      "type": "node",
+      "id": 5002,
+      "lat": 35.68190,
+      "lon": 139.76850,
+      "tags": {
+        "amenity": "cafe",
+        "name": "カフェ・ラ・ネージュ",
+        "internet_access": "no"
+      }
+    }
+  ]
+}

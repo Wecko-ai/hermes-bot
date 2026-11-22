@@ -9,8 +9,10 @@ release
 .build/
 *.tsbuildinfo
 
-# Local backups
+# Local backups and Python bytecode
 *.bak-claude-*
+__pycache__/
+*.pyc
 
 # Test output and local screenshots
 coverage/

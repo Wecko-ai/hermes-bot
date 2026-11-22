@@ -6,6 +6,10 @@ describe('time helpers', () => {
     expect(cleanPreview('**Bonjour** `code`\n> Suite')).toBe('Bonjour code Suite')
   })
 
+  it('remplace les cartes de lieux par un libellé au lieu du JSON', () => {
+    expect(cleanPreview('Voici :\n\n```hermes-places\n{"places":[]}\n```')).toBe('Voici : Lieux à proximité')
+  })
+
   it('remplace les chemins MEDIA: par un libellé court', () => {
     expect(cleanPreview('La v3 est prête :\n\nMEDIA:/Users/test/videos/demo.mp4')).toBe('La v3 est prête : Vidéo demo.mp4')
   })

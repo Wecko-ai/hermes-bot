@@ -1,0 +1,62 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62",
+  "elements": [
+    {
+      "type": "node",
+      "id": 1001,
+      "lat": 48.85702,
+      "lon": 2.35152,
+      "tags": {
+        "amenity": "cafe",
+        "name": "Cafe du Coin",
+        "addr:street": "Rue de la Lune",
+        "addr:housenumber": "12",
+        "addr:city": "Paris",
+        "addr:postcode": "75002",
+        "internet_access": "wlan"
+      }
+    },
+    {
+      "type": "node",
+      "id": 1002,
+      "lat": 48.85745,
+      "lon": 2.35221,
+      "tags": {
+        "amenity": "cafe",
+        "name": "Cafe Atlas",
+        "addr:street": "Rue Saint-Denis",
+        "addr:housenumber": "40",
+        "wheelchair": "yes"
+      }
+    },
+    {
+      "type": "way",
+      "id": 2001,
+      "center": {"lat": 48.85660, "lon": 2.35290},
+      "tags": {
+        "amenity": "cafe",
+        "name": "Le Rousseau",
+        "addr:city": "Paris",
+        "socket:typee": "yes",
+        "power_supply": "yes"
+      }
+    },
+    {
+      "type": "node",
+      "id": 3001,
+      "lat": 48.85800,
+      "lon": 2.35000,
+      "tags": {
+        "amenity": "cafe"
+      }
+    },
+    {
+      "type": "node",
+      "id": 9999,
+      "lat": 999.0,
+      "lon": 2.35,
+      "tags": {"amenity": "cafe", "name": "Broken coordinates"}
+    }
+  ]
+}
