@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, UsersRound, X } from 'lucide-react'
+import { Bell, BookOpen, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { Room } from '../lib/rooms'
 import { BotContextMenu } from './BotContextMenu'
@@ -56,6 +56,7 @@ interface SidebarProps {
   onNewBot: () => void
   onNewRoom: () => void
   onOpenSettings: () => void
+  onOpenSkills: () => void
   /** Hermes answers (or the demo runs): the menu offers the actions that write to it. */
   canManage: boolean
   /** Runs a bot menu action; rejects when Hermes did not take it. */
@@ -63,7 +64,7 @@ interface SidebarProps {
   onNotice: (message: string) => void
 }
 
-export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, onOpenSkills, canManage, onBotAction, onNotice }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const roomCache = useRoomStore((state) => state.cache)
@@ -337,6 +338,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
           </div>
           <div className="footer-actions">
             {bots.some((bot) => bot.hidden) && <button className="plain-icon" aria-label={showHidden ? t('sidebar.hideHidden') : t('sidebar.showHidden')} onClick={() => updateSettings({ showHidden: !showHidden })}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+            <button className="plain-icon" aria-label={t('sidebar.skills')} title={t('sidebar.skillsTitle')} onClick={onOpenSkills}><BookOpen size={16} /></button>
             <button className="plain-icon" aria-label={t('sidebar.settings')} title={t('sidebar.settingsTitle')} onClick={onOpenSettings}><Settings size={16} /></button>
             <button className="user-menu" aria-label={t('sidebar.signOut')} title={t('sidebar.signOut')} onClick={onLogout}>{ui.userInitial ? <span className="user-avatar" aria-label={ui.userName || ui.userInitial}>{ui.userInitial}</span> : <span className="user-avatar" aria-hidden="true"><User size={14} /></span>}</button>
           </div>

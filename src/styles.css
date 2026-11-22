@@ -1321,3 +1321,30 @@ button.agent-note-name:hover { background: var(--hover); }
 .compaction-gauge input[type="range"] { width: 100%; accent-color: var(--accent); }
 .compaction-save { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .compaction-save .settings-footer-status { flex: 1; min-width: 0; font-size: 12px; }
+.settings.is-wide { width: min(980px, 100%); height: min(740px, 100%); }
+.library { display: flex; flex-direction: column; gap: 8px; }
+.library-list, .library-bots, .library-section { display: flex; flex-direction: column; gap: 8px; }
+.library-section h4 { margin: 10px 0 0; font-size: 13px; }
+.library-card { padding: 10px 12px; border-radius: 12px; background: var(--surface-soft); }
+.library-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.library-card-open { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; text-align: left; color: var(--text); }
+.library-card-open strong { font-size: 13px; }
+.library-card-open span, .library-meta, .library-summary { color: var(--text-secondary); font-size: 12px; line-height: 16px; }
+.library-summary { margin: 4px 0 0; }
+.library-bot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.library-bot-name { font-size: 13px; font-weight: 650; }
+.library-bot-error { color: var(--danger); font-size: 12px; }
+.library-status { font-size: 12px; font-weight: 650; }
+.library-status.is-connected { color: var(--success); }
+.library-status.is-needs_auth, .library-status.is-unknown { color: var(--warning); }
+.library-status.is-error { color: var(--danger); }
+.library-status.is-off, .library-status.is-available { color: var(--text-tertiary); }
+.library-enable { display: inline-flex; }
+.library-env { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.library-env input, .library-env select { padding: 6px 8px; border: 0; border-radius: 8px; background: var(--surface-raised); color: var(--text); }
+.library-diagnostics { margin: 8px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 12px; }
+.skill-sheet { margin-top: 8px; padding: 12px; border-radius: 12px; background: var(--surface-raised); }
+.skill-sheet header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.skill-sheet h4 { margin: 0; font-size: 14px; }
+.skill-sheet pre { overflow: auto; font-size: 12px; }
+.skill-sheet p { margin: 8px 0; }

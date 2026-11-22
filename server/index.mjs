@@ -20,6 +20,7 @@ import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
 import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction } from './shared-settings.mjs'
 import { COMPACTION_BODY_MAX_BYTES, applyCompaction, compactionFrom, compressionOfConfig, gaugeFrom, profilesFrom } from './compaction.mjs'
+import { handleLibrary, isLibraryPath } from './library.mjs'
 import { postVaultLogout, reduceVaultPoll, selectVaultToken, vaultRequestHeaders } from './vault-client.mjs'
 
 const CONFIG = configModule.loadConfig()
@@ -1025,6 +1026,15 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/compaction' && (request.method === 'GET' || request.method === 'PUT')) {
       return await handleCompaction(request, response, url)
+    }
+    if (isLibraryPath(url.pathname)) {
+      return await handleLibrary(request, response, url, {
+        json,
+        hermesFetch,
+        session: browserSession(request),
+        originAllowed: LOCAL_ORIGINS.has(request.headers.origin || ''),
+        readBody: () => bodyJson(request, 32_768),
+      })
     }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)

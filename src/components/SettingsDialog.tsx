@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { focusableElements, tabTrapIndex } from '../lib/a11y-focus'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Cpu, KeyRound, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
+import { ChevronRight, Cpu, KeyRound, MessageSquare, Plug, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
 import { version } from '../../package.json'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
@@ -18,13 +18,15 @@ import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/loca
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
 import { CompactionSetting } from './CompactionSetting'
+import { ConnectorsTab } from './ConnectorsTab'
 
-export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
+export type SettingsTab = 'general' | 'chat' | 'models' | 'connectors' | 'vault' | 'account'
 
 const TABS: { id: SettingsTab; icon: LucideIcon }[] = [
   { id: 'general', icon: SlidersHorizontal },
   { id: 'chat', icon: MessageSquare },
   { id: 'models', icon: Cpu },
+  { id: 'connectors', icon: Plug },
   { id: 'vault', icon: KeyRound },
   { id: 'account', icon: UserRound },
 ]
@@ -50,6 +52,8 @@ interface SettingsDialogProps {
   demo?: boolean
   /** The open bot's model window and name: says what the compaction gauge means in tokens. */
   compactionContext?: { contextMax: number; modelName: string } | null
+  /** Profile the Connectors tab brings to the top. */
+  focusSlug?: string
 }
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -502,7 +506,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
     <div className="settings-backdrop" onMouseDown={onClose}>
       <div
         ref={dialogRef}
-        className="settings"
+        className={`settings ${tab === 'connectors' ? 'is-wide' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={t('settings.title')}
@@ -527,6 +531,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
             {tab === 'chat' && <ChatTab localModels={props.localModels} bots={props.bots} demo={demo} compactionContext={props.compactionContext} />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} demo={demo} draft={modelsDraft} />}
+            {tab === 'connectors' && <ConnectorsTab bots={props.bots} focusSlug={props.focusSlug || ''} demo={demo} />}
             {tab === 'vault' && <VaultTab bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}
           </div>

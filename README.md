@@ -151,6 +151,8 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
 - **Notifications.** A macOS notification when a bot finishes or asks you something, unless you are looking at its chat. A turn between bots (started by another bot's message) or one that ends in silence does not notify. macOS only delivers them from a signed build: see "Desktop app" below.
 - **Settings.** Theme, text size, language, send key, notifications, hidden bots, which models the picker offers, and a short guide to the chat. They stay on your Mac. Managing a bot (create, rename, move, hide, delete) is the exception: it writes the bot's card in its Hermes profile, as Hermes Desktop does, so every app that reads the card agrees.
+- **Connectors.** Settings > Connectors browses the Hermes catalog on this Mac. Connect opens the service’s sign-in page in your browser. Hermes stores the credential; HermesBot never reads it and never shows it. Each bot has its own status (connected, needs sign-in, or an error), its own on/off switch, and its own disconnect.
+- **Skills.** The Skills screen lists the skills shared on this Mac and the skills that belong to one bot. You can turn a skill on or off for the bot you pick, read its SKILL.md, and install one from the Hermes hub.
 
 ## Connect it to Hermes
 
@@ -231,7 +233,7 @@ window (React)  ──HTTP + WebSocket──▶  local server (Node, 127.0.0.1:4
 ## Security
 
 - The local server listens on `127.0.0.1` only and rejects requests whose `Host` or `Origin` is not local.
-- Hermes cookies and tickets stay in the server process. The window only gets an opaque session id.
+- Hermes cookies and tickets stay in the server process. The window only gets an opaque session id. A connector credential stays in Hermes too: the app asks Hermes for a sign-in page, opens that page in the browser, and only receives a status back.
 - Bot output is treated as hostile. No remote image or resource ever loads. Bot files only pass through the local server, with a fixed content type and no SVG. HTML documents run in a sandboxed iframe with no network and no access to the app.
 - HermesBot trusts whatever answers on the gateway address. A local process that took that port would receive your password, but it would already run with your rights.
 - Without a password, the server reads Hermes' session token from the Hermes home at each use. It never stores it and never sends it to the window. For every request that carries the token, it opens the connection to `127.0.0.1` first, then checks that the process at the other end of that connection is the gateway of that home (the gateway names itself on its private control socket). A process of another account, an SSH tunnel, or whoever takes the port between two requests never gets the token.
@@ -253,9 +255,9 @@ npm run test:e2e   # end-to-end run, needs macOS and Google Chrome
 ## Known limits
 
 - The sign-in without a password only works for a Hermes on the same Mac and under the same account. It relies on the session token of Hermes' Webapp, which is not a documented interface for other apps: a Hermes update can break it.
-- Other Hermes sign-ins, such as OAuth, are not supported.
+- Other ways of signing in to the gateway, such as OAuth, are not supported. Connector sign-in is separate: Hermes stores that credential, and the app only opens the browser page.
 - macOS only, and the packaged app is for Apple silicon. The server and the interface may run elsewhere with `npm run dev`, but this is not tested.
-- Groups and routines cannot be created or edited from the app yet. A bot can be created, renamed, moved, hidden and deleted; its instructions, skills and tools are still edited in Hermes.
+- Groups and routines cannot be created or edited from the app yet. A bot can be created, renamed, moved, hidden and deleted. Its instructions are still edited in Hermes. Connectors and skills are managed in the app; Hermes keeps the connector credential and the skill files.
 - Deleting a bot from the app takes it out of the roster and keeps its Hermes profile, files, history and scheduled jobs. `hermes profile delete <name>` erases it for good.
 - Most features are verified against the simulated gateway of the test suite and on the author's own setup, not on a wide range of Hermes versions. The gateway contract can change between Hermes releases.
 - The SSH tunnel is not restarted by itself when it drops. The reconnect button at the bottom of the roster tries to reopen it.

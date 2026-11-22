@@ -51,6 +51,7 @@ import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboar
 import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
+import { SkillsScreen } from './components/SkillsScreen'
 import { i18n, resolveLanguage } from './i18n'
 import { dictationLanguageCode, getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
@@ -236,6 +237,7 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const [focusSignal, setFocusSignal] = useState(0)
   const [notice, setNotice] = useState('')
   const [modelQuery, setModelQuery] = useState<string | null>(null)
@@ -2066,6 +2068,7 @@ export default function App() {
         onNewBot={onSidebarNewBot}
         onNewRoom={onSidebarNewRoom}
         onOpenSettings={onSidebarSettings}
+        onOpenSkills={() => setSkillsOpen(true)}
         canManage={DEMO || connected}
         onBotAction={onSidebarBotAction}
         onNotice={setNotice}
@@ -2195,7 +2198,11 @@ export default function App() {
           reconnecting={reconnecting}
           onReconnect={reconnect}
           onLogout={logout}
+          focusSlug={selectedBot.slug}
         />
+      )}
+      {skillsOpen && (
+        <SkillsScreen bots={bots} focusSlug={selectedBot.slug} demo={DEMO} onClose={() => setSkillsOpen(false)} />
       )}
       {newBotDialog}
       {newRoomDialog}

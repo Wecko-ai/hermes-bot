@@ -98,6 +98,10 @@ describe('local routes require a real session', () => {
       ['/api/browser-turn', 'GET'],
       ['/api/compaction', 'GET'],
       ['/api/compaction', 'PUT'],
+      ['/api/connectors?profiles=nova', 'GET'],
+      ['/api/connectors/install', 'POST'],
+      ['/api/skills/library', 'GET'],
+      ['/api/skills/hub/install', 'POST'],
     ]
     for (const [pathname, method] of paths) {
       const response = await fetch(`http://127.0.0.1:${appPort}${pathname}`, { method, headers: forged })
