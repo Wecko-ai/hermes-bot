@@ -9,6 +9,9 @@ import './BotDialogs.css'
 /** Rename: the room's name only, written to the room log by Hermes for every member. */
 export function RenameRoomDialog({ room, onRename, onClose }: { room: Room; onRename: (name: string) => Promise<void>; onClose: () => void }) {
   const { t } = useTranslation()
+  // The name when the dialog opened. A lost reply can already be applied on the server, and the
+  // room list then shows the new name, while this dialog still has to report the error and retry.
+  const [openedAs] = useState(room.name)
   const [name, setName] = useState(room.name)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -16,7 +19,7 @@ export function RenameRoomDialog({ room, onRename, onClose }: { room: Room; onRe
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!clean || busy) return
-    if (clean === room.name) { onClose(); return }
+    if (clean === openedAs) { onClose(); return }
     setBusy(true)
     setError('')
     try {
@@ -28,7 +31,7 @@ export function RenameRoomDialog({ room, onRename, onClose }: { room: Room; onRe
     }
   }
   return (
-    <BotSheet title={t('room.menu.renameTitle', { name: room.name })} icon={<SquarePen size={18} />} busy={busy} onCancel={onClose} onSubmit={submit}>
+    <BotSheet title={t('room.menu.renameTitle', { name: openedAs })} icon={<SquarePen size={18} />} busy={busy} onCancel={onClose} onSubmit={submit}>
       <label>
         {t('room.menu.renameLabel')}
         <input value={name} maxLength={ROOM_NAME_MAX} autoFocus onFocus={(event) => event.currentTarget.select()} onChange={(event) => setName(event.target.value)} disabled={busy} spellCheck={false} />
