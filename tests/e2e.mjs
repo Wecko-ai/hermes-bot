@@ -1026,7 +1026,9 @@ wss.on('connection', (socket) => {
         at(80, 'message.delta', { turn_id: 'turn-places', text: 'Voici trois adresses près de la gare, toutes fictives :\n\n```hermes-places\n' })
         at(700, 'message.delta', { turn_id: 'turn-places', text: body.slice(0, half) })
         at(1300, 'message.delta', { turn_id: 'turn-places', text: `${body.slice(half)}\n\`\`\`` })
-        at(2200, 'message.complete', { turn_id: 'turn-places', text: final, status: 'complete' })
+        const completion = heldReplies.get('turn-places')
+        if (completion) void completion.then(() => at(0, 'message.complete', { turn_id: 'turn-places', text: final, status: 'complete' }))
+        else at(2200, 'message.complete', { turn_id: 'turn-places', text: final, status: 'complete' })
         return
       }
       if (frame.params.text === 'Cherche un lieu') {
@@ -2917,6 +2919,7 @@ try {
   // walking itinerary tied to the place's coordinates.
   const messagesBeforePlaces = await page.locator('.message-assistant').count()
   const mediaBeforePlaces = mediaRequests.length
+  const releasePlaces = holdReplies('turn-places')
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Cherche un café')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   // While the fence streams, the working line says a places lookup is running: neither a card nor
@@ -2927,6 +2930,7 @@ try {
     if (leaked) throw new Error('Une carte ou une clôture adresses partielle est apparue pendant le streaming.')
     await delay(60)
   }
+  releasePlaces()
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 5_000 })
   if (await page.locator('.message-assistant').count() !== messagesBeforePlaces + 1) throw new Error('Le tour adresses doit laisser un seul message du bot.')
   const placeResults = page.locator('.place-results')

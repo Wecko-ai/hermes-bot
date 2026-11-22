@@ -192,9 +192,11 @@ def handle_places_doctor(args: dict, *, _runtime: Optional[Runtime] = None, **_k
             report["ok"] = False
 
     allowlist_problems = config.validate_allowlist()
+    https_count = sum(endpoint.url.startswith("https://") for endpoint in config.ENDPOINTS.values())
+    loopback_count = len(config.ENDPOINTS) - https_count
     add("endpoint_allowlist", not allowlist_problems,
         "; ".join(allowlist_problems) if allowlist_problems else
-        f"{len(config.ENDPOINTS)} HTTPS endpoints, no embedded credentials")
+        f"{https_count} HTTPS endpoints + {loopback_count} loopback HTTP endpoint, no embedded credentials")
 
     try:
         home = runtime.home
@@ -282,7 +284,7 @@ def _live_probe(runtime: Runtime) -> dict:
                 io=io),
             "cafe")
     except net.NetError as exc:
-        problems.append(f"overpass: {sanitize.clean_text(exc, 100)}")
+        degraded.append(f"overpass: {sanitize.clean_text(exc, 100)}")
 
     try:
         routing_mod._valhalla_local(_PROBE_LOCAL_A, _PROBE_LOCAL_B, io, budget)
@@ -298,7 +300,7 @@ def _live_probe(runtime: Runtime) -> dict:
         public_ok = True
     except net.NetError as exc:
         public_ok = False
-        problems.append(f"public valhalla: {sanitize.clean_text(exc, 100)}")
+        degraded.append(f"public valhalla: {sanitize.clean_text(exc, 100)}")
     if not (local_ok or public_ok):
         problems.append("routing: no Valhalla endpoint answered (local and public)")
 
@@ -310,9 +312,8 @@ def _live_probe(runtime: Runtime) -> dict:
                 "local_valhalla_ok": local_ok, "local_valhalla_detail": local_detail}
     if degraded:
         return {"ok": True,
-                "detail": "overpass and public valhalla responded within probe budget | "
-                          "degraded: " + "; ".join(degraded)
-                          + " (pedestrian routing falls back to public providers)",
+                "detail": "external providers degraded: " + "; ".join(degraded)
+                          + " (local fallbacks remain available)",
                 "degraded": True,
                 "local_valhalla_ok": local_ok, "local_valhalla_detail": local_detail}
     return {"ok": True,

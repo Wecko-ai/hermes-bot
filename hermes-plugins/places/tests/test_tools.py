@@ -224,6 +224,16 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(checks["local_valhalla"]["ok"])
         self.assertIn("falls back", checks["local_valhalla"]["detail"])
 
+    def test_doctor_probe_overpass_degraded_not_failed(self):
+        broken = FakeNet({"overpass_de": net.Timeout("t"), "valhalla_local": valhalla_ok(), "valhalla": valhalla_ok()})
+        report = self._doctor({"probe": True}, fake=broken)
+        checks = {c["check"]: c for c in report["checks"]}
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["degraded"])
+        self.assertTrue(checks["live_probe"]["ok"], checks["live_probe"])
+        self.assertIn("overpass", checks["live_probe"]["detail"])
+        self.assertIn("local fallbacks remain available", checks["live_probe"]["detail"])
+
     def test_doctor_probe_failure_reported(self):
         broken = FakeNet({"overpass_de": net.Timeout("t"), "valhalla": net.Timeout("t")})
         report = self._doctor({"probe": True}, fake=broken)
