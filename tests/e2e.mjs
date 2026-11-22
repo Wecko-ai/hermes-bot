@@ -3094,7 +3094,7 @@ try {
   if (await page.locator('.model-option[data-model="kimi-k3"]').count()) throw new Error('Un modèle masqué reste proposé.')
   // Readable names: Family Tier Version; the exact id stays in the tooltip.
   const nameOf = (model) => page.locator(`.model-option[data-model="${model}"] .model-option-name`).innerText()
-  if (await nameOf('kimi-for-coding') !== 'Kimi for Coding') throw new Error(`Nom de modèle inattendu : ${await nameOf('kimi-for-coding')}`)
+  if (await nameOf('kimi-for-coding') !== 'Kimi K2.8 Preview') throw new Error(`Nom de modèle inattendu : ${await nameOf('kimi-for-coding')}`)
   if (await page.locator('.model-option[data-model="kimi-for-coding"] .model-score').count()) throw new Error('Un modèle inconnu de LLM Stats affiche un score.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
   if (await nameOf('gpt-6.1-sol') !== 'GPT Sol 6.1') throw new Error(`Nom de modèle inattendu : ${await nameOf('gpt-6.1-sol')}`)

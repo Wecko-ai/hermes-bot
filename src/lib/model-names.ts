@@ -36,6 +36,13 @@ const SAFE_ID = /^[A-Za-z0-9._:/@+-]{1,200}$/
 
 const titleWord = (word: string) => WORD_CASE[word] ?? (SMALL_WORDS.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1))
 
+// Marketed names that hide another model behind them, checked verbatim against the bare id before
+// the pattern rules. Verified by hand: the target ages, so each entry carries its check date.
+const ALIASES: Record<string, string> = {
+  // Kimi Code's "for coding" endpoint serves K2.8 Preview (canonical moonshotai/kimi-k2.8-preview).
+  'kimi-for-coding': 'Kimi K2.8 Preview', // vérifié 2026-11-22
+}
+
 /** Date and quantisation parts of an id: they identify a build, not a model. */
 function stripNoise(name: string) {
   return name
@@ -118,6 +125,9 @@ export function parseModelId(raw: string): ParsedModel | null {
 
 /** "gemini-3.5-flash" -> "Gemini Flash 3.5". Unknown shapes keep the raw id rather than a wrong name. */
 export function prettyModelName(id: string, _provider?: string): string {
+  const bare = id.replace(/^~/, '').split('/').pop() ?? ''
+  const alias = ALIASES[bare.replace(DOTTED_PREFIX, '')]
+  if (alias) return alias
   const parsed = parseModelId(id)
   if (!parsed) return id
   const parts: string[] = []
