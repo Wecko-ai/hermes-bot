@@ -1,0 +1,28 @@
+.settings.workspace-sheet { width: min(840px, 100%); height: min(680px, 100%); background: var(--surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.workspace-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.workspace-tabs button { padding: 5px 10px; border-radius: 999px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; }
+.workspace-tabs button.is-active { background: var(--selected); color: var(--text); font-weight: 560; }
+.workspace-fact { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; border-bottom: .5px solid var(--glass-line); }
+.workspace-fact p { flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 18px; }
+.workspace-meta { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 12px; }
+.workspace-actions { flex: none; display: flex; gap: 6px; }
+.workspace-compose { display: flex; gap: 8px; margin: 12px 0; }
+.workspace-compose input, .workspace-field, .workspace-select, .workspace-persona {
+  width: 100%; border: 0; outline: 0; border-radius: 9px; background: var(--surface-soft); color: var(--text); font-size: 13px;
+}
+.workspace-compose input, .workspace-field, .workspace-select { padding: 8px 10px; }
+.workspace-persona { min-height: 140px; padding: 10px; resize: vertical; line-height: 18px; }
+.workspace-section { margin-top: 18px; }
+.workspace-section h4 { margin: 0 0 6px; font-size: 13px; font-weight: 650; }
+.workspace-skill { margin: 0; white-space: pre-wrap; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 17px; }
+.workspace-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: .5px solid var(--glass-line); }
+.workspace-row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.workspace-row-copy strong { font-size: 13px; font-weight: 560; }
+.workspace-row-copy span, .workspace-empty { color: var(--text-secondary); font-size: 12px; line-height: 17px; }
+.workspace-colors, .workspace-shapes { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-colors button, .workspace-shapes button { width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 2px solid transparent; display: inline-flex; align-items: center; justify-content: center; }
+.workspace-shapes button { background: var(--surface-soft); }
+.workspace-colors button.is-active, .workspace-shapes button.is-active { border-color: var(--text); }
+.workspace-label { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; font-weight: 560; }
+.workspace-hub { display: flex; gap: 8px; margin-bottom: 8px; }
+.workspace-hub input { flex: 1; }

@@ -20,6 +20,8 @@ import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
 import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction } from './shared-settings.mjs'
 import { COMPACTION_BODY_MAX_BYTES, applyCompaction, compactionFrom, compressionOfConfig, gaugeFrom, profilesFrom } from './compaction.mjs'
+import { scanSkillFiles } from './skills-catalog.mjs'
+import { createWorkspace } from './workspace.mjs'
 import { postVaultLogout, reduceVaultPoll, selectVaultToken, vaultRequestHeaders } from './vault-client.mjs'
 
 const CONFIG = configModule.loadConfig()
@@ -414,6 +416,126 @@ async function handleCompaction(request, response, url) {
   if (!result.applied.length) return json(response, 502, { error: 'compaction_unwritable', failed: result.failed })
   const saved = await writeSharedFile(request, { ...existing, compaction: compactionFrom(result.settings) })
   return json(response, saved ? 200 : 502, { ok: saved, settings: { mode: result.settings.mode, gauge: result.settings.gauge }, applied: result.applied, failed: result.failed })
+}
+
+const WORKSPACE_ERRORS = new Set([
+  'memory_unreadable', 'memory_unwritable', 'memory_full', 'invalid_memory', 'memory_not_found',
+  'invalid_profile', 'invalid_skill', 'skill_not_found', 'skill_toggle_failed',
+  'persona_too_large', 'persona_unwritable', 'model_unwritable', 'invalid_model',
+])
+
+async function hermesJson(request, route, { method = 'GET', body, timeout = 45_000 } = {}) {
+  const upstream = await hermesFetch(request, route, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    timeout,
+  })
+  const text = await upstream.text().catch(() => '')
+  let parsed = null
+  if (text) {
+    try { parsed = JSON.parse(text) } catch { parsed = null }
+  }
+  return { status: upstream.status, body: parsed }
+}
+
+async function readGatewayText(request, file) {
+  const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: file })}`)
+  try {
+    if (upstream.status === 404) return { status: 404, text: '' }
+    if (!upstream.ok) return { status: upstream.status, text: '' }
+    const body = await upstream.json().catch(() => ({}))
+    const text = typeof body.text === 'string' ? body.text.slice(0, 256 * 1024) : ''
+    return { status: 200, text }
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function writeGatewayText(request, file, content) {
+  const upstream = await hermesFetch(request, '/api/fs/write-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: file, content }),
+    timeout: 30_000,
+  })
+  await upstream.body?.cancel?.().catch(() => {})
+  return { ok: upstream.ok, status: upstream.status }
+}
+
+function workspaceFor(request) {
+  return createWorkspace({
+    gateway: {
+      readText: (file) => readGatewayText(request, file),
+      writeText: (file, content) => writeGatewayText(request, file, content),
+      readConfig: (slug) => readProfileConfig(request, slug),
+      writeConfig: (slug, body) => writeProfileConfig(request, slug, body),
+      request: (method, route, body) => hermesJson(request, route, { method, body }),
+    },
+    scanLocalSkills: (profile) => scanSkillFiles(CONFIG.hermesHome, profile, {
+      readdir: (dir) => readdir(dir, { withFileTypes: true }),
+      readFile: (file) => readFile(file, 'utf8'),
+      join: path.join,
+    }),
+  })
+}
+
+function workspaceFailure(response, error) {
+  const status = error?.status || 502
+  const code = WORKSPACE_ERRORS.has(error?.message) ? error.message : 'workspace_failed'
+  return json(response, status, { error: code })
+}
+
+/** Shared memory, skills and the bot sheet. Writes stay on this machine's own window. */
+async function handleWorkspace(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const write = request.method !== 'GET'
+  if (write && !LOCAL_ORIGINS.has(request.headers.origin || '')) return json(response, 403, { error: 'forbidden_origin' })
+  const workspace = workspaceFor(request)
+  const profile = url.searchParams.get('profile') || ''
+  try {
+    if (url.pathname === '/api/workspace/memory' && request.method === 'GET') {
+      return json(response, 200, await workspace.memoryView({ profiles: profilesFrom((url.searchParams.get('profiles') || '').split(',')) }))
+    }
+    if (url.pathname === '/api/workspace/memory' && request.method === 'POST') {
+      const body = await bodyJson(request, 32_768)
+      const profiles = profilesFrom(body.profiles)
+      if (body.action === 'publish') return json(response, 200, await workspace.publish(profiles))
+      return json(response, 200, await workspace.memoryChange({
+        action: body.action, profiles, id: body.id, type: body.type, text: body.text, learnedBy: body.learnedBy,
+      }))
+    }
+    if (url.pathname === '/api/workspace/skills' && request.method === 'GET') {
+      return json(response, 200, await workspace.skills({ profile }))
+    }
+    if (url.pathname === '/api/workspace/skills/file' && request.method === 'GET') {
+      return json(response, 200, await workspace.skillFile({ profile, name: url.searchParams.get('name') || '' }))
+    }
+    if (url.pathname === '/api/workspace/skills/toggle' && request.method === 'PUT') {
+      const body = await bodyJson(request, 8_192)
+      return json(response, 200, await workspace.toggleSkill({ profile: body.profile, name: body.name, enabled: body.enabled }))
+    }
+    if (url.pathname === '/api/workspace/skills/hub' && request.method === 'GET') {
+      return json(response, 200, await workspace.hubSearch({ profile, query: url.searchParams.get('q') || '' }))
+    }
+    if (url.pathname === '/api/workspace/skills/hub' && request.method === 'POST') {
+      const body = await bodyJson(request, 8_192)
+      return json(response, 200, await workspace.hubInstall({ profile: body.profile, identifier: body.identifier }))
+    }
+    if (url.pathname === '/api/workspace/bot' && request.method === 'GET') {
+      return json(response, 200, await workspace.botSheet({ profile }))
+    }
+    if (url.pathname === '/api/workspace/bot' && request.method === 'PUT') {
+      const body = await bodyJson(request, 80_000)
+      return json(response, 200, await workspace.saveBotSheet({
+        profile: body.profile, persona: body.persona, model: body.model, provider: body.provider, toolsets: body.toolsets,
+      }))
+    }
+    return json(response, 404, { error: 'not_found' })
+  } catch (error) {
+    if (error?.message === 'payload_too_large') throw error
+    return workspaceFailure(response, error)
+  }
 }
 
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
@@ -1025,6 +1147,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/compaction' && (request.method === 'GET' || request.method === 'PUT')) {
       return await handleCompaction(request, response, url)
+    }
+    if (url.pathname.startsWith('/api/workspace/')) {
+      return await handleWorkspace(request, response, url)
     }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)

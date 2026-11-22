@@ -51,6 +51,8 @@ import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboar
 import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
+import { BotSheet, MemoryScreen, SkillsScreen } from './components/Workspace'
+import { updateBotCard } from './lib/bot-manage'
 import { i18n, resolveLanguage } from './i18n'
 import { dictationLanguageCode, getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
@@ -236,6 +238,7 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const [workspace, setWorkspace] = useState<null | 'memory' | 'skills' | { sheet: string }>(null)
   const [focusSignal, setFocusSignal] = useState(0)
   const [notice, setNotice] = useState('')
   const [modelQuery, setModelQuery] = useState<string | null>(null)
@@ -1966,6 +1969,17 @@ export default function App() {
   const onSidebarNewBot = useCallback(() => { setNewBotOpen(true); setMobileOpen(false) }, [])
   const onSidebarNewRoom = useCallback(() => { setNewRoomOpen(true); setMobileOpen(false) }, [])
   const onSidebarSettings = useCallback(() => { setSettingsTab('general') }, [])
+  const onOpenMemory = useCallback(() => setWorkspace('memory'), [])
+  const onOpenSkills = useCallback(() => setWorkspace('skills'), [])
+  const onEditBot = useCallback((bot: Bot) => setWorkspace({ sheet: bot.slug }), [])
+  const closeWorkspace = useCallback(() => setWorkspace(null), [])
+  const saveBotIdentity = useCallback(async (bot: Bot, draft: { title: string; color: string; shape: string }) => {
+    const name = draft.title.trim()
+    const avatar = { ...bot.avatar, shape: draft.shape, color: draft.color }
+    if (DEMO) { updateBot(bot.slug, { name, avatar }); return }
+    await updateBotCard(client, bot.slug, { title: name, shape: draft.shape, color: draft.color, imageKind: 'shape' })
+    updateBot(bot.slug, { name, avatar })
+  }, [client])
   const onSidebarCloseMobile = useCallback(() => { setMobileOpen(false) }, [])
 
   // ── Voice mode: one spoken conversation with the open bot ──
@@ -2066,6 +2080,9 @@ export default function App() {
         onNewBot={onSidebarNewBot}
         onNewRoom={onSidebarNewRoom}
         onOpenSettings={onSidebarSettings}
+        onOpenMemory={onOpenMemory}
+        onOpenSkills={onOpenSkills}
+        onEditBot={onEditBot}
         canManage={DEMO || connected}
         onBotAction={onSidebarBotAction}
         onNotice={setNotice}
@@ -2199,6 +2216,11 @@ export default function App() {
       )}
       {newBotDialog}
       {newRoomDialog}
+      {workspace === 'memory' && <MemoryScreen bots={bots} demo={DEMO} onClose={closeWorkspace} />}
+      {workspace === 'skills' && <SkillsScreen bots={bots} demo={DEMO} initialProfile={selectedBot.slug === LOCAL_CHAT_SLUG ? '' : selectedBot.slug} onClose={closeWorkspace} />}
+      {typeof workspace === 'object' && workspace && bots.some((bot) => bot.slug === workspace.sheet) && (
+        <BotSheet bot={bots.find((bot) => bot.slug === workspace.sheet)!} models={modelOptions} demo={DEMO} onSaveIdentity={saveBotIdentity} onClose={closeWorkspace} />
+      )}
       {newBotRetry && !notice && <NewBotRetry name={newBotRetry.name} onRetry={() => retryNewBot(newBotRetry.slug)} onClose={() => setNewBotRetry(null)} />}
       {notice && <div className="toast" role="status"><AlertCircle size={17} /><span>{notice}</span><button aria-label={t('app.close')} onClick={() => setNotice('')}><X size={15} /></button></div>}
       {DEMO && <div className="demo-badge">{t('app.demoBadge')}</div>}
