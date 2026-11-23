@@ -9,10 +9,13 @@
     "infoTabs": "Informations du bot",
     "tabs": {
       "routines": "Routines",
+      "connectors": "Connecteurs",
       "activity": "Activité",
       "subagents": "Sous-agents",
       "media": "Médias",
+      "computer": "Ordinateur",
       "usage": "Usage",
+      "library": "Bibliothèque",
       "about": "À propos"
     },
     "activityHeading": "Activité technique",
@@ -31,7 +34,99 @@
     "none": "Aucune routine pour ce bot.",
     "paused": "En pause",
     "stateActive": "Active",
-    "readonly": "Lecture seule. Aucune routine ne peut être activée ici."
+    "readonlyDisabled": "L’édition des routines est désactivée sur cette installation.",
+    "confirmHint": "Chaque action exige une confirmation et un clic.",
+    "create": "Nouvelle routine",
+    "edit": "Modifier",
+    "delete": "Supprimer",
+    "pause": "Pause",
+    "resume": "Reprendre",
+    "runNow": "Lancer",
+    "test": "Tester",
+    "save": "Enregistrer",
+    "createTitle": "Nouvelle routine",
+    "editTitle": "Modifier la routine",
+    "fieldName": "Nom",
+    "fieldPrompt": "Consigne",
+    "fieldSchedule": "Horaire",
+    "schedulePlaceholder": "tous les jours à 9h, ou 0 9 * * *",
+    "confirmPause": "Mettre en pause la routine « {{name}} » ?",
+    "confirmResume": "Reprendre la routine « {{name}} » ?",
+    "confirmRun": "Lancer « {{name}} » maintenant ? Un tour payant démarre.",
+    "confirmDelete": "Supprimer la routine « {{name}} » ?",
+    "testReport": "Essai à blanc : « {{name}} », « {{schedule}} ». Prochaine exécution : {{next}}.",
+    "testNoNext": "aucune",
+    "fieldTrigger": "Déclencheur",
+    "trigger": {
+      "schedule": "Horaire",
+      "webhook": "Webhook",
+      "email": "Courriel"
+    },
+    "triggerSummary": {
+      "webhook": "S’exécute quand le webhook local reçoit un POST",
+      "email": "S’exécute quand un nouveau courriel Gmail correspondant est vu"
+    },
+    "fieldWebhookAuth": "Auth du webhook",
+    "webhookAuth": {
+      "bearer": "Jeton Bearer",
+      "hmac": "Signature HMAC"
+    },
+    "fieldWebhookPreset": "Préréglage de signature",
+    "webhookPreset": {
+      "generic": "Générique",
+      "github": "GitHub"
+    },
+    "fieldWebhookUrl": "URL du webhook",
+    "copyWebhook": "Copier l’URL",
+    "regenerateSecret": "Régénérer le secret",
+    "secretRegenerated": "Nouveau secret généré. Copiez-le maintenant : il n’est affiché qu’une fois.",
+    "secretOnce": "Secret (copiez maintenant) : {{secret}}",
+    "hookCopied": "URL du webhook copiée.",
+    "hookCopyFailed": "Impossible de copier l’URL.",
+    "fieldEmailQuery": "Recherche Gmail",
+    "emailQueryPlaceholder": "from:alertes subject:facture",
+    "fieldPollMinutes": "Interroger toutes les (minutes)",
+    "emailWatcherNote": "Vérifie Gmail à cet intervalle (5 minutes minimum). Nécessite un accès lecture Gmail via Hermes.",
+    "eventDryRun": "Essai à blanc : déclencheur {{trigger}} (aucun modèle).",
+    "runSource": "Dernière exécution : {{source}}",
+    "runFailed": "échec",
+    "error": {
+      "generic": "Échec de la mise à jour de la routine."
+    }
+  },
+  "connectors": {
+    "search": "Rechercher un connecteur",
+    "empty": "Aucun connecteur pour cette recherche.",
+    "disabled": "Les connecteurs sont désactivés sur cette installation.",
+    "connect": "Connecter",
+    "reauth": "Autoriser",
+    "remove": "Retirer",
+    "envKeys": "Clés requises : {{keys}}",
+    "apiKeyLabel": "Clé API pour {{name}}",
+    "apiKeyPlaceholder": "Coller la clé API",
+    "apiKeySave": "Enregistrer la clé",
+    "apiKeySet": "Clé enregistrée",
+    "apiKeyMissing": "Clé manquante",
+    "apiKeyUnknown": "État de la clé inconnu",
+    "apiKeyRequired": "Saisis d’abord une clé API.",
+    "confirmApiKey": "Enregistrer la clé API pour {{name}} ? Elle part une seule fois vers Hermes et n’est pas stockée dans HermesBot.",
+    "apiKeySaved": "{{name}} : clé enregistrée.",
+    "confirmConnect": "Connecter {{name}} à ce bot ?",
+    "confirmRemove": "Retirer {{name}} de ce bot ?",
+    "connected": "{{name}} est connecté.",
+    "removed": "{{name}} a été retiré.",
+    "status": {
+      "connected": "Connecté",
+      "configured": "Configuré",
+      "needsAuth": "Autorisation requise",
+      "available": "Disponible",
+      "error": "Erreur"
+    },
+    "error": {
+      "generic": "Échec de la mise à jour du connecteur.",
+      "oauthStart": "Impossible de démarrer l’OAuth.",
+      "oauthPoll": "Échec de l’autorisation OAuth."
+    }
   },
   "usage": {
     "tokens": "{{value}} tokens",
@@ -69,7 +164,66 @@
     "tokensLabel": "Tokens",
     "sessions": "Sessions",
     "estimatedCost": "Coût estimé",
-    "byModel": "Par modèle"
+    "byModel": "Par modèle",
+    "fallbackModel": "Modèle de secours actif : {{model}}"
+  },
+  "usageGlobal": {
+    "settingsIntro": "Totaux en lecture seule issus des analytics gateway pour tous les bots du roster. Les jauges d’abonnement utilisent des limites configurées, pas les API de facturation des fournisseurs.",
+    "hint": "Usage combiné (30 jours) depuis les analytics gateway.",
+    "loading": "Chargement de l’usage global…",
+    "unavailable": "Usage global indisponible pour le moment.",
+    "quotas": "Quotas d’abonnement (estimés)",
+    "quotaDetail": "{{used}} / {{limit}} tokens",
+    "quotaWindow": "Fenêtre glissante {{hours}} h",
+    "estimated": "estimé",
+    "byBot": "Par bot"
+  },
+  "autoRouter": {
+    "title": "Routage Auto",
+    "hint": "Journal local de routage (sans texte de prompt). Activer autoRouter.enabled dans la config serveur.",
+    "loading": "Chargement du journal Auto…",
+    "unavailable": "Journal de routage Auto indisponible.",
+    "routed": "Requêtes routées",
+    "fallbacks": "Bascules",
+    "estimatedCost": "Coût estimé (USD)",
+    "badge": "Auto → {{model}} ({{category}})",
+    "tablePath": "Table de scoring",
+    "fallbackBlockedTools": "Le routage Auto n’a pas pu réessayer : des outils ont déjà tourné sur ce tour.",
+    "fallbackExhausted": "Le routage Auto n’a pas pu récupérer après l’erreur du fournisseur."
+  },
+  "vaultWallet": {
+    "note": "Cartes et adresses dans le Trousseau de la machine des bots. Les numéros de carte ne reviennent jamais dans le chat — seulement les 4 derniers chiffres.",
+    "addCard": "Ajouter une carte",
+    "addAddress": "Ajouter une adresse",
+    "label": "Libellé",
+    "holder": "Titulaire",
+    "number": "Numéro de carte",
+    "expiry": "Expiration (MM/AA)",
+    "line1": "Adresse ligne 1",
+    "line2": "Adresse ligne 2",
+    "city": "Ville",
+    "postal": "Code postal",
+    "country": "Pays",
+    "saveFailed": "Enregistrement dans le coffre impossible."
+  },
+  "secureVault": {
+    "note": "Les valeurs partent directement dans le coffre. Le bot ne reçoit que des références.",
+    "optional": "facultatif",
+    "cardNumber": "Numéro de carte",
+    "cardHolder": "Nom sur la carte",
+    "cardExpiry": "MM/AA",
+    "missing": "Renseigne {{label}}.",
+    "failed": "Le coffre a refusé le formulaire sécurisé.",
+    "saving": "Enregistrement…",
+    "submit": "Enregistrer dans le coffre"
+  },
+  "pagesLibrary": {
+    "heading": "Bibliothèque",
+    "search": "Rechercher une page",
+    "empty": "Aucune page enregistrée pour ce bot.",
+    "rename": "Renommer",
+    "renamePrompt": "Nouveau titre",
+    "archive": "Archiver"
   },
   "settings": {
     "title": "Réglages",
@@ -79,8 +233,45 @@
       "general": "Général",
       "chat": "Conversations",
       "models": "Modèles",
+      "memory": "Mémoire",
+      "skills": "Compétences",
       "vault": "Coffre",
+      "usage": "Usage et forfait",
+      "channels": "Canaux",
       "account": "Compte"
+    },
+    "memory": {
+      "hint": "Faits partagés pour tous les bots. Chaque entrée est datée et sourcée.",
+      "types": "Types de mémoire",
+      "type": {
+        "profile": "Profil",
+        "rules": "Règles",
+        "people": "Personnes",
+        "workstreams": "Workstreams"
+      },
+      "search": "Recherche",
+      "searchPlaceholder": "Chercher dans toute la mémoire…",
+      "empty": "Aucune entrée pour l’instant.",
+      "add": "Ajouter une entrée",
+      "titlePlaceholder": "Titre",
+      "bodyPlaceholder": "Détails",
+      "saveEntry": "Enregistrer",
+      "delete": "Retirer l’entrée"
+    },
+    "skills": {
+      "hint": "Les compétences sont lues sur le Hermes de ce Mac. Les interrupteurs n’écrivent que quand tu actives ou désactives une compétence.",
+      "bot": "Bot",
+      "shared": "Partagée",
+      "profile": "Profil",
+      "sharedTitle": "Compétences partagées",
+      "profileTitle": "Compétences du profil",
+      "installTitle": "Installer depuis le hub",
+      "installHint": "Si la gateway n’expose pas le hub, installe depuis un terminal :",
+      "installPlaceholder": "id de compétence, ex. web/coffre-chrome",
+      "installButton": "Installer depuis le hub",
+      "installConfirm": "Installer la compétence « {{id}} » sur ce bot ?",
+      "installDone": "{{name}} installée.",
+      "installUnsupported": "Cette gateway Hermes n’a pas d’API d’installation hub. Utilise la commande CLI ci-dessous."
     },
     "language": "Langue",
     "languageOptions": {
@@ -115,8 +306,27 @@
     },
     "showUsage": "Afficher le contexte et le débit",
     "showUsageHint": "Sous la zone de saisie",
+    "autoModel": "Mode Auto",
+    "autoModelHint": "Choisir un modèle automatiquement à chaque envoi (comme l’entrée Auto du sélecteur).",
     "caveman": "Mode caveman",
     "cavemanHint": "Les bots te répondent en 1 à 3 lignes : le résultat, puis ce que tu dois décider. Pour les messages envoyés d’ici ; ce qu’ils écrivent ailleurs reste normal.",
+    "approvalsMode": {
+      "label": "Approbation des commandes",
+      "hint": "Lecture seule. Réglé dans Hermes (config approvals.mode) : off désactive les demandes, manual demande toujours, smart demande quand Hermes juge la commande risquée.",
+      "offline": "Connecte Hermes pour lire ce réglage",
+      "unknown": "Inconnu",
+      "values": {
+        "off": "Désactivé",
+        "manual": "Manuel",
+        "smart": "Intelligent (smart)"
+      }
+    },
+    "backgroundTask": "Réponses façon tâche de fond",
+    "backgroundTaskHint": "Accusé de réception court, puis des jalons brefs dans le fil avant la réponse finale.",
+    "toneCharter": "Ton chaleureux et concis",
+    "toneCharterHint": "Ajoute une courte consigne de style à chaque message envoyé d’ici.",
+    "progressInThread": "Bulles de progression",
+    "progressInThreadHint": "Les étapes du bot s’affichent dans le fil, puis se replient sous la réponse finale.",
     "guide": {
       "title": "Mode d’emploi du chat",
       "send": "Envoyer le message",
@@ -206,7 +416,9 @@
         "upstream_failed": "LLM Stats est injoignable, dernières données disponibles affichées."
       },
       "attribution": "Data by LLM Stats"
-    }
+    },
+    "autoFreeModel": "Mode Auto gratuit",
+    "autoFreeModelHint": "Comme le mode Auto, mais seulement avec des modèles gratuits qui n’entament aucun abonnement (NVIDIA, modèles locaux, OpenRouter gratuit)."
   },
   "vault": {
     "unresponsive": "Le coffre ne répond pas.",
@@ -248,6 +460,9 @@
     "profile": "Profil",
     "noKey": "Sans clé",
     "paid": "Payant",
+    "auto": "Auto",
+    "autoHint": "Un modèle par envoi (classifieur local)",
+    "autoLabel": "Auto",
     "freeModeOn": "Mode zéro frais : modèles gratuits et abonnements seulement.",
     "thisConversation": "Cette conversation seulement · ",
     "manage": "Gérer les modèles",
@@ -268,7 +483,10 @@
       "agentic": "Parmi les meilleurs de cette liste sur le score agents ou appels d’outils de LLM Stats",
       "coding": "Parmi les meilleurs de cette liste sur le score de code de LLM Stats",
       "reasoning": "Parmi les plus hauts scores généraux LLM Stats de cette liste"
-    }
+    },
+    "autoFree": "Auto gratuit",
+    "autoFreeHint": "Modèles gratuits seulement, sans quota d’abonnement",
+    "autoFreeLabel": "Auto gratuit"
   },
   "providers": {},
   "serverRequest": {
@@ -382,6 +600,18 @@
     "createAccount": "Créer le compte",
     "signupFailed": "Compte non créé : {{reason}}",
     "autoSignupNotice": "{{bot}} a créé un compte sur {{site}} avec {{login}}"
+  },
+  "computerPanel": {
+    "heading": "Chrome de l’équipe",
+    "viewAria": "Vue du navigateur en direct",
+    "idle": "Chrome n’est pas lancé pour cette équipe. Démarrez un tour navigateur ou attendez un bot.",
+    "waiting": "En attente de la première image…",
+    "driving": "Pilote : {{name}}",
+    "noDriver": "Aucun bot ne pilote ce Chrome pour le moment.",
+    "takeOver": "Prendre la main",
+    "giveBack": "Rendre la main",
+    "userControlBanner": "Vous avez la main — le bot est invité à suspendre l’automation.",
+    "hint": "Pour un CAPTCHA ou une vérif humaine, prenez la main ici plutôt que de fermer l’onglet du bot."
   },
   "hermes": {
     "gatewayUnresponsive": "La gateway Hermes ne répond pas.",

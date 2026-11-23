@@ -357,6 +357,24 @@ export async function disbandRoom(client: HermesClient, roomId: string, cancelId
   return client.request<{ tombstone: { room_id: string; disbanded_at: number; idempotent?: boolean } }>('groups.disband', { profile: ROOM_PROFILE, room_id: roomId, cancel_id: cancelId })
 }
 
+/** Room purpose, notes and gateway routing (`everyone` / `lead` / `auto`). */
+export async function setRoomContext(
+  client: HermesClient,
+  roomId: string,
+  eventId: string,
+  patch: Partial<RoomContext> & { purpose?: string; notes?: string },
+) {
+  return client.request<{ context: RoomContext }>('groups.context', {
+    profile: ROOM_PROFILE,
+    room_id: roomId,
+    event_id: eventId,
+    purpose: patch.purpose ?? '',
+    notes: patch.notes ?? '',
+    ...(patch.routing ? { routing: patch.routing } : {}),
+    ...(patch.lead_member_id !== undefined ? { lead_member_id: patch.lead_member_id } : {}),
+  })
+}
+
 /** Reasons Hermes gives for a refused disband or rename, as keys of `room.menu.errors`. */
 export function roomActionErrorKey(error: unknown): 'unsupported' | 'retry' | 'peer' | 'otherGateway' | 'stopPending' | 'failed' | 'offline' {
   if (roomMethodMissing(error)) return 'unsupported'

@@ -4,16 +4,22 @@ import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { Bot, ChatMessage, ModelOption } from './types'
 import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
+import { enrichRoutines } from './lib/routines'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
 import { chatBackground, isSubagentActive, type SubagentRow } from './lib/subagents'
 import { subagentHistory } from './lib/subagent-history'
 import type { AgentProcess } from './lib/agent-process'
-import { ensureAppConfig, useAppConfig } from './lib/app-config'
+import { ensureAppConfig, getAppConfig, useAppConfig } from './lib/app-config'
+import { touchLibraryPage, type LibraryPage } from './lib/pages-library'
 import { toolLabel, workLine } from './lib/work-summary'
 import { autoCompactionPoint, blocksSending, compactingTokens, evaluateGuard, limitTokens, parseCompressResult, readCompaction, type CompressionValues } from './lib/compaction'
-import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband } from './store'
-import { createRoom, disbandRoom, listRooms, loadRoomCapabilities, renameRoom, roomActionErrorKey, roomCanDisband, roomCanRename, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
+import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband, type RoomSupport } from './store'
+import { createRoom, disbandRoom, listRooms, loadRoomCapabilities, renameRoom, roomActionErrorKey, roomCanDisband, roomCanRename, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, setRoomContext, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
+import { gatewayContextPatch, roomRoutingMode, roomSendAllowed, setRoomRoutingMode, type RoomRoutingMode } from './lib/room-routing'
+import { teamFeedFromCaches } from './lib/team-feed'
+import { TeamView } from './components/TeamView'
+import { RoomRoutingDialog } from './components/RoomRoutingDialog'
 import { chipModelLabel, compactNumber, modelLabel } from './lib/model'
 import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
@@ -37,6 +43,9 @@ import { attachmentLabel, readDataUrl, type PendingAttachment } from './lib/atta
 import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { cavemanApiText, loadModes, modeApiText, voiceApiText, type ChatMode } from './lib/modes'
+import { progressBubbleText, shouldRecordProgress } from './lib/progress'
+import { serverApprovalPrompt } from './lib/approval'
+import { turnStyleNotes } from './lib/turn-style'
 import { VoiceOverlay } from './components/VoiceOverlay'
 import { VoiceSession } from './lib/voice-session'
 import { createSpeechEngine } from './lib/speech-engines'
@@ -51,11 +60,18 @@ import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboar
 import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
+import { BotEditDialog } from './components/BotEditDialog'
+import { ImportBotDialog } from './components/ImportBotDialog'
+import { loadMemorySummary, sharedMemoryApiText } from './lib/shared-memory'
 import { i18n, resolveLanguage } from './i18n'
 import { dictationLanguageCode, getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationExcerpt, notificationForRequest, notificationForStatus, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationExcerpt, notificationForRequest, notificationForStatus, notificationForWaiting, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { enqueuePushRelay } from './lib/push-relay'
+import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
+import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, isAutoModel, pickerModelAfterRoute } from './lib/auto-router'
+import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
 
@@ -64,7 +80,7 @@ const MemoSidebar = memo(Sidebar)
 const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 
 /** How a turn is worded for the model: caveman from the composer, the voice note from the voice mode. */
-type TurnStyle = { caveman: boolean; voice?: { cutShort: boolean } }
+type TurnStyle = { caveman: boolean; backgroundTask: boolean; toneCharter: boolean; voice?: { cutShort: boolean } }
 /** The hands-free conversation of the desktop app's main process (the demo pretends). */
 function voiceConversation() {
   if (DEMO) return { open: async () => true, close: () => {} }
@@ -77,9 +93,14 @@ function voiceConversation() {
   }
 }
 
-const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle) => style.voice
-  ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
-  : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
+const styledApiText = (prompt: string, mode: ChatMode, style: TurnStyle) => {
+  const modeLayer = style.voice
+    ? voiceApiText(prompt, modeApiText(prompt, mode), style.voice.cutShort)
+    : cavemanApiText(prompt, modeApiText(prompt, mode), style.caveman)
+  const result = turnStyleNotes(modeLayer, prompt, { backgroundTask: style.backgroundTask, toneCharter: style.toneCharter })
+  if (result === prompt && !modeLayer) return undefined
+  return result
+}
 const DEMO_ROOM = DEMO && new URLSearchParams(location.search).get('room') === '1'
 const DEMO_ROOM_CAPABILITIES: RoomCapabilities = {
   protocol_version: 1, driver: true, persistent_process: true, authority_gateway_id: 'demo',
@@ -160,6 +181,8 @@ export default function App() {
   const backgroundStreams = useRef(new Map<string, string>())
   /** Profiles with a send between the click and the last await. Checked before any await. */
   const sendsInFlight = useRef(new Set<string>())
+  /** In-flight auto-routed turn metadata for routing log (no prompt stored). */
+  const autoTurnRef = useRef(new Map<string, AutoTurnTrack>())
   /** The open voice mode, read by the gateway event handler. */
   const voiceRef = useRef<{ session: VoiceSession; profile: string } | null>(null)
   /** Latest Stop per session, so a finished stop does not clear a newer one. */
@@ -167,8 +190,10 @@ export default function App() {
   /** Latest model-list request. A late answer for another bot is dropped. */
   const modelRequestRef = useRef(0)
   const syncChatRef = useRef<(profile: string, resumed?: boolean) => Promise<void> | void>(() => undefined)
+  const submitPromptResumingRef = useRef<((target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string }) => Promise<ActiveChat>) | null>(null)
   /** One in-flight audience read per bot, so a late history result cannot classify the next turn. */
   const turnAudience = useRef(new Map<string, number>())
+  const memorySummaryRef = useRef('')
 
   const [auth, setAuth] = useState<'checking' | 'login' | 'ready'>(DEMO ? 'ready' : 'checking')
   const [authError, setAuthError] = useState('')
@@ -197,6 +222,7 @@ export default function App() {
   const running = useChatStore((state) => state.running)
   const activity = useChatStore((state) => state.activity)
   const usage = useChatStore((state) => state.usage)
+  const chatCache = useChatStore((state) => state.cache)
   const prompts = useRequestsStore((state) => state.prompts)
   const serverRequests = useRequestsStore((state) => state.serverRequests)
   const browserVaultRequests = useRequestsStore((state) => state.browserVaultRequests)
@@ -211,6 +237,17 @@ export default function App() {
   const appConfig = useAppConfig()
   // In the demo too: the installed animations show up there.
   useEffect(() => { void ensureAppConfig() }, [])
+  useEffect(() => {
+    if (!connected || DEMO) return
+    let cancelled = false
+    void ensureAppConfig().then((config) => {
+      if (!config.sharedMemory?.injectContext) return
+      return loadMemorySummary().then((body) => {
+        if (!cancelled && body.enabled) memorySummaryRef.current = body.summary
+      })
+    })
+    return () => { cancelled = true }
+  }, [connected])
   // Visual demo: the fictional data follows the interface language, also when it changes in the settings.
   useEffect(() => {
     if (!DEMO) return
@@ -228,6 +265,13 @@ export default function App() {
   const guard = useMemo(() => evaluateGuard(settings.compactionMode, settings.compactionGauge, usage), [settings.compactionMode, settings.compactionGauge, usage])
   const guardRef = useRef(guard)
   guardRef.current = guard
+  const refreshChatUsage = useCallback((chat: ActiveChat) => {
+    if (DEMO) return
+    void loadUsage(client, chat).then((next) => {
+      if (!next || useChatStore.getState().activeChat?.sessionId !== chat.sessionId) return
+      setUsage((value) => mergeUsage(value, next))
+    }).catch(() => { /* keep the last counters */ })
+  }, [client])
   const [compacting, setCompacting] = useState(false)
   const compactingRef = useRef(false)
   // Hermes compacts on its own during a turn: its notice shows in the status line until the text resumes.
@@ -236,6 +280,10 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const dark = settings.theme === 'system' ? systemDark : settings.theme === 'dark'
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const [editBot, setEditBot] = useState<Bot | null>(null)
+  const [teamOpen, setTeamOpen] = useState(false)
+  const [roomRoutingOpen, setRoomRoutingOpen] = useState(false)
+  const [roomRoutingSaving, setRoomRoutingSaving] = useState(false)
   const [focusSignal, setFocusSignal] = useState(0)
   const [notice, setNotice] = useState('')
   const [modelQuery, setModelQuery] = useState<string | null>(null)
@@ -252,6 +300,19 @@ export default function App() {
   // Set after their definition below: the reconnection and notification effects call the latest version.
   const reconnectRef = useRef<() => Promise<void>>(async () => undefined)
   const selectBotRef = useRef<(bot: Bot) => void>(() => undefined)
+  type NavTarget = { kind: 'bot'; slug: string } | { kind: 'room'; id: string } | { kind: 'local' }
+  const navStackRef = useRef<NavTarget[]>([])
+  const navIndexRef = useRef(-1)
+  const skipNavPushRef = useRef(false)
+  const navPushRef = useRef<(target: NavTarget) => void>(() => undefined)
+  const shortcutsRef = useRef({
+    connected: false,
+    roomSupport: 'unsupported' as RoomSupport,
+    onNewBot: (): void => undefined,
+    onNewRoom: (): void => undefined,
+    toggleDetails: (): void => undefined,
+    navigateHistory: (_delta: -1 | 1): void => undefined,
+  })
   // Mounted on first open, then kept: a reply keeps going while another bot is on screen.
   const [localStarted, setLocalStarted] = useState(false)
   const [localRunning, setLocalRunning] = useState(false)
@@ -266,6 +327,7 @@ export default function App() {
     void loadLocalModels().then((next) => { if (next.available) setLocalModels(next) })
   }, [])
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [importBotOpen, setImportBotOpen] = useState(false)
   const [newRoomOpen, setNewRoomOpen] = useState(false)
   const [newBotRetry, setNewBotRetry] = useState<{ slug: string; name: string } | null>(null)
   const roomRequestRef = useRef(new Map<string, number>())
@@ -310,7 +372,11 @@ export default function App() {
       const isCurrent = Boolean(currentSession && event.session_id === currentSession)
       const payload = event.payload || {}
       if (event.type === 'request.cancel') {
-        removeServerRequest(payload.id as string)
+        const requestId = asText(payload.id)
+        if (requestId) {
+          removeServerRequest(requestId)
+          removePrompt(`server-${requestId}`)
+        }
         return
       }
       // Delegated children: the Subagents panel of the conversation that spawned them.
@@ -453,12 +519,29 @@ export default function App() {
       if (event.type === 'message.delta') setCompactionLabel('')
       if (event.type === 'tool.start') {
         setActivity(typeof payload.name === 'string' && payload.name ? toolLabel(payload.name) : i18n.t('app.toolRunning'))
+        if (current) {
+          const track = autoTurnRef.current.get(current.profile)
+          if (track) track.toolsRan = true
+        }
       }
       if (event.type === 'tool.complete') setActivity('')
       // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
       if (event.type === 'message.interim') {
         const step = typeof payload.text === 'string' ? withoutSilentMarkers(payload.text) : ''
         if (step && !isSilentMessage(step) && voiceRef.current?.profile === current.profile) voiceRef.current.session.turnStep(step)
+        if (getSettings().progressInThread && shouldRecordProgress(step)) {
+          const segment = typeof payload.segment === 'number' ? payload.segment : Date.now()
+          const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : 'turn'
+          const progress: ChatMessage = {
+            id: `progress-${turnId}-${segment}`,
+            role: 'assistant',
+            content: progressBubbleText(step),
+            createdAt: new Date().toISOString(),
+            progress: true,
+          }
+          setMessages((items) => (items.some((item) => item.id === progress.id) ? items : [...items, progress]))
+          appendCachedMessage(current.profile, progress)
+        }
         setStreaming('')
         if (current.sessionId) backgroundStreams.current.set(current.sessionId, '')
       }
@@ -466,6 +549,80 @@ export default function App() {
         const status = typeof payload.status === 'string' ? payload.status : 'complete'
         const finalUsage = parseUsage(payload.usage)
         if (finalUsage) setUsage((value) => mergeUsage(value, finalUsage))
+        let deferTurnEnd = false
+        const autoTrack = autoTurnRef.current.get(current.profile)
+        if (autoTrack && current.sessionId) {
+          const logAutoRoute = (outcome: 'ok' | 'error' | 'cancelled') => {
+            void appendAutoRouteLog({
+              mode: autoTrack.plan.mode,
+              bot: current.profile,
+              sessionId: current.sessionId,
+              category: autoTrack.plan.badge.category,
+              chosen: autoTrack.plan.badge.chosen,
+              reason: autoTrack.plan.badge.reason,
+              candidates: autoTrack.plan.decision.candidates ?? [],
+              fallbacks: autoTrack.fallbacks,
+              tokensIn: finalUsage?.inputTokens ?? null,
+              tokensOut: finalUsage?.outputTokens ?? null,
+              costUsd: null,
+              latencyMs: Date.now() - autoTrack.startedAt,
+              outcome,
+            })
+            autoTurnRef.current.delete(current.profile)
+          }
+          const mayFallbackInTurn = status === 'error'
+            && isRetryableTurnComplete(payload)
+            && !autoTrack.toolsRan
+            && !autoTrack.resubmitting
+            && autoTrack.fallbacks.length < 2
+            && autoTrack.fallbackQueue.length > 0
+          if (mayFallbackInTurn && submitPromptResumingRef.current) {
+            deferTurnEnd = true
+            autoTrack.resubmitting = true
+            const next = autoTrack.fallbackQueue.shift()!
+            const err = turnFallbackError(payload)
+            autoTrack.fallbacks.push({ model: `${next.provider}/${next.model}`, error: err })
+            autoTrack.plan.badge = {
+              ...autoTrack.plan.badge,
+              chosen: `${next.provider}/${next.model}`,
+              reason: `Fallback after ${err}`,
+            }
+            useChatStore.getState().patchCachedMessage(current.profile, autoTrack.userMessageId, { autoRoute: autoTrack.plan.badge })
+            setMessages((items) => items.map((item) => (item.id === autoTrack.userMessageId ? { ...item, autoRoute: autoTrack.plan.badge } : item)))
+            void (async () => {
+              try {
+                const applied = await applyRoutedModel(client, autoTrack.chat, next)
+                autoTrack.chat = applied.chat
+                useChatStore.getState().updateCachedChat(current.profile, {
+                  model: applied.chat.model,
+                  revision: applied.chat.revision,
+                  executionGeneration: applied.chat.executionGeneration,
+                  running: true,
+                })
+                setActiveChat({ ...applied.chat, running: true })
+                useChatStore.getState().setChatModel((value) => pickerModelAfterRoute(value, applied.chat.model || ''))
+                refreshChatUsage(applied.chat)
+                await submitPromptResumingRef.current!(autoTrack.chat, autoTrack.prompt, autoTrack.images, { apiText: autoTrack.apiText })
+                autoTrack.resubmitting = false
+              } catch (error) {
+                autoTrack.resubmitting = false
+                logAutoRoute('error')
+                setRunning(false)
+                useChatStore.getState().updateCachedChat(current.profile, { running: false })
+                setActivity('')
+                setNotice(error instanceof Error ? error.message : i18n.t('app.sendFailed'))
+                markDone(current.profile)
+              }
+            })()
+          } else {
+            if (status === 'error' && autoTrack.toolsRan && isRetryableTurnComplete(payload)) {
+              setNotice(i18n.t('autoRouter.fallbackBlockedTools'))
+            }
+            logAutoRoute(status === 'error' ? 'error' : status === 'interrupted' ? 'cancelled' : 'ok')
+            if (status === 'complete') refreshChatUsage(current)
+          }
+        }
+        if (deferTurnEnd) return
         const buffered = current.sessionId ? takeSessionStream(backgroundStreams.current, current.sessionId) : ''
         const finalText = completedText(payload.text, useChatStore.getState().streaming || buffered)
         const visibleText = withoutSilentMarkers(finalText)
@@ -509,7 +666,22 @@ export default function App() {
       }
     })
     const unsubscribeConnection = client.onConnection(setConnected)
-    const unsubscribeRequests = client.onServerRequest(addServerRequest)
+    const unsubscribeRequests = client.onServerRequest((request) => {
+      const chat = useChatStore.getState().activeChat
+      const generation = typeof request.params.execution_generation === 'number' ? request.params.execution_generation : chat?.executionGeneration ?? 0
+      const prompt = serverApprovalPrompt(request, generation)
+      if (prompt) {
+        addPrompt(prompt)
+        const sessionId = typeof request.params.session_id === 'string' ? request.params.session_id : ''
+        const owner = sessionId ? useRosterStore.getState().bots.find((item) => item.sessionId === sessionId) : undefined
+        if (owner) {
+          clearDoneTimer(owner.slug)
+          updateBot(owner.slug, { status: 'waiting' })
+        }
+        return
+      }
+      addServerRequest(request)
+    })
     return () => { unsubscribe(); unsubscribeConnection(); unsubscribeRequests(); client.close() }
   }, [client])
 
@@ -576,18 +748,35 @@ export default function App() {
   useEffect(() => {
     if (DEMO || auth !== 'ready' || typeof Notification === 'undefined') return
     if (getSettings().notifications && Notification.permission === 'default') void Notification.requestPermission()
+    const draftKindFromMessages = (slug: string) => {
+      const messages = getCached(slug)?.messages || []
+      const latest = [...messages].reverse().find((row) => row.role === 'assistant' && !row.technical)
+      if (!latest) return null
+      const match = new RegExp(`\`\`\`${DRAFT_FENCE}\\n([\\s\\S]*?)\\n\`\`\``).exec(latest.content)
+      if (!match || !parseDraftBlock(match[1])) return null
+      return 'draft' as const
+    }
     const show = (slug: string, kind: NotificationKind) => {
       const viewing = !localOpenRef.current && !useRoomStore.getState().selectedRoomId && useRosterStore.getState().selected === slug
-      if (Notification.permission !== 'granted' || !shouldNotify({ enabled: getSettings().notifications, focused: document.hasFocus() && !document.hidden, viewing })) return
       const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
       if (!bot || bot.hidden) return
       // A turn between bots, or one that ends in silence, is not for the user. Questions and approvals still are.
       if (kind === 'done' && !turnForUser(slug)) return
+      let alertKind = kind
+      if (kind === 'done') {
+        const draftKind = draftKindFromMessages(slug)
+        if (draftKind) alertKind = draftKind
+      }
       // The reply recorded when the turn ended first: the cache can still hold the previous turn's message.
       const last = kind === 'done' ? recordedReply(slug) ?? turnReply(getCached(slug)?.messages || []) : undefined
       const excerpt = notificationExcerpt(last)
       // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
-      const body = excerpt || i18n.t(`notifications.${kind}`)
+      const body = excerpt || i18n.t(`notifications.${alertKind}`)
+      const enabled = getSettings().notifications
+      if (shouldNotify({ enabled, focused: false, viewing })) {
+        void enqueuePushRelay({ slug, title: bot.name, body, kind: alertKind })
+      }
+      if (Notification.permission !== 'granted' || !shouldNotify({ enabled, focused: document.hasFocus() && !document.hidden, viewing })) return
       const notification = new Notification(bot.name, { body, tag: `hermesbot-${slug}` })
       notification.onclick = () => {
         void window.hermesBot?.focusWindow?.()
@@ -642,9 +831,11 @@ export default function App() {
     }
     const unsubscribeRoster = useRosterStore.subscribe((state, previous) => {
       if (state.bots === previous.bots) return
+      const prompts = useRequestsStore.getState().prompts
       const before = new Map(previous.bots.map((bot) => [bot.slug, bot.status]))
       for (const bot of state.bots) {
-        const kind = notificationForStatus(before.get(bot.slug), bot.status)
+        let kind = notificationForStatus(before.get(bot.slug), bot.status)
+        if (kind === 'question' && bot.status === 'waiting') kind = notificationForWaiting(bot.sessionId, prompts)
         if (kind) notify(bot.slug, kind)
       }
     })
@@ -662,7 +853,40 @@ export default function App() {
     return () => { unsubscribeRoster(); unsubscribeRequests() }
   }, [auth])
 
+  const routineRunsRef = useRef(new Map<string, string>())
   useEffect(() => {
+    if (DEMO || auth !== 'ready') return
+    const slug = useRosterStore.getState().selected
+    if (!slug) return
+    const bot = useRosterStore.getState().bots.find((item) => item.slug === slug)
+    if (!bot) return
+    for (const routine of routines) {
+      const key = `${slug}:${routine.id}`
+      const signature = `${routine.lastRunAt || ''}|${routine.lastStatus || ''}`
+      const previous = routineRunsRef.current.get(key)
+      routineRunsRef.current.set(key, signature)
+      if (!previous || previous === signature || !routine.lastRunAt) continue
+      const failed = Boolean(routine.lastStatus && routine.lastStatus !== 'ok')
+      const body = failed
+        ? i18n.t('notifications.routineFailed', { name: routine.name })
+        : i18n.t('notifications.routineDone', { name: routine.name })
+      if (!getSettings().notifications) continue
+      void enqueuePushRelay({ slug, title: bot.name, body, kind: 'routine' })
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') continue
+      const notification = new Notification(bot.name, { body, tag: `hermesbot-routine-${routine.id}` })
+      notification.onclick = () => {
+        void window.hermesBot?.focusWindow?.()
+        window.focus()
+        notification.close()
+      }
+    }
+  }, [auth, routines])
+
+  useEffect(() => {
+    const typingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false
+      return target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+    }
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -670,6 +894,18 @@ export default function App() {
       } else if (event.metaKey && !event.shiftKey && !event.altKey && event.key === ',') {
         event.preventDefault()
         setSettingsTab((tab) => tab ? null : 'general')
+      } else if (!typingTarget(event.target) && event.metaKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        shortcutsRef.current.onNewBot()
+      } else if (!typingTarget(event.target) && event.metaKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        shortcutsRef.current.toggleDetails()
+      } else if (!typingTarget(event.target) && event.metaKey && !event.shiftKey && !event.altKey && event.key === '[') {
+        event.preventDefault()
+        shortcutsRef.current.navigateHistory(-1)
+      } else if (!typingTarget(event.target) && event.metaKey && !event.shiftKey && !event.altKey && event.key === ']') {
+        event.preventDefault()
+        shortcutsRef.current.navigateHistory(1)
       } else if (event.altKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
         // The displayed order depends on the sort and the collapsed sections: the roster on screen is authoritative.
         const rows = [...document.querySelectorAll<HTMLElement>('[data-bot], [data-room]')]
@@ -950,6 +1186,7 @@ export default function App() {
     localOpenRef.current = false
     setLocalOpen(false)
     selectRoomInStore(roomId)
+    navPushRef.current({ kind: 'room', id: roomId })
     setMobileOpen(false)
     setFocusSignal((value) => value + 1)
     if (!useRoomStore.getState().cache[roomId]) setRoomLoading(roomId, true)
@@ -996,6 +1233,7 @@ export default function App() {
     setRooms([room, ...useRoomStore.getState().rooms.filter((item) => item.room_id !== room.room_id)])
     setNewRoomOpen(false)
     selectRoom(room.room_id)
+    setRoomRoutingMode(room.room_id, 'mentions')
     setNotice(i18n.t('room.roomCreated'))
   }
 
@@ -1034,6 +1272,12 @@ export default function App() {
     const roomId = useRoomStore.getState().selectedRoomId
     const room = useRoomStore.getState().cache[roomId]?.room
     if (!roomId || !room) return false
+    const routing = roomRoutingMode(roomId, useRoomStore.getState().cache[roomId]?.context)
+    const members = roomBots(room)
+    if (!roomSendAllowed(content.trim(), room.members, members, routing)) {
+      setRoomError(roomId, t('roomRouting.mentionRequired'))
+      return false
+    }
     // Same text as an unconfirmed send: retry with the same event_id. New text: a new event, unless one is in flight.
     const plan = planRoomSend(content, useRoomStore.getState().pendingSends[roomId], Boolean(useRoomStore.getState().sendFlights[roomId]))
     if (plan.status === 'previous-still-sending') {
@@ -1241,6 +1485,17 @@ export default function App() {
     await reconnect()
   }
 
+  const reloadOpenRoutines = useCallback(() => {
+    const profile = useRosterStore.getState().selected
+    if (!profile || DEMO) return
+    void loadRoutines(profile).then(async (next) => {
+      const list = getAppConfig().routines.eventTriggers ? await enrichRoutines(profile, next) : next
+      setRoutines(list)
+      const entry = getCached(profile)
+      if (entry) setCached(profile, { ...entry, routines: list })
+    })
+  }, [])
+
   /** Reloads a Bot Chat. `resumed`: the socket just changed, the server snapshot is authoritative. */
   const syncChat = (profile: string, resumed = false) => {
     const requestId = ++chatRequestRef.current
@@ -1248,7 +1503,9 @@ export default function App() {
     const bot = useRosterStore.getState().bots.find((item) => item.slug === profile)
     // Routines come over the gateway's HTTP side, which can stall while its WebSocket answers:
     // the chat never waits for them. They fill in on their own when they arrive.
-    void loadRoutines(profile).then((routines) => {
+    void loadRoutines(profile).then(async (raw) => {
+      if (requestId !== chatRequestRef.current) return
+      const routines = getAppConfig().routines.eventTriggers ? await enrichRoutines(profile, raw) : raw
       if (requestId !== chatRequestRef.current) return
       setRoutines(routines)
       const entry = getCached(profile)
@@ -1361,6 +1618,52 @@ export default function App() {
     void syncChat(profile)
   }, [selected, client])
 
+  const pushNav = (target: NavTarget) => {
+    if (skipNavPushRef.current) return
+    const stack = navStackRef.current
+    const cur = stack[navIndexRef.current]
+    const sameNav = (a: NavTarget | undefined, b: NavTarget) => {
+      if (!a || a.kind !== b.kind) return false
+      if (a.kind === 'local') return true
+      if (a.kind === 'bot' && b.kind === 'bot') return a.slug === b.slug
+      if (a.kind === 'room' && b.kind === 'room') return a.id === b.id
+      return false
+    }
+    if (sameNav(cur, target)) return
+    const next = stack.slice(0, navIndexRef.current + 1)
+    next.push(target)
+    navStackRef.current = next
+    navIndexRef.current = next.length - 1
+  }
+  navPushRef.current = pushNav
+
+  const navigateHistory = (delta: -1 | 1) => {
+    const nextIndex = navIndexRef.current + delta
+    if (nextIndex < 0 || nextIndex >= navStackRef.current.length) return
+    navIndexRef.current = nextIndex
+    const target = navStackRef.current[nextIndex]
+    skipNavPushRef.current = true
+    if (target.kind === 'local') {
+      const local = localBotRef.current
+      if (local) selectBot(local)
+    } else if (target.kind === 'bot') {
+      const bot = useRosterStore.getState().bots.find((item) => item.slug === target.slug)
+      if (bot) selectBot(bot)
+    } else {
+      selectRoomRef.current(target.id)
+    }
+    skipNavPushRef.current = false
+  }
+
+  shortcutsRef.current = {
+    connected: DEMO || connected,
+    roomSupport,
+    onNewBot: () => { if (DEMO || connected) setNewBotOpen(true) },
+    onNewRoom: () => { if (DEMO || (connected && roomSupport === 'ready')) setNewRoomOpen(true) },
+    toggleDetails: () => setDetailsOpen((value) => !value),
+    navigateHistory,
+  }
+
   const selectBot = (bot: Bot) => {
     const leaving = useChatStore.getState()
     if (leaving.activeChat && leaving.activeChat.profile !== bot.slug && leaving.activeChat.sessionId && leaving.streaming) {
@@ -1374,6 +1677,7 @@ export default function App() {
       setLocalStarted(true)
       setMobileOpen(false)
       setFocusSignal((value) => value + 1)
+      pushNav({ kind: 'local' })
       return
     }
     if (wasLocal && useRosterStore.getState().selected === bot.slug) {
@@ -1386,6 +1690,7 @@ export default function App() {
       return
     }
     setSelected(bot.slug)
+    pushNav({ kind: 'bot', slug: bot.slug })
     // Typing right after the click goes to this bot: the field takes the keyboard as soon as it can.
     setFocusSignal((value) => value + 1)
     if (!DEMO) showProfileFromList(bot.slug)
@@ -1404,13 +1709,21 @@ export default function App() {
   }
   selectBotRef.current = selectBot
 
+  const turnApiText = useCallback((prompt: string, mode: ChatMode, style: TurnStyle) =>
+    sharedMemoryApiText(styledApiText(prompt, mode, style), memorySummaryRef.current), [])
   // Without an explicit mode (email card, suggestions), the turn is a normal turn with nothing added,
   // not even the caveman note: an approved email must go out as it was approved.
   /** `voice`: spoken in the voice mode (the voice note replaces caveman). */
   const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode, voice?: { cutShort: boolean }): Promise<boolean> => {
     const mode = sentMode ?? 'exec'
-    const caveman = sentMode !== undefined && !voice && getSettings().caveman
-    const style = { caveman, voice }
+    const prefs = getSettings()
+    const caveman = sentMode !== undefined && !voice && prefs.caveman
+    const style = {
+      caveman,
+      backgroundTask: sentMode !== undefined && !voice && prefs.backgroundTask,
+      toneCharter: sentMode !== undefined && !voice && prefs.toneCharter,
+      voice,
+    }
     const now = new Date().toISOString()
     if (DEMO) {
       // During a turn, only a queued or priority message goes in: it waits in the thread, with its label.
@@ -1455,9 +1768,13 @@ export default function App() {
       const content = [text, ...attachments.map(attachmentLabel)].join('\n\n')
       clearDoneTimer(profile)
       const userMessage: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content, createdAt: now, ...(runningNow ? { delivery: delivery as 'queue' | 'priority' } : {}) }
-      if (onScreen()) setMessages((items) => [...items, userMessage])
-      appendCachedMessage(profile, userMessage)
-      if (runningNow) return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority')
+      const autoMode = autoRouterEnabled() ? autoModeFor(useChatStore.getState().chatModel, getSettings()) : null
+      const autoActive = autoMode !== null
+      if (runningNow) {
+        if (onScreen()) setMessages((items) => [...items, userMessage])
+        appendCachedMessage(profile, userMessage)
+        return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority')
+      }
       updateCachedChat(profile, { running: true })
       updateBot(profile, { preview: text, timestamp: now, status: 'working' })
       if (onScreen()) {
@@ -1465,10 +1782,89 @@ export default function App() {
         setActivity('')
       }
       try {
-        const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
+        let workingChat = chat
+        let routedPlan: RoutedTurnPlan | null = null
+        const imageCount = attachments.filter((item) => item.kind === 'image').length
+        if (autoActive) {
+          routedPlan = await planAutoRoutedTurn(client, {
+            chat: workingChat,
+            text,
+            imageCount,
+            usage,
+            modelOptions,
+            analyticsProfiles: useRosterStore.getState().bots.map((bot) => bot.slug),
+            mode: autoMode ?? 'auto',
+          })
+          userMessage.autoRoute = routedPlan.badge
+          const applied = await applyRoutedModel(client, workingChat, routedPlan.option)
+          workingChat = applied.chat
+          updateCachedChat(profile, { model: applied.chat.model, revision: applied.chat.revision, executionGeneration: applied.chat.executionGeneration })
+          if (onScreen()) {
+            setActiveChat(workingChat)
+            // A conversation left on Auto stays on Auto: only the routed turn uses the concrete model.
+            setChatModel((value) => pickerModelAfterRoute(value, applied.chat.model || workingChat.model || ''))
+            refreshChatUsage(workingChat)
+          }
+          userMessage.autoRoute = routedPlan.badge
+        }
+        if (onScreen()) setMessages((items) => [...items, userMessage])
+        appendCachedMessage(profile, userMessage)
+        const { images, fileRefs } = await uploadAttachments(workingChat, attachments, userMessage, text)
         if (onScreen()) setActivity('')
         const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, profile)
-        const submitted = await submitPromptResuming(chat, prompt, images, { apiText: styledApiText(prompt, mode, style) })
+        const apiText = turnApiText(prompt, mode, style)
+        const fallbackQueue = [...(routedPlan?.fallbackQueue ?? [])]
+        const turnFallbacks: { model: string; error: string }[] = []
+        if (autoActive && routedPlan) {
+          autoTurnRef.current.set(profile, {
+            plan: routedPlan,
+            startedAt: Date.now(),
+            userMessageId: userMessage.id,
+            fallbacks: turnFallbacks,
+            fallbackQueue,
+            prompt,
+            images,
+            apiText,
+            chat: workingChat,
+            toolsRan: false,
+            resubmitting: false,
+          })
+        }
+        let submitted = workingChat
+        for (let attempt = 0; attempt <= 2; attempt += 1) {
+          try {
+            submitted = await submitPromptResuming(workingChat, prompt, images, { apiText })
+            break
+          } catch (error) {
+            const err = error instanceof Error ? error.message : 'error'
+            if (attempt >= 2 || !isRetryableProviderError(error) || fallbackQueue.length === 0) throw error
+            const next = fallbackQueue.shift()!
+            turnFallbacks.push({ model: `${next.provider}/${next.model}`, error: err.includes('429') ? '429' : `error:${err.slice(0, 48)}` })
+            const applied = await applyRoutedModel(client, workingChat, next)
+            workingChat = applied.chat
+            updateCachedChat(profile, { model: applied.chat.model, revision: applied.chat.revision, executionGeneration: applied.chat.executionGeneration })
+            const track = autoTurnRef.current.get(profile)
+            if (track) {
+              track.plan.badge.chosen = `${next.provider}/${next.model}`
+              track.chat = workingChat
+              useChatStore.getState().patchCachedMessage(profile, userMessage.id, { autoRoute: track.plan.badge })
+              if (onScreen()) {
+                setMessages((items) => items.map((item) => (item.id === userMessage.id ? { ...item, autoRoute: track.plan.badge } : item)))
+              }
+            }
+            if (onScreen()) {
+              setActiveChat(workingChat)
+              setChatModel((value) => pickerModelAfterRoute(value, applied.chat.model || workingChat.model || ''))
+              refreshChatUsage(workingChat)
+            }
+          }
+        }
+        const track = autoTurnRef.current.get(profile)
+        if (track) {
+          track.fallbacks = turnFallbacks
+          track.chat = submitted
+          track.fallbackQueue = fallbackQueue
+        }
         updateCachedChat(profile, { ...submitted, running: true })
         if (onScreen()) {
           const open = useChatStore.getState().activeChat
@@ -1476,6 +1872,7 @@ export default function App() {
         }
         return true
       } catch (error) {
+        autoTurnRef.current.delete(profile)
         if (onScreen()) {
           setRunning(false)
           setActivity('')
@@ -1506,6 +1903,7 @@ export default function App() {
       return reopened.chat
     }
   }
+  submitPromptResumingRef.current = submitPromptResuming
 
   const markSendFailed = (profile: string, userMessage: ChatMessage, error: unknown) => {
     // An approved email whose delivery to the bot fails must become a card to approve again.
@@ -1550,8 +1948,11 @@ export default function App() {
       const { images, fileRefs } = await uploadAttachments(chat, attachments, userMessage, text)
       if (onScreen()) setActivity('')
       const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, chat.profile)
-      const modeText = styledApiText(prompt, mode, style)
-      await submitPromptResuming(chat, prompt, images, { queued: true, apiText: priority ? priorityApiText(prompt, modeText) : modeText })
+      const modeText = turnApiText(prompt, mode, style)
+      const queuedApiText = priority
+        ? priorityApiText(prompt, modeText)
+        : (mode !== 'exec' || style.caveman || style.voice || memorySummaryRef.current ? modeText : undefined)
+      await submitPromptResuming(chat, prompt, images, { queued: true, apiText: queuedApiText })
       if (priority) {
         const open = useChatStore.getState().activeChat
         const after = open?.sessionId === chat.sessionId ? open.executionGeneration : chat.executionGeneration
@@ -1581,7 +1982,20 @@ export default function App() {
       : [...items, { id, profile, path: media.path, name: media.name, revision: 0 }].slice(-MAX_OPEN_DOCUMENTS))
     setRailTab(id)
     setDetailsOpen(true)
+    if (getAppConfig().features.pagesLibrary) {
+      touchLibraryPage(profile, media.path, media.name).catch(() => undefined)
+    }
   }, [])
+
+  const openLibraryPage = useCallback((page: LibraryPage) => {
+    openDocument(page.profile, { path: page.path, name: page.name, kind: 'document' })
+  }, [openDocument])
+
+  const onVaultFormDone = useCallback((message: string) => {
+    const chat = useChatStore.getState().activeChat
+    if (!chat) return
+    void send(message, [])
+  }, [send])
 
   /** “History” of the Subagents block: the details panel on its Subagents tab, never opened otherwise. */
   const openSubagentHistory = () => {
@@ -1794,6 +2208,11 @@ export default function App() {
   const selectModel = async (option: ModelOption) => {
     const chat = useChatStore.getState().activeChat
     if (!chat) return
+    if (isAutoModel(option.model)) {
+      setChatModel(option.model)
+      setModelQuery(null)
+      return
+    }
     try {
       // Checked again at the moment of the switch: a route with no usable key would only fail when
       // the next turn builds its agent, after the conversation has already left the working model.
@@ -1825,9 +2244,11 @@ export default function App() {
       const open = useChatStore.getState().activeChat
       updateCachedChat(chat.profile, changes)
       if (open?.sessionId === chat.sessionId) {
-        setActiveChat({ ...open, ...changes })
+        const synced = { ...open, ...changes }
+        setActiveChat(synced)
         setChatModel(option.model)
         setModelQuery(null)
+        refreshChatUsage(synced)
         if (result?.deferred) setNotice(i18n.t('app.modelDeferred', { model: modelLabel(option.model) }))
       }
     } catch (error) {
@@ -1871,12 +2292,26 @@ export default function App() {
     const chat = useChatStore.getState().activeChat
     if (!chat || chat.sessionId !== prompt.sessionId) throw new Error('chat_change')
     try {
-      const status = await answerPrompt(client, chat.profile, prompt, answer)
-      removePrompt(prompt.promptId)
-      if (status === 'already_resolved') setNotice(i18n.t('app.alreadyResolved'))
-      else updateBot(chat.profile, { status: 'working' })
+      if (prompt.serverRequestId) {
+        try {
+          client.respond(prompt.serverRequestId, { choice: answer })
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : i18n.t('app.disconnectedValidate'))
+          throw error
+        }
+        removePrompt(prompt.promptId)
+        updateBot(chat.profile, { status: 'working' })
+      } else {
+        const status = await answerPrompt(client, chat.profile, prompt, answer)
+        if (status === 'already_resolved') {
+          setNotice(i18n.t('app.alreadyResolved'))
+          removePrompt(prompt.promptId)
+        }
+      }
     } catch (error) {
-      setNotice(error instanceof Error ? i18n.t('app.answerNotSentWith', { message: error.message }) : i18n.t('app.answerNotSent'))
+      if (!prompt.serverRequestId) {
+        setNotice(error instanceof Error ? i18n.t('app.answerNotSentWith', { message: error.message }) : i18n.t('app.answerNotSent'))
+      }
       throw error
     }
   }
@@ -1931,7 +2366,11 @@ export default function App() {
     [bots, selectedBot, rosterSelected],
   )
   const rosterBots = useMemo(() => !localBot ? shownBots : [...shownBots, localBot], [shownBots, localBot])
-  const openRequest = serverRequests[0]
+  const teamItems = useMemo(
+    () => teamFeedFromCaches(Object.fromEntries([...chatCache.entries()].map(([slug, entry]) => [slug, entry.messages])), rosterBots),
+    [chatCache, rosterBots],
+  )
+  const openRequest = serverRequests.find((request) => request.method !== 'approval')
   const shownSession = activeChat?.profile === selectedBot?.slug ? activeChat?.sessionId : selectedBot?.sessionId
   const shownPrompts = shownSession ? prompts.filter((prompt) => prompt.sessionId === shownSession) : []
   const openBrowserVaultRequest = browserVaultRequests[0]
@@ -1939,7 +2378,25 @@ export default function App() {
   const openRequestBot = openRequestSession ? bots.find((bot) => bot.sessionId === openRequestSession) : undefined
   const openRequestContext = openRequest && openRequest.method !== 'approval' ? requestContext(botMessages(openRequestBot?.slug, openRequestSession)) : undefined
   const browserVaultContext = openBrowserVaultRequest ? requestContext(botMessages(openBrowserVaultRequest.bot)) : undefined
-  const newBotDialog = newBotOpen && <NewBotDialog bots={bots} connected={DEMO || connected} loadKnown={DEMO ? null : loadKnownProfiles} onCreate={createNewBot} onClose={() => setNewBotOpen(false)} />
+  const newBotDialog = newBotOpen && (
+    <NewBotDialog
+      bots={bots}
+      connected={DEMO || connected}
+      loadKnown={DEMO ? null : loadKnownProfiles}
+      onCreate={createNewBot}
+      onClose={() => setNewBotOpen(false)}
+      onImport={() => { setNewBotOpen(false); setImportBotOpen(true) }}
+    />
+  )
+  const importBotDialog = importBotOpen && (
+    <ImportBotDialog
+      bots={bots}
+      client={DEMO ? null : client}
+      connected={DEMO || connected}
+      onClose={() => setImportBotOpen(false)}
+      onCreated={createNewBot}
+    />
+  )
   const openRoom = selectedRoomId ? roomCache[selectedRoomId]?.room || rooms.find((room) => room.room_id === selectedRoomId) : null
   const openRoomCache = selectedRoomId ? roomCache[selectedRoomId] : undefined
   const seatable = roomCapabilities?.seatable_profiles
@@ -1966,6 +2423,33 @@ export default function App() {
   const onSidebarNewBot = useCallback(() => { setNewBotOpen(true); setMobileOpen(false) }, [])
   const onSidebarNewRoom = useCallback(() => { setNewRoomOpen(true); setMobileOpen(false) }, [])
   const onSidebarSettings = useCallback(() => { setSettingsTab('general') }, [])
+  const onSidebarEditBot = useCallback((bot: Bot) => { setEditBot(bot); setMobileOpen(false) }, [])
+  const onSidebarOpenTeam = useCallback(() => { setTeamOpen(true); setMobileOpen(false) }, [])
+  const saveOpenRoomRouting = useCallback(async (mode: RoomRoutingMode, leadId: string) => {
+    const roomId = useRoomStore.getState().selectedRoomId
+    if (!roomId) return
+    setRoomRoutingSaving(true)
+    try {
+      setRoomRoutingMode(roomId, mode)
+      if (!DEMO && mode !== 'mentions') {
+        const context = useRoomStore.getState().cache[roomId]?.context
+        const patch = gatewayContextPatch(mode, leadId)
+        await setRoomContext(client, roomId, crypto.randomUUID(), {
+          purpose: context?.purpose || '',
+          notes: context?.notes || '',
+          routing: patch.routing,
+          lead_member_id: patch.lead_member_id,
+        })
+        await refreshRoom(roomId)
+      }
+      setNotice(t('roomRouting.saved'))
+      setRoomRoutingOpen(false)
+    } catch {
+      setNotice(t('room.sendFailed'))
+    } finally {
+      setRoomRoutingSaving(false)
+    }
+  }, [client, t])
   const onSidebarCloseMobile = useCallback(() => { setMobileOpen(false) }, [])
 
   // ── Voice mode: one spoken conversation with the open bot ──
@@ -2066,9 +2550,11 @@ export default function App() {
         onNewBot={onSidebarNewBot}
         onNewRoom={onSidebarNewRoom}
         onOpenSettings={onSidebarSettings}
+        onOpenTeam={onSidebarOpenTeam}
         canManage={DEMO || connected}
         onBotAction={onSidebarBotAction}
         onNotice={setNotice}
+        onEditBot={onSidebarEditBot}
       />
       <ChatView
         hidden={localOpen || Boolean(selectedRoomId)}
@@ -2093,8 +2579,9 @@ export default function App() {
         ) : undefined}
         onVoice={speechEngine ? openVoice : undefined}
         onOpenDocument={openDocument}
+        onVaultFormDone={onVaultFormDone}
         onOpenBot={openBot}
-        modelLabel={chipModelLabel(chatModel || selectedBot.model)}
+        modelLabel={isAutoModel(chatModel) ? t(chatModel === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : chipModelLabel(chatModel || selectedBot.model)}
         onOpenModels={openModels}
         usage={usage}
         showUsage={showUsage}
@@ -2117,6 +2604,7 @@ export default function App() {
         modelPicker={modelQuery !== null ? (
           <ModelPicker
             options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
+            autoEnabled={appConfig.autoRouter?.enabled === true}
             freeMode={settings.freeMode}
             current={chatModel || selectedBot.model}
             profileModel={selectedBot.model}
@@ -2148,8 +2636,22 @@ export default function App() {
           onOpenMobile={() => setMobileOpen(true)}
           onOpenBot={openBot}
           onReplay={DEMO ? replayDemoRoom : undefined}
+          context={openRoomCache?.context}
+          onOpenRouting={() => setRoomRoutingOpen(true)}
         />
       )}
+      {roomRoutingOpen && openRoom && (
+        <RoomRoutingDialog
+          mode={roomRoutingMode(openRoom.room_id, openRoomCache?.context)}
+          leadId={openRoomCache?.context?.lead_member_id || openRoom.members[0]?.member_id || ''}
+          members={openRoom.members}
+          open
+          saving={roomRoutingSaving}
+          onClose={() => setRoomRoutingOpen(false)}
+          onSave={(mode, leadId) => { void saveOpenRoomRouting(mode, leadId) }}
+        />
+      )}
+      {teamOpen && <TeamView items={teamItems} onClose={() => setTeamOpen(false)} onOpenBot={(slug) => { setTeamOpen(false); openBot(slug) }} />}
       {localStarted && localBot && <LocalChatView key={DEMO ? language : undefined} bot={localBot} active={localOpen && !selectedRoomId} focusSignal={focusSignal} onOpenMobile={() => setMobileOpen(true)} onNotice={setNotice} onRunningChange={setLocalRunning} models={localModels} onRefreshModels={refreshLocalModels} demo={DEMO ? demoData(demoLanguage()).local : undefined} />}
       {detailsOpen && !localOpen && !selectedRoomId && (
         <DetailsPanel
@@ -2166,17 +2668,33 @@ export default function App() {
           usage={usage}
           loadUsageDetails={loadUsageDetails}
           onOpenDocument={openDocument}
+          onOpenLibraryPage={openLibraryPage}
           documents={documents}
           railTab={railTab}
           onSelectRailTab={setRailTab}
           onCloseDocument={closeDocument}
           onReloadDocument={reloadDocument}
           onClose={() => setDetailsOpen(false)}
+          client={DEMO ? null : client}
+          routinesEditable={appConfig.routines.editable && !DEMO}
+          connectorsEnabled={appConfig.connectors.enabled && !DEMO}
+          onReloadRoutines={reloadOpenRoutines}
+          computerPanelEnabled={appConfig.computerPanel.enabled}
+          onComputerSteer={activeChat ? (text) => steerSession(client, { profile: selectedBot.slug, sessionId: activeChat.sessionId }, text).then(() => undefined) : undefined}
         />
       )}
       {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={openRequestBot?.name || selectedBot.name} context={openRequestContext} onAnswer={answerServerRequest} onSso={(request, provider) => void answerServerRequestSso(request, provider)} />}
       {openBrowserVaultRequest && <BrowserVaultDialog key={openBrowserVaultRequest.id} request={openBrowserVaultRequest} botName={bots.find((bot) => bot.slug === openBrowserVaultRequest.bot)?.name || openBrowserVaultRequest.bot} context={browserVaultContext} onRespond={answerBrowserVault} />}
       {paletteOpen && <CommandPalette bots={rosterBots} onSelect={(bot) => { setPaletteOpen(false); selectBot(bot) }} onClose={() => setPaletteOpen(false)} />}
+      {editBot && (
+        <BotEditDialog
+          bot={editBot}
+          client={DEMO ? null : client}
+          onClose={() => setEditBot(null)}
+          onSaved={() => setNotice(i18n.t('botEdit.saved'))}
+          onNotice={setNotice}
+        />
+      )}
       {settingsTab && (
         <SettingsDialog
           tab={settingsTab}
@@ -2195,9 +2713,11 @@ export default function App() {
           reconnecting={reconnecting}
           onReconnect={reconnect}
           onLogout={logout}
+          client={DEMO ? null : client}
         />
       )}
       {newBotDialog}
+      {importBotDialog}
       {newRoomDialog}
       {newBotRetry && !notice && <NewBotRetry name={newBotRetry.name} onRetry={() => retryNewBot(newBotRetry.slug)} onClose={() => setNewBotRetry(null)} />}
       {notice && <div className="toast" role="status"><AlertCircle size={17} /><span>{notice}</span><button aria-label={t('app.close')} onClick={() => setNotice('')}><X size={15} /></button></div>}

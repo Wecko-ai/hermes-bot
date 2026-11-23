@@ -40,6 +40,7 @@
     "priority": "Prioritaire",
     "queued": "En file",
     "copyReply": "Copier la réponse",
+    "listenReply": "Écouter la réponse",
     "copyCode": "Copier",
     "copiedCode": "Copié",
     "opening": "Ouverture de la conversation avec {{name}}…",
@@ -126,6 +127,31 @@
     "botBusy": "Le bot travaille encore.",
     "drafting": "Brouillon de mail en cours…",
     "sentTo": "{{subject}}, à {{to}}"
+  },
+  "draft": {
+    "approved": "Brouillon approuvé pour {{channel}} : {{recipient}}",
+    "discarded": "Brouillon ignoré ({{channel}})",
+    "restore": "Restaurer",
+    "cardLabel": "Brouillon à envoyer ({{channel}})",
+    "title": "Brouillon de message",
+    "channel": "Canal",
+    "channels": { "x": "X", "slack": "Slack", "telegram": "Telegram" },
+    "recipient": "Destinataire",
+    "thread": "Fil",
+    "threadPlaceholder": "Canal, DM ou identifiant de fil",
+    "attachments": "Pièces jointes",
+    "attachmentsPlaceholder": "Chemins ou identifiants affichés sur la carte",
+    "text": "Message",
+    "pending": "En attente d’approbation",
+    "dismiss": "Ignorer",
+    "send": "Envoyer",
+    "botBusy": "Le bot travaille encore.",
+    "drafting": "Rédaction du brouillon…",
+    "sent": "Envoyé sur {{channel}} à {{recipient}}"
+  },
+  "progress": {
+    "toggle_one": "Afficher {{count}} étape",
+    "toggle_other": "Afficher {{count}} étapes"
   },
   "media": {
     "externalLink": "Lien externe",

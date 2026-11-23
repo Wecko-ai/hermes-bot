@@ -96,6 +96,9 @@ describe('local routes require a real session', () => {
       ['/api/model-probe', 'POST'],
       ['/api/local-chat/unload', 'POST'],
       ['/api/browser-turn', 'GET'],
+      ['/api/computer-panel/status?bot=orion', 'GET'],
+      ['/api/computer-panel/stream?bot=orion', 'GET'],
+      ['/api/computer-panel/control?bot=orion', 'GET'],
       ['/api/compaction', 'GET'],
       ['/api/compaction', 'PUT'],
     ]

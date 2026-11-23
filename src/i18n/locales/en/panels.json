@@ -9,10 +9,13 @@
     "infoTabs": "Bot information",
     "tabs": {
       "routines": "Routines",
+      "connectors": "Connectors",
       "activity": "Activity",
       "subagents": "Subagents",
       "media": "Media",
+      "computer": "Computer",
       "usage": "Usage",
+      "library": "Library",
       "about": "About"
     },
     "activityHeading": "Technical activity",
@@ -31,7 +34,99 @@
     "none": "No routines for this bot.",
     "paused": "Paused",
     "stateActive": "Active",
-    "readonly": "Read-only. Routines can’t be turned on from here."
+    "readonlyDisabled": "Routine editing is turned off for this installation.",
+    "confirmHint": "Every change needs your confirmation and a click.",
+    "create": "New routine",
+    "edit": "Edit",
+    "delete": "Delete",
+    "pause": "Pause",
+    "resume": "Resume",
+    "runNow": "Run now",
+    "test": "Test",
+    "save": "Save",
+    "createTitle": "New routine",
+    "editTitle": "Edit routine",
+    "fieldName": "Name",
+    "fieldPrompt": "Prompt",
+    "fieldSchedule": "Schedule",
+    "schedulePlaceholder": "every day at 9am, or 0 9 * * *",
+    "confirmPause": "Pause routine “{{name}}”?",
+    "confirmResume": "Resume routine “{{name}}”?",
+    "confirmRun": "Run routine “{{name}}” now? This starts a paid turn.",
+    "confirmDelete": "Delete routine “{{name}}”?",
+    "testReport": "Dry run: “{{name}}” with “{{schedule}}”. Next run: {{next}}.",
+    "testNoNext": "none",
+    "fieldTrigger": "Trigger",
+    "trigger": {
+      "schedule": "Schedule",
+      "webhook": "Webhook",
+      "email": "Email"
+    },
+    "triggerSummary": {
+      "webhook": "Runs when the local webhook receives a POST",
+      "email": "Runs when a new matching Gmail message is seen"
+    },
+    "fieldWebhookAuth": "Webhook auth",
+    "webhookAuth": {
+      "bearer": "Bearer token",
+      "hmac": "HMAC signature"
+    },
+    "fieldWebhookPreset": "Signature preset",
+    "webhookPreset": {
+      "generic": "Generic",
+      "github": "GitHub"
+    },
+    "fieldWebhookUrl": "Webhook URL",
+    "copyWebhook": "Copy URL",
+    "regenerateSecret": "Regenerate secret",
+    "secretRegenerated": "A new secret was generated. Copy it now: it is shown only once.",
+    "secretOnce": "Secret (copy now): {{secret}}",
+    "hookCopied": "Webhook URL copied.",
+    "hookCopyFailed": "Could not copy the URL.",
+    "fieldEmailQuery": "Gmail search",
+    "emailQueryPlaceholder": "from:alerts subject:invoice",
+    "fieldPollMinutes": "Poll every (minutes)",
+    "emailWatcherNote": "Checks Gmail on this interval (5 minutes or more). Requires a connected Gmail read path via Hermes.",
+    "eventDryRun": "Dry run: {{trigger}} trigger (no model call).",
+    "runSource": "Last run: {{source}}",
+    "runFailed": "failed",
+    "error": {
+      "generic": "Routine update failed."
+    }
+  },
+  "connectors": {
+    "search": "Search connectors",
+    "empty": "No connectors match this search.",
+    "disabled": "Connectors are turned off for this installation.",
+    "connect": "Connect",
+    "reauth": "Authorize",
+    "remove": "Remove",
+    "envKeys": "Required keys: {{keys}}",
+    "apiKeyLabel": "API key for {{name}}",
+    "apiKeyPlaceholder": "Paste API key",
+    "apiKeySave": "Save key",
+    "apiKeySet": "Key set",
+    "apiKeyMissing": "Key missing",
+    "apiKeyUnknown": "Key status unknown",
+    "apiKeyRequired": "Enter an API key first.",
+    "confirmApiKey": "Save the API key for {{name}}? It is sent once to Hermes and is not stored in HermesBot.",
+    "apiKeySaved": "{{name}}: key saved.",
+    "confirmConnect": "Connect {{name}} to this bot?",
+    "confirmRemove": "Remove {{name}} from this bot?",
+    "connected": "{{name}} is connected.",
+    "removed": "{{name}} was removed.",
+    "status": {
+      "connected": "Connected",
+      "configured": "Configured",
+      "needsAuth": "Needs authorization",
+      "available": "Available",
+      "error": "Error"
+    },
+    "error": {
+      "generic": "Connector update failed.",
+      "oauthStart": "OAuth could not start.",
+      "oauthPoll": "OAuth authorization failed."
+    }
   },
   "usage": {
     "tokens": "{{value}} tokens",
@@ -69,7 +164,66 @@
     "tokensLabel": "Tokens",
     "sessions": "Sessions",
     "estimatedCost": "Estimated cost",
-    "byModel": "By model"
+    "byModel": "By model",
+    "fallbackModel": "Fallback model in use: {{model}}"
+  },
+  "usageGlobal": {
+    "settingsIntro": "Read-only totals from gateway analytics across every roster bot. Subscription gauges use configured limits, not provider billing APIs.",
+    "hint": "Combined usage from gateway analytics (30 days).",
+    "loading": "Loading global usage…",
+    "unavailable": "Global usage is unavailable right now.",
+    "quotas": "Subscription quotas (estimated)",
+    "quotaDetail": "{{used}} / {{limit}} tokens",
+    "quotaWindow": "{{hours}} h rolling window",
+    "estimated": "estimated",
+    "byBot": "By bot"
+  },
+  "autoRouter": {
+    "title": "Auto routing",
+    "hint": "Local routing log (no prompt text). Enable autoRouter.enabled in the server config.",
+    "loading": "Loading auto routing log…",
+    "unavailable": "Auto routing log is unavailable.",
+    "routed": "Routed requests",
+    "fallbacks": "Fallbacks",
+    "estimatedCost": "Estimated cost (USD)",
+    "badge": "Auto → {{model}} ({{category}})",
+    "tablePath": "Scoring table",
+    "fallbackBlockedTools": "Auto routing could not retry: tools already ran on this turn.",
+    "fallbackExhausted": "Auto routing could not recover from the provider error."
+  },
+  "vaultWallet": {
+    "note": "Cards and addresses are stored in the bots machine’s keychain. Card numbers never return to the chat—only the last four digits.",
+    "addCard": "Add card",
+    "addAddress": "Add address",
+    "label": "Label",
+    "holder": "Cardholder",
+    "number": "Card number",
+    "expiry": "Expiry (MM/YY)",
+    "line1": "Address line 1",
+    "line2": "Address line 2",
+    "city": "City",
+    "postal": "Postal code",
+    "country": "Country",
+    "saveFailed": "Could not save to the vault."
+  },
+  "secureVault": {
+    "note": "Values go straight to the vault. The bot only receives references.",
+    "optional": "optional",
+    "cardNumber": "Card number",
+    "cardHolder": "Name on card",
+    "cardExpiry": "MM/YY",
+    "missing": "Fill in {{label}}.",
+    "failed": "Vault refused the secure form.",
+    "saving": "Saving…",
+    "submit": "Save to vault"
+  },
+  "pagesLibrary": {
+    "heading": "Library",
+    "search": "Search pages",
+    "empty": "No saved pages for this bot yet.",
+    "rename": "Rename",
+    "renamePrompt": "New title",
+    "archive": "Archive"
   },
   "settings": {
     "title": "Settings",
@@ -79,8 +233,45 @@
       "general": "General",
       "chat": "Chats",
       "models": "Models",
+      "memory": "Memory",
+      "skills": "Skills",
       "vault": "Vault",
+      "usage": "Usage & plan",
+      "channels": "Channels",
       "account": "Account"
+    },
+    "memory": {
+      "hint": "Shared facts for all bots. Each entry is dated and sourced.",
+      "types": "Memory types",
+      "type": {
+        "profile": "Profile",
+        "rules": "Rules",
+        "people": "People",
+        "workstreams": "Workstreams"
+      },
+      "search": "Search",
+      "searchPlaceholder": "Search all memory…",
+      "empty": "No entries yet.",
+      "add": "Add entry",
+      "titlePlaceholder": "Title",
+      "bodyPlaceholder": "Details",
+      "saveEntry": "Save entry",
+      "delete": "Remove entry"
+    },
+    "skills": {
+      "hint": "Skills are read from this Mac's Hermes home. Toggles write only when you enable or disable a skill.",
+      "bot": "Bot",
+      "shared": "Shared",
+      "profile": "Profile",
+      "sharedTitle": "Shared skills",
+      "profileTitle": "Skills in this profile",
+      "installTitle": "Install from hub",
+      "installHint": "When the gateway exposes no hub API, install from a terminal:",
+      "installPlaceholder": "skill id, e.g. web/coffre-chrome",
+      "installButton": "Install from hub",
+      "installConfirm": "Install skill «{{id}}» on this bot?",
+      "installDone": "Installed {{name}}.",
+      "installUnsupported": "This Hermes gateway has no hub install API. Use the CLI command below."
     },
     "language": "Language",
     "languageOptions": {
@@ -115,8 +306,27 @@
     },
     "showUsage": "Show context and speed",
     "showUsageHint": "Below the composer",
+    "autoModel": "Auto model mode",
+    "autoModelHint": "Pick a model automatically on each send (same as the Auto entry in the model picker).",
     "caveman": "Caveman mode",
     "cavemanHint": "Bots answer you in 1 to 3 lines: the result, then what you need to decide. For the messages you send from here; what they write elsewhere stays normal.",
+    "approvalsMode": {
+      "label": "Command approvals",
+      "hint": "Read-only. Set in Hermes (config approvals.mode): off skips prompts, manual always asks, smart asks when Hermes judges the command risky.",
+      "offline": "Connect to Hermes to read this",
+      "unknown": "Unknown",
+      "values": {
+        "off": "Off",
+        "manual": "Manual",
+        "smart": "Smart"
+      }
+    },
+    "backgroundTask": "Background-task replies",
+    "backgroundTaskHint": "Acknowledge quickly, then short progress updates in chat before the final answer.",
+    "toneCharter": "Warm, concise tone",
+    "toneCharterHint": "Adds a short style note on each message you send from here.",
+    "progressInThread": "Progress bubbles",
+    "progressInThreadHint": "Milestone lines from the bot appear in the thread, then fold under the final reply.",
     "guide": {
       "title": "Chat guide",
       "send": "Send the message",
@@ -206,7 +416,9 @@
         "upstream_failed": "LLM Stats is unreachable, showing the last available data."
       },
       "attribution": "Data by LLM Stats"
-    }
+    },
+    "autoFreeModel": "Free Auto mode",
+    "autoFreeModelHint": "Like Auto mode, but only with free models that use no subscription quota (NVIDIA, local models, OpenRouter free)."
   },
   "vault": {
     "unresponsive": "The vault isn’t responding.",
@@ -248,6 +460,9 @@
     "profile": "Profile",
     "noKey": "No key",
     "paid": "Paid",
+    "auto": "Auto",
+    "autoHint": "Pick a model per send (local classifier)",
+    "autoLabel": "Auto",
     "freeModeOn": "Zero-spend mode: free and subscription models only.",
     "thisConversation": "This conversation only · ",
     "manage": "Manage models",
@@ -268,7 +483,10 @@
       "agentic": "Among the best of this list on the LLM Stats agents or tool-calling score",
       "coding": "Among the best of this list on the LLM Stats coding score",
       "reasoning": "Among the highest LLM Stats general scores of this list"
-    }
+    },
+    "autoFree": "Auto free",
+    "autoFreeHint": "Free models only, no subscription quota",
+    "autoFreeLabel": "Auto free"
   },
   "providers": {},
   "serverRequest": {
@@ -382,6 +600,18 @@
     "createAccount": "Create the account",
     "signupFailed": "Account not created: {{reason}}",
     "autoSignupNotice": "{{bot}} created an account on {{site}} with {{login}}"
+  },
+  "computerPanel": {
+    "heading": "Team Chrome",
+    "viewAria": "Live browser view",
+    "idle": "Chrome isn’t running for this team. Start a browser turn or wait for a bot tour.",
+    "waiting": "Waiting for the first frame…",
+    "driving": "Driving: {{name}}",
+    "noDriver": "No bot is driving this Chrome right now.",
+    "takeOver": "Take over",
+    "giveBack": "Give back",
+    "userControlBanner": "You’re in control — the bot is asked to pause automation.",
+    "hint": "For CAPTCHAs and other checks, take over here instead of closing the bot tab."
   },
   "hermes": {
     "gatewayUnresponsive": "The Hermes gateway isn’t responding.",

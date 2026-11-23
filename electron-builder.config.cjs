@@ -51,6 +51,10 @@ module.exports = {
     '!server/**/*.test.mjs',
     '!electron/**/*.test.mjs',
   ],
+  // Default pack: macOS Apple silicon dir output (`release/mac-arm64/`).
+  // Intel macOS: add `target: [{ target: 'dir', arch: ['x64'] }]` (or both archs in one array).
+  // Linux x64: set `linux: { target: ['AppImage', 'deb'], category: 'Utility', icon: 'assets/icon.png' }`
+  // and run electron-builder with `--linux` (unsigned unless you configure signing).
   mac: {
     category: 'public.app-category.productivity',
     icon: macIcon,

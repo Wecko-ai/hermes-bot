@@ -1,0 +1,54 @@
+{
+  "channels": {
+    "title": "Canaux",
+    "pickBot": "Profil du bot",
+    "readOnly": "Guide en lecture seule. Activez l’écriture dans la config d’installation pour appliquer les réglages non secrets du profil.",
+    "apply": "Appliquer la config sûre",
+    "applied": "Réglages non secrets appliqués.",
+    "failed": "Impossible d’appliquer les réglages.",
+    "loading": "Lecture de l’état des canaux…",
+    "snippet": "Extrait de configuration",
+    "ready": "Prêt",
+    "missing": "Clés obligatoires manquantes",
+    "telegram": {
+      "title": "Telegram",
+      "steps": "Créez un bot avec @BotFather (/newbot), copiez le jeton dans TELEGRAM_BOT_TOKEN, ajoutez votre identifiant numérique Telegram dans TELEGRAM_ALLOWED_USERS (séparés par des virgules), optionnellement TELEGRAM_HOME_CHANNEL, enregistrez le .env du profil, appliquez la config sûre, puis redémarrez la gateway."
+    },
+    "slack": {
+      "title": "Slack",
+      "steps": "Créez une app Slack (Socket Mode activé), ajoutez les scopes bot (chat:write, app_mentions:read, channels:history, im:history, users:read, files:read/write, …), installez-la pour obtenir SLACK_BOT_TOKEN (xoxb-), créez un jeton d’app avec connections:write pour SLACK_APP_TOKEN (xapp-), renseignez SLACK_ALLOWED_USERS, enregistrez et appliquez, puis redémarrez la gateway."
+    },
+    "imessage": {
+      "title": "iMessage (BlueBubbles)",
+      "steps": "Faites tourner BlueBubbles sur un Mac (Messages connecté, accès complet au disque pour BlueBubbles). Copiez l’URL serveur et le mot de passe dans BLUEBUBBLES_SERVER_URL et BLUEBUBBLES_PASSWORD, optionnellement BLUEBUBBLES_ALLOWED_USERS ou appairage, appliquez la config sûre, redémarrez la gateway et vérifiez l’enregistrement du webhook dans les logs."
+    },
+    "saveEnv": "Enregistrer les identifiants",
+    "envSaved": ".env du profil mis à jour (sauvegarde créée).",
+    "envFailed": "Impossible de mettre à jour le .env du profil.",
+    "envField": "Valeur pour {{name}}"
+  },
+  "team": {
+    "title": "Équipe",
+    "empty": "Aucun échange récent entre bots dans les chats déjà chargés.",
+    "open": "Ouvrir la vue Équipe"
+  },
+  "roomRouting": {
+    "title": "Routage du salon",
+    "everyone": "Tous les bots",
+    "mentions": "Mentions seulement",
+    "facilitator": "Bot facilitateur",
+    "pickLead": "Facilitateur",
+    "save": "Enregistrer le routage",
+    "saved": "Routage mis à jour.",
+    "mentionRequired": "Mentionnez au moins un bot, ou passez en mode Tous les bots.",
+    "hintEveryone": "Sans destinataire, tous les membres sont sollicités.",
+    "hintMentions": "Sans mention, l’envoi est bloqué ; les @mentions choisissent qui répond.",
+    "hintFacilitator": "Un bot facilitateur choisit qui répond quand personne n’est mentionné."
+  },
+  "mediaGallery": {
+    "all": "Tout",
+    "images": "Images",
+    "videos": "Vidéos",
+    "audio": "Audio"
+  }
+}

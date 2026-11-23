@@ -7,6 +7,7 @@ import { BrowserVaultError, vaultError } from './errors.mjs'
 import { generatePassword } from './password.mjs'
 import { accountPageProvider, ssoProvider, useSsoResult } from './sso.mjs'
 import { memorySettings } from './settings.mjs'
+import { WalletStore } from './wallet.mjs'
 
 const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 const TARGET_ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -93,6 +94,7 @@ export function createBrowserVault(options = {}) {
     verified.set(key, Date.now() + 60_000)
   }
   const store = options.store ?? new KeychainStore()
+  const wallet = options.wallet ?? new WalletStore()
   // Without a settings file, the defaults: every sign-up waits for the user's card.
   const settings = options.settings ?? memorySettings()
   // "Share credentials between all bots" (Settings, Vault): a login given to one bot serves them all.
@@ -329,6 +331,7 @@ export function createBrowserVault(options = {}) {
     if (method === 'GET') {
       if (pathname === '/admin/v1/requests') return { requests: requests.snapshot(), notices: currentNotices() }
       if (pathname === '/admin/v1/entries') return { entries: await store.list() }
+      if (pathname === '/admin/v1/wallet') return { items: await wallet.list() }
       if (pathname === '/admin/v1/settings') return { settings: settings.get() }
       throw new BrowserVaultError('invalid_request', 400)
     }
@@ -362,6 +365,26 @@ export function createBrowserVault(options = {}) {
       await store.remove(body.origin)
       audit('admin_remove', 'hermesbot', body.origin, 'ok')
       return { ok: true }
+    }
+    if (pathname === '/admin/v1/wallet/card') {
+      const entry = await wallet.saveCard(body)
+      audit('admin_wallet_card', 'hermesbot', entry.id, 'ok')
+      return { entry }
+    }
+    if (pathname === '/admin/v1/wallet/address') {
+      const entry = await wallet.saveAddress(body)
+      audit('admin_wallet_address', 'hermesbot', entry.id, 'ok')
+      return { entry }
+    }
+    if (pathname === '/admin/v1/wallet/remove') {
+      await wallet.remove(body.id)
+      audit('admin_wallet_remove', 'hermesbot', body.id, 'ok')
+      return { ok: true }
+    }
+    if (pathname === '/admin/v1/wallet/secure-form') {
+      const refs = await wallet.storeSecureForm(body.fields, body.bots)
+      audit('admin_wallet_form', 'hermesbot', refs.map((item) => item.id).join(','), 'ok')
+      return { refs }
     }
     throw new BrowserVaultError('not_found', 404)
   }

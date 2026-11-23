@@ -214,7 +214,7 @@ export interface ServerRequest {
   params: Json
 }
 
-const ANSWERED_HERE = new Set(['approval', 'vault.save_login', 'vault.unlock_prompt', 'vault.code'])
+const ANSWERED_HERE = new Set(['approval', 'vault.save_login', 'vault.unlock_prompt', 'vault.code', 'vault.secure_form'])
 
 export class HermesClient {
   private serverRequestListeners = new Set<(request: ServerRequest) => void>()
@@ -403,6 +403,8 @@ export interface PendingPrompt {
   multiSelect: boolean
   command: string
   description: string
+  /** When set, the user answers with `client.respond`, not `approval.respond`. */
+  serverRequestId?: string
 }
 
 export function parsePendingPrompt(sessionId: string, value: unknown): PendingPrompt | null {
@@ -799,41 +801,94 @@ export async function checkModelRoutes(client: HermesClient, profile: string, pr
 const firstNumber = (...values: unknown[]) => values.find((value): value is number => typeof value === 'number' && Number.isFinite(value))
 
 /** Accepts both Hermes views: `Usage` (status bar) and the `session.stats` counters. */
-export function parseUsage(value: unknown): SessionUsage | null {
+export function parseUsage(value: unknown): Partial<SessionUsage> | null {
   const usage = asObject(value)
   if (Object.keys(usage).length === 0) return null
-  const contextUsed = firstNumber(usage.context_used, usage.context_tokens, usage.last_prompt_tokens) ?? 0
-  const contextMax = firstNumber(usage.context_max, usage.context_length) ?? 0
-  const plan = asObject(usage.plan_gauge)
+  const row: Partial<SessionUsage> = {}
+  const contextUsed = firstNumber(usage.context_used, usage.context_tokens, usage.last_prompt_tokens)
+  if (contextUsed !== undefined) row.contextUsed = contextUsed
+  const contextMax = firstNumber(usage.context_max, usage.context_length)
+  if (contextMax !== undefined) {
+    row.contextMax = contextMax
+    const pct = firstNumber(usage.context_percent)
+    row.contextPercent = pct ?? (contextMax > 0 && contextUsed !== undefined ? Math.min(100, (contextUsed / contextMax) * 100) : 0)
+  } else {
+    const pct = firstNumber(usage.context_percent)
+    if (pct !== undefined) row.contextPercent = pct
+  }
+  const averageTps = firstNumber(usage.avg_tps, usage.tokens_per_s)
+  if (averageTps !== undefined) row.averageTps = averageTps
+  const inputTokens = firstNumber(usage.input, usage.input_tokens, usage.prompt_tokens)
+  if (inputTokens !== undefined) row.inputTokens = inputTokens
+  const outputTokens = firstNumber(usage.output, usage.output_tokens, usage.completion_tokens)
+  if (outputTokens !== undefined) row.outputTokens = outputTokens
+  const totalTokens = firstNumber(usage.total, usage.total_tokens)
+  if (totalTokens !== undefined) row.totalTokens = totalTokens
+  const reasoningTokens = firstNumber(usage.reasoning, usage.reasoning_tokens)
+  if (reasoningTokens !== undefined) row.reasoningTokens = reasoningTokens
+  const cacheReadTokens = firstNumber(usage.cache_read, usage.cache_read_tokens)
+  if (cacheReadTokens !== undefined) row.cacheReadTokens = cacheReadTokens
+  const cacheWriteTokens = firstNumber(usage.cache_write, usage.cache_write_tokens)
+  if (cacheWriteTokens !== undefined) row.cacheWriteTokens = cacheWriteTokens
+  const apiCalls = firstNumber(usage.calls, usage.api_calls)
+  if (apiCalls !== undefined) row.apiCalls = apiCalls
+  const compressions = firstNumber(usage.compressions, usage.compression_count)
+  if (compressions !== undefined) row.compressions = compressions
+  const cacheHitPercent = firstNumber(usage.cache_hit_pct)
+  if (cacheHitPercent !== undefined) row.cacheHitPercent = cacheHitPercent
+  const averageLatency = firstNumber(usage.avg_latency_s)
+  if (averageLatency !== undefined) row.averageLatency = averageLatency
+  const activeSubagents = firstNumber(usage.active_subagents)
+  if (activeSubagents !== undefined) row.activeSubagents = activeSubagents
+  const lastTurnTokens = firstNumber(usage.last_turn_tokens)
+  if (lastTurnTokens !== undefined) row.lastTurnTokens = lastTurnTokens
+  const costUsd = firstNumber(usage.cost_usd)
+  if (costUsd !== undefined) row.costUsd = costUsd
   const source = asString(usage.context_source)
+  if (typeof usage.context_estimated === 'boolean') row.contextEstimated = usage.context_estimated
+  else if (source) row.contextEstimated = source !== 'provider_usage'
+  const model = asString(usage.model)
+  if (model) row.model = model
+  const provider = asString(usage.provider)
+  if (provider) row.provider = provider
+  const plan = asObject(usage.plan_gauge)
+  if (typeof plan.used_bp === 'number') {
+    row.plan = { label: asString(plan.label, i18n.t('hermes.planDefault')), usedPercent: plan.used_bp / 100, resetsAt: firstNumber(plan.resets_at_ms) ?? null }
+  }
+  return Object.keys(row).length ? row : null
+}
+
+/** Fills missing session counters when a partial frame is the only read available. */
+export function completeUsage(partial: Partial<SessionUsage>): SessionUsage {
   return {
-    contextUsed,
-    contextMax,
-    contextPercent: firstNumber(usage.context_percent) ?? (contextMax ? Math.min(100, (contextUsed / contextMax) * 100) : 0),
-    averageTps: firstNumber(usage.avg_tps, usage.tokens_per_s) ?? 0,
-    inputTokens: firstNumber(usage.input, usage.input_tokens, usage.prompt_tokens) ?? 0,
-    outputTokens: firstNumber(usage.output, usage.output_tokens, usage.completion_tokens) ?? 0,
-    totalTokens: firstNumber(usage.total, usage.total_tokens) ?? 0,
-    reasoningTokens: firstNumber(usage.reasoning, usage.reasoning_tokens),
-    cacheReadTokens: firstNumber(usage.cache_read, usage.cache_read_tokens),
-    cacheWriteTokens: firstNumber(usage.cache_write, usage.cache_write_tokens),
-    apiCalls: firstNumber(usage.calls, usage.api_calls),
-    compressions: firstNumber(usage.compressions, usage.compression_count),
-    cacheHitPercent: firstNumber(usage.cache_hit_pct),
-    averageLatency: firstNumber(usage.avg_latency_s),
-    activeSubagents: firstNumber(usage.active_subagents),
-    lastTurnTokens: firstNumber(usage.last_turn_tokens),
-    costUsd: firstNumber(usage.cost_usd),
-    contextEstimated: typeof usage.context_estimated === 'boolean' ? usage.context_estimated : source ? source !== 'provider_usage' : undefined,
-    model: asString(usage.model) || undefined,
-    provider: asString(usage.provider) || undefined,
-    plan: typeof plan.used_bp === 'number' ? { label: asString(plan.label, i18n.t('hermes.planDefault')), usedPercent: plan.used_bp / 100, resetsAt: firstNumber(plan.resets_at_ms) ?? null } : undefined,
+    contextUsed: partial.contextUsed ?? 0,
+    contextMax: partial.contextMax ?? 0,
+    contextPercent: partial.contextPercent ?? 0,
+    averageTps: partial.averageTps ?? 0,
+    inputTokens: partial.inputTokens ?? 0,
+    outputTokens: partial.outputTokens ?? 0,
+    totalTokens: partial.totalTokens ?? 0,
+    reasoningTokens: partial.reasoningTokens,
+    cacheReadTokens: partial.cacheReadTokens,
+    cacheWriteTokens: partial.cacheWriteTokens,
+    apiCalls: partial.apiCalls,
+    compressions: partial.compressions,
+    cacheHitPercent: partial.cacheHitPercent,
+    averageLatency: partial.averageLatency,
+    activeSubagents: partial.activeSubagents,
+    lastTurnTokens: partial.lastTurnTokens,
+    costUsd: partial.costUsd,
+    contextEstimated: partial.contextEstimated,
+    model: partial.model,
+    provider: partial.provider,
+    plan: partial.plan,
   }
 }
 
 /** A partial frame completes the previous one: the cache read does not fall back to empty at the end of a turn. */
-export function mergeUsage(current: SessionUsage | null, next: SessionUsage | null) {
-  if (!next || !current) return next ?? current
+export function mergeUsage(current: SessionUsage | null, next: Partial<SessionUsage> | null) {
+  if (!next || Object.keys(next).length === 0) return current
+  if (!current) return completeUsage(next)
   const defined = Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined))
   return { ...current, ...defined } as SessionUsage
 }
@@ -842,9 +897,11 @@ export function mergeUsage(current: SessionUsage | null, next: SessionUsage | nu
 export async function loadUsage(client: HermesClient, chat: ActiveChat) {
   const params = { profile: chat.profile, session_id: chat.sessionId }
   try {
-    return parseUsage(await client.request('session.stats', params))
+    const parsed = parseUsage(await client.request('session.stats', params))
+    return parsed ? completeUsage(parsed) : null
   } catch {
-    return parseUsage(await client.request('session.usage', params))
+    const parsed = parseUsage(await client.request('session.usage', params))
+    return parsed ? completeUsage(parsed) : null
   }
 }
 
@@ -889,11 +946,13 @@ export async function loadRoutines(profile: string): Promise<Routine[]> {
     return {
       id: asString(job.id),
       name: asString(job.name, i18n.t('hermes.routineDefault')),
+      prompt: asString(job.prompt) || asString(job.prompt_preview),
       schedule: asString(job.schedule_display || schedule.display || schedule.expr),
       scheduleText: asString(job.schedule_display || schedule.display || schedule.expr, i18n.t('hermes.scheduled')),
       enabled: job.enabled === true,
       nextRunAt: isoDate(job.next_run_at),
       lastRunAt: isoDate(job.last_run_at),
+      lastStatus: typeof job.last_status === 'string' ? job.last_status : null,
     }
   })
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, Search, Settings, User, UsersRound, X } from 'lucide-react'
+import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, GripVertical, Plus, RefreshCw, Search, Settings, User, Users, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { Room } from '../lib/rooms'
 import { BotContextMenu } from './BotContextMenu'
@@ -13,7 +13,8 @@ import { cleanPreview, shortTime } from '../lib/time'
 import { latestActivity } from '../lib/activity'
 import { workLine, type WorkSummary } from '../lib/work-summary'
 import { updateSettings, useSettings } from '../lib/settings'
-import { compareSections, useAppConfig } from '../lib/app-config'
+import { compareSections, getAppConfig, setAppConfig, useAppConfig } from '../lib/app-config'
+import { applyRosterOrder, reorderBotsInSection, reorderSections, saveUiLayout } from '../lib/sidebar-layout'
 import { backgroundSummary } from '../lib/background'
 import { botActionError, type BotAction } from '../lib/bot-actions'
 import { contextMenuPoint, isContextMenuKey } from '../lib/a11y-focus'
@@ -56,14 +57,16 @@ interface SidebarProps {
   onNewBot: () => void
   onNewRoom: () => void
   onOpenSettings: () => void
+  onOpenTeam: () => void
   /** Hermes answers (or the demo runs): the menu offers the actions that write to it. */
   canManage: boolean
   /** Runs a bot menu action; rejects when Hermes did not take it. */
   onBotAction: (bot: Bot, action: BotAction) => Promise<void>
   onNotice: (message: string) => void
+  onEditBot: (bot: Bot) => void
 }
 
-export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice, onEditBot, onOpenTeam }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const roomCache = useRoomStore((state) => state.cache)
@@ -82,6 +85,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
   }
 
   const sectionOrder = useMemo(() => compareSections(ui.sectionOrder, TRAILING_SECTIONS), [ui.sectionOrder])
+  const dragRef = useRef<{ kind: 'section' | 'bot'; key: string; slug?: string } | null>(null)
   const groups = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase(locale())
     const visible = bots.filter((bot) => {
@@ -92,8 +96,8 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
       return true
     })
     // Pinned bots first, then by activity a single list with no sections, or one group per section.
-    return rosterGroups(visible, { pinned: pinnedBots, activitySort, compareSections: sectionOrder })
-  }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort, sectionOrder, pinnedBots])
+    return applyRosterOrder(rosterGroups(visible, { pinned: pinnedBots, activitySort, compareSections: sectionOrder }), ui.rosterOrder)
+  }, [bots, search, showHidden, unreadOnly, workingOnly, activitySort, sectionOrder, pinnedBots, ui.rosterOrder])
   const visibleRooms = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase(locale())
     return rooms.filter((room) => {
@@ -178,6 +182,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
             <button className={`round-icon-button ${searchOpen ? 'is-active' : ''}`} aria-label={t('sidebar.searchBot')} onClick={() => setSearchOpen((open) => !open)}>
               {searchOpen ? <X size={17} /> : <Search size={17} />}
             </button>
+            <button className="round-icon-button" aria-label={t('team.open')} title={t('team.open')} onClick={onOpenTeam}><Users size={17} /></button>
             <button className="round-icon-button" aria-label={t('sidebar.newBot')} title={t('sidebar.newBot')} disabled={!canManage} onClick={onNewBot}><Plus size={19} /></button>
           </div>
         </div>
@@ -274,8 +279,32 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
           {groups.map(({ key, section, pinned, bots: sectionBots }) => (
             <section className={`bot-section${pinned ? ' is-pinned' : ''}`} key={key}>
               {(!activitySort || pinned) && (
-                <button className="section-heading" onClick={() => toggleSection(key)} aria-expanded={!collapsed.has(key)}>
+                <button
+                  className="section-heading"
+                  onClick={() => toggleSection(key)}
+                  aria-expanded={!collapsed.has(key)}
+                  draggable={!activitySort && !pinned}
+                  onDragStart={() => { dragRef.current = { kind: 'section', key: section || key } }}
+                  onDragOver={(event) => { if (!activitySort && !pinned) event.preventDefault() }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    const drag = dragRef.current
+                    dragRef.current = null
+                    if (!drag || drag.kind !== 'section' || activitySort || pinned) return
+                    const names = groups.filter((group) => !group.pinned && group.key !== 'activity').map((group) => group.section || group.key)
+                    const base = ui.sectionOrder.length ? ui.sectionOrder.filter((name) => names.includes(name)) : names
+                    const from = base.indexOf(drag.key)
+                    const to = base.indexOf(section || key)
+                    if (from < 0 || to < 0 || from === to) return
+                    const nextOrder = reorderSections(base, from, to)
+                    void saveUiLayout({ sectionOrder: nextOrder, rosterOrder: ui.rosterOrder }).then((ok) => {
+                      if (!ok) return
+                      setAppConfig({ ...getAppConfig(), ui: { ...ui, sectionOrder: nextOrder } })
+                    })
+                  }}
+                >
                   {collapsed.has(key) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  {!activitySort && !pinned && <GripVertical size={12} aria-hidden="true" className="sidebar-drag-handle" />}
                   <span>{pinned ? t('sidebar.sectionPinned') : SECTION_LABELS[section] ? t(SECTION_LABELS[section]) : section}</span>
                   <span className="section-count">{sectionBots.length}</span>
                 </button>
@@ -291,6 +320,21 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                     key={bot.slug}
                     data-bot={bot.slug}
                     style={{ '--avatar-color': avatarColor(bot) } as CSSProperties}
+                    draggable={!activitySort && bot.slug !== LOCAL_CHAT_SLUG}
+                    onDragStart={() => { dragRef.current = { kind: 'bot', key: section || key, slug: bot.slug } }}
+                    onDragOver={(event) => { if (!activitySort && bot.slug !== LOCAL_CHAT_SLUG) event.preventDefault() }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const drag = dragRef.current
+                      dragRef.current = null
+                      if (!drag || drag.kind !== 'bot' || !drag.slug || activitySort) return
+                      const order = reorderBotsInSection(sectionBots, drag.slug, bot.slug)
+                      const nextOrder = { ...ui.rosterOrder, [section || key]: order }
+                      void saveUiLayout({ sectionOrder: ui.sectionOrder, rosterOrder: nextOrder }).then((ok) => {
+                        if (!ok) return
+                        setAppConfig({ ...getAppConfig(), ui: { ...ui, rosterOrder: nextOrder } })
+                      })
+                    }}
                     onClick={() => onSelect(bot)}
                     // The local chat is not a Hermes profile: nothing to pin, move, rename or delete.
                     onContextMenu={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => openMenu(event, bot)}
@@ -321,9 +365,11 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
             </section>
           ))}
           {groups.length === 0 && visibleRooms.length === 0 && (
-            <div className="sidebar-empty">
-              <span>{t('sidebar.noBotFound')}</span>
-              <button onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>{t('sidebar.resetFilters')}</button>
+            <div className="sidebar-empty view-empty">
+              <p className="view-empty-text">{t('sidebar.noBotFound')}</p>
+              <div className="view-empty-action">
+                <button type="button" onClick={() => { setSearch(''); setUnreadOnly(false); updateSettings({ showHidden: true }) }}>{t('sidebar.resetFilters')}</button>
+              </div>
             </div>
           )}
         </nav>
@@ -350,6 +396,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
           sections={sections}
           canManage={canManage}
           onAction={(action) => runMenuAction(menuBot, action)}
+          onEdit={() => { onEditBot(menuBot); closeMenu(false) }}
           onRename={() => setDialog({ kind: 'rename', slug: menuBot.slug })}
           onDelete={() => setDialog({ kind: 'delete', slug: menuBot.slug })}
           onClose={closeMenu}

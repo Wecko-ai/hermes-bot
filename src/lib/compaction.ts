@@ -73,7 +73,7 @@ export interface CompactResult {
   status: 'compressed' | 'aborted' | 'busy' | 'failed'
   before: number
   after: number
-  usage: SessionUsage | null
+  usage: Partial<SessionUsage> | null
   message?: string
 }
 

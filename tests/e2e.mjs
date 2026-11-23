@@ -1,7 +1,7 @@
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -54,7 +54,27 @@ console.log(\`tour : \${owner} \${since} pid=123 depuis 1 min\\nen file : 0\`)
 const TEST_DATA = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-e2e-'))
 const TEST_CONFIG = path.join(TEST_DATA, 'config.json')
 const TEST_ANIMATIONS = path.join(TEST_DATA, 'animations')
-writeFileSync(TEST_CONFIG, JSON.stringify({ ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'], subscriptionProviders: ['kimi-coding'] }, localChat: { model: 'modele-local:7b', name: 'Modèle local' }, modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` } }))
+const AUTO_ROUTER_LOG = path.join(TEST_DATA, 'auto-router-log')
+const AUTO_ROUTER_TABLE = path.join(TEST_DATA, 'auto-router.table.json')
+writeFileSync(AUTO_ROUTER_TABLE, JSON.stringify({
+  v: 1,
+  models: {
+    'anthropic/claude-opus-5-5': { quality: { coding: 0.96, quick: 0.6, research: 0.7, long_context: 0.5, vision: 0.3, writing: 0.6, other: 0.65 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 1800 },
+    'anthropic/claude-sonnet-5-5': { quality: { coding: 0.75, quick: 0.75, research: 0.65, long_context: 0.55, vision: 0.35, writing: 0.7, other: 0.65 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 1400 },
+    'anthropic/claude-haiku-5-5': { quality: { coding: 0.55, quick: 0.9, research: 0.5, long_context: 0.4, vision: 0.25, writing: 0.55, other: 0.6 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 700 },
+  },
+}))
+writeFileSync(TEST_CONFIG, JSON.stringify({
+  ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'], subscriptionProviders: ['kimi-coding'] },
+  localChat: { model: 'modele-local:7b', name: 'Modèle local' },
+  modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` },
+  features: { usageGlobal: true, vaultWallet: true, pagesLibrary: true },
+  computerPanel: { enabled: true, cdpOrigin: E2E_CDP_ORIGIN },
+  pagesLibraryDir: path.join(TEST_DATA, 'pages-library'),
+  usageQuotas: [{ id: 'kimi-coding', label: 'Kimi', windowHours: 5, tokenLimit: 200_000, modelPrefixes: ['kimi-coding'] }],
+  autoRouter: { enabled: true, tablePath: AUTO_ROUTER_TABLE, logDir: AUTO_ROUTER_LOG },
+  routines: { editable: true, eventTriggers: true },
+}))
 // Models the simulated proxy answered (tiny live check before a switch).
 const modelProbeCalls = []
 const scoresCalls = []
@@ -172,9 +192,12 @@ const fakeProfileConfigs = {
   // Orion sets nothing: Hermes's own defaults apply to it.
 }
 const configWrites = []
+const fakeFsTexts = {}
 const compressCalls = []
 let configFailProfile = ''
 const remoteRequests = []
+const fakeCronJobs = [{ id: 'routine-test', name: 'Nova: Routine test', enabled: true, schedule_display: '0 9 * * *', schedule: { expr: '0 9 * * *', display: '0 9 * * *' }, next_run_at: '2025-01-07T02:00:00Z', prompt: 'ping', prompt_preview: 'ping' }]
+const cronWrites = []
 
 function serveMediaFixture(request, response, url, route) {
   const file = url.searchParams.get('path') || ''
@@ -346,25 +369,87 @@ const mock = http.createServer((request, response) => {
       const body = JSON.parse(raw || '{}')
       configWrites.push({ profile, body, origin: request.headers.origin })
       // Hermes deep-merges the body over the profile's config.
-      fakeProfileConfigs[profile] = { ...fakeProfileConfigs[profile], compression: { ...fakeProfileConfigs[profile]?.compression, ...body.config?.compression } }
+      const previous = fakeProfileConfigs[profile] || {}
+      const next = { ...previous, ...body.config, compression: { ...previous.compression, ...body.config?.compression }, toolsets: { ...previous.toolsets, ...body.config?.toolsets }, skills: { ...previous.skills, ...body.config?.skills } }
+      fakeProfileConfigs[profile] = next
       response.end(JSON.stringify({ ok: true }))
     })
     return
   }
-  if (url.pathname === '/api/cron/jobs') return response.end(JSON.stringify([{ id: 'routine-test', name: 'Nova: Routine test', enabled: true, schedule_display: '0 9 * * *', next_run_at: '2025-01-07T02:00:00Z' }]))
+  if (url.pathname === '/api/cron/jobs') {
+    const profile = url.searchParams.get('profile') || ''
+    cronWrites.push({ method: request.method, profile, path: url.pathname })
+    if (request.method === 'GET') return response.end(JSON.stringify(fakeCronJobs))
+    if (request.method === 'POST') {
+      let raw = ''
+      request.on('data', (chunk) => { raw += chunk })
+      request.on('end', () => {
+        const body = JSON.parse(raw || '{}')
+        const job = { id: `cron-${fakeCronJobs.length + 1}`, name: body.name || 'Routine', prompt: body.prompt || '', enabled: true, schedule_display: body.schedule, schedule: { expr: body.schedule, display: body.schedule }, next_run_at: '2025-01-08T02:00:00Z' }
+        fakeCronJobs.push(job)
+        response.end(JSON.stringify(job))
+      })
+      return
+    }
+    response.statusCode = 405
+    return response.end('{}')
+  }
+  const cronPause = url.pathname.match(/^\/api\/cron\/jobs\/([^/]+)\/(pause|resume|trigger)$/)
+  if (cronPause && request.method === 'POST') {
+    cronWrites.push({ method: request.method, profile: url.searchParams.get('profile') || '', path: url.pathname })
+    const job = fakeCronJobs.find((item) => item.id === cronPause[1])
+    if (!job) { response.statusCode = 404; return response.end('{}') }
+    if (cronPause[2] === 'pause') job.enabled = false
+    if (cronPause[2] === 'resume') job.enabled = true
+    return response.end(JSON.stringify(job))
+  }
+  const cronDelete = url.pathname.match(/^\/api\/cron\/jobs\/([^/]+)$/)
+  if (cronDelete && request.method === 'DELETE') {
+    cronWrites.push({ method: request.method, profile: url.searchParams.get('profile') || '', path: url.pathname })
+    const index = fakeCronJobs.findIndex((item) => item.id === cronDelete[1])
+    if (index < 0) { response.statusCode = 404; return response.end('{}') }
+    fakeCronJobs.splice(index, 1)
+    return response.end(JSON.stringify({ ok: true }))
+  }
+  if (cronDelete && request.method === 'GET') {
+    const job = fakeCronJobs.find((item) => item.id === cronDelete[1])
+    if (!job) { response.statusCode = 404; return response.end('{}') }
+    return response.end(JSON.stringify(job))
+  }
+  if (cronDelete && request.method === 'PUT') {
+    let raw = ''
+    request.on('data', (chunk) => { raw += chunk })
+    request.on('end', () => {
+      cronWrites.push({ method: request.method, profile: url.searchParams.get('profile') || '', path: url.pathname })
+      const job = fakeCronJobs.find((item) => item.id === cronDelete[1])
+      if (!job) { response.statusCode = 404; return response.end('{}') }
+      const body = JSON.parse(raw || '{}')
+      Object.assign(job, body.updates || {})
+      response.end(JSON.stringify(job))
+    })
+    return
+  }
   // The settings file the Mac and iPhone apps share, on the gateway's machine.
   if (url.pathname === '/api/fs/read-text' || url.pathname === '/api/fs/write-text') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
     if (url.pathname === '/api/fs/read-text') {
-      if (url.searchParams.get('path') !== '~/.hermes/hermesbot-settings.json' || sharedSettingsFile === null) { response.statusCode = 404; return response.end(JSON.stringify({ detail: 'Not found' })) }
-      return response.end(JSON.stringify({ text: sharedSettingsFile, path: '/Users/test/.hermes/hermesbot-settings.json' }))
+      const fsPath = url.searchParams.get('path') || ''
+      if (fsPath === '~/.hermes/hermesbot-settings.json') {
+        if (sharedSettingsFile === null) { response.statusCode = 404; return response.end(JSON.stringify({ detail: 'Not found' })) }
+        return response.end(JSON.stringify({ text: sharedSettingsFile, path: '/Users/test/.hermes/hermesbot-settings.json' }))
+      }
+      if (fsPath in fakeFsTexts) return response.end(JSON.stringify({ text: fakeFsTexts[fsPath], path: fsPath }))
+      if (fsPath.endsWith('/SOUL.md')) return response.end(JSON.stringify({ text: fakeFsTexts[fsPath] || '# Soul\n', path: fsPath }))
+      response.statusCode = 404
+      return response.end(JSON.stringify({ detail: 'Not found' }))
     }
     let raw = ''
     request.on('data', (chunk) => { raw += chunk })
     request.on('end', () => {
       const body = JSON.parse(raw || '{}')
-      if (body.path !== '~/.hermes/hermesbot-settings.json') { response.statusCode = 403; return response.end('{}') }
-      sharedSettingsFile = body.content
+      if (body.path !== '~/.hermes/hermesbot-settings.json' && !String(body.path || '').endsWith('/SOUL.md')) { response.statusCode = 403; return response.end('{}') }
+      if (body.path === '~/.hermes/hermesbot-settings.json') sharedSettingsFile = body.content
+      else fakeFsTexts[body.path] = body.content
       sharedSettingsWrites.push(JSON.parse(body.content))
       response.end(JSON.stringify({ ok: true }))
     })
@@ -392,6 +477,7 @@ let configureConflicts = 0
 // A gateway that does not know the method.
 let configureMissing = false
 let promptCalls = 0
+let autoRouteFailOnce = false
 // New bot (the "+" of the sidebar): `profiles.create` as Hermes answers it, the lazy Bot Chat it gets, its first turn.
 const createCalls = []
 const sessionCreateCalls = []
@@ -610,8 +696,8 @@ wss.on('connection', (socket) => {
         const content = String(frame.params.payload?.text || '')
         roomSendCalls.push(structuredClone(frame.params))
         if (room.sent.has(eventId)) return reply({ event: room.sent.get(eventId), client_event_id: eventId, accepted: true, driver_started: true })
-        if (content === 'Refus salon') return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4001, message: 'not_admitted', data: { admitted: false } } })
-        if (content === 'Réessayer salon' && !room.attempts.has(eventId)) {
+        if (content.includes('Refus salon')) return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4001, message: 'not_admitted', data: { admitted: false } } })
+        if (content.includes('Réessayer salon') && !room.attempts.has(eventId)) {
           room.attempts.add(eventId)
           return send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 5000, message: 'reply_lost', data: {} } })
         }
@@ -619,7 +705,7 @@ wss.on('connection', (socket) => {
         const event = pushRoomEvent(room, 'message.user', { kind: 'user', id: 'desktop' }, { text: content, thread_id: room.threadId, attachments: [] })
         room.sent.set(eventId, event)
         // This one keeps a member working until Stop, so the menu can offer Stop without racing the replies.
-        if (content === 'Menu salon') room.activity = [{ member_id: room.members[0].member_id, status: 'running', round_index: 0, thread_id: room.threadId, started_at: Math.floor(Date.now() / 1000) }]
+        if (content.includes('Menu salon')) room.activity = [{ member_id: room.members[0].member_id, status: 'running', round_index: 0, thread_id: room.threadId, started_at: Math.floor(Date.now() / 1000) }]
         else scheduleRoomReplies(room)
         return reply({ event, client_event_id: eventId, accepted: true, driver_started: true })
       }
@@ -708,6 +794,18 @@ wss.on('connection', (socket) => {
               ].join('\n'),
             },
             { row_id: 36, role: 'user', content: `[The user sent an image~ Here's what I can see:\nUne capture d'écran.]\n[If you need a closer look, use vision_analyze with image_url: /Users/test/cache/upload_envoi.png ~]\n\nRegarde avec @nova\n\n@file:attachments/ancien.pdf\n\n[@mentions resolved from the Bot Mode roster — the user is referring to: @nova = agent profile "nova" ("Nova"). If they want one of these agents contacted, compose your own message.]`, timestamp: Date.now() - 38_000 },
+            {
+              row_id: 365, role: 'assistant', timestamp: Date.now() - 37_500,
+              content: [
+                'Pour régler, utilise ce formulaire sécurisé :',
+                '',
+                '```hermes-vault-form',
+                'id: e2e-billing',
+                'title: Paiement test',
+                '- key: pan kind: card label: Carte bancaire',
+                '```',
+              ].join('\n'),
+            },
             { row_id: 37, role: 'assistant', content: 'Les documents :\n\nMEDIA:/Users/test/docs/rapport.pdf\n\nMEDIA:/Users/test/docs/page.html\n\nMEDIA:/Users/test/docs/note.md', timestamp: Date.now() - 37_000 },
             // Output quoted by path, without MEDIA:, as some bots do.
             { row_id: 38, role: 'assistant', content: 'Rendu prêt, rien de publié.\n\n**Fichiers** (dossier `/Users/test/visuels/`)\n- Vidéo : `/Users/test/videos/video.mp4`, 57 s.\n- Planche : `slide-02.png`\n- Manquante : `absente.png`\n\n```\nls /Users/test/videos/exemple-cite.mp4\n```', timestamp: Date.now() - 36_000 },
@@ -796,6 +894,25 @@ wss.on('connection', (socket) => {
       return reply({ attached: true, path: `/x/${frame.params.filename}`, mime: 'image/png' })
     }
     if (frame.method === 'session.usage') return reply({ context_used: 41_000, context_max: 1_000_000, context_percent: 4.1, avg_tps: 62.6, total: 500 })
+    if (frame.method === 'mcp.servers.list') {
+      return reply({ servers: [{ name: 'notion', transport: 'http', url: 'https://mcp.notion.com/mcp', args: [], env: [], auth: 'oauth', oauth_tokens_present: false, enabled: true, source: 'config' }] })
+    }
+    if (frame.method === 'mcp.servers.status') {
+      return reply({ servers: [{ name: 'notion', status: 'configured' }], checked_at: Date.now() })
+    }
+    if (frame.method === 'mcp.servers.add') return reply({ ok: true, name: frame.params.name, server: { name: frame.params.name, enabled: true, transport: 'http', args: [], env: [], auth: 'oauth' } })
+    if (frame.method === 'mcp.servers.oauth.start') return reply({ ok: true, session_id: 'oauth-test', auth_url: 'https://example.test/oauth', flow: 'pkce' })
+    if (frame.method === 'mcp.servers.oauth.poll') return reply({ ok: true, status: 'approved' })
+    if (frame.method === 'mcp.servers.remove') return reply({ ok: true, removed: true })
+    if (frame.method === 'mcp.servers.set_api_key') return reply({ ok: true, name: frame.params.name, env_var: frame.params.env_var || 'API_KEY' })
+    if (frame.method === 'mcp.servers.test') return reply({ ok: true, oauth_needed: false })
+    if (frame.method === 'skills.manage' && frame.params?.action === 'install') {
+      return reply({ installed: true, name: frame.params.query || 'skill' })
+    }
+    if (frame.method === 'config.get') {
+      const key = frame.params?.key
+      return reply({ key, value: key === 'approvals.mode' ? 'smart' : '' })
+    }
     if (frame.method === 'prompt.submit') {
       if (frame.params.queued === true) {
         queuedPrompts.push({ text: frame.params.text, apiText: frame.params.api_text })
@@ -865,6 +982,18 @@ wss.on('connection', (socket) => {
       if (frame.params.text === 'Test question') {
         at(30, 'message.start', { turn_id: 'turn-question' })
         at(90, 'clarify.request', { kind: 'clarify', prompt_id: 'q1', execution_generation: 1, question: 'Pour quel post ?', choices: ['Post A', 'Post B'], multi_select: false, timeout_s: 3600 })
+        return
+      }
+      if (frame.params.text === 'Test accord') {
+        at(30, 'message.start', { turn_id: 'turn-approval-inturn' })
+        liveStatusByProfile[frame.params.profile] = 'waiting'
+        at(90, 'approval.request', { kind: 'approval', prompt_id: 'ap-inturn', execution_generation: 1, command: 'rm -rf /tmp/hermes-e2e-approval', description: 'Suppression du dossier de test', choices: ['once', 'always', 'deny'] })
+        return
+      }
+      if (frame.params.text === 'Test brouillon') {
+        const draft = ['````hermes-draft', 'Id: draft-e2e', 'Channel: x', 'Recipient: @contact', 'Thread:', 'Attachments:', '', 'Texte du brouillon.', '````'].join('\n')
+        at(30, 'message.start', { turn_id: 'turn-draft' })
+        at(300, 'message.complete', { turn_id: 'turn-draft', text: `Brouillon à valider :\n\n${draft}`, status: 'complete' })
         return
       }
       if (frame.params.text === 'Test pilotage') {
@@ -1065,6 +1194,21 @@ wss.on('connection', (socket) => {
         at(300, 'message.complete', { turn_id: 'turn-places-inertes', text, status: 'complete' })
         return
       }
+      if (frame.params.text === 'Test auto route fallback') {
+        at(30, 'message.start', { turn_id: 'turn-auto-fallback' })
+        if (autoRouteFailOnce) {
+          autoRouteFailOnce = false
+          at(80, 'message.complete', { turn_id: 'turn-auto-fallback', text: '', status: 'error', error: { code: 'rate_limit_exceeded', message: '429 rate limit' } })
+          return
+        }
+        at(80, 'message.complete', {
+          turn_id: 'turn-auto-fallback',
+          text: 'Auto route OK.',
+          status: 'complete',
+          usage: { input_tokens: 120, output_tokens: 40, prompt_tokens: 120, completion_tokens: 40 },
+        })
+        return
+      }
       setTimeout(() => send(socket, event(sessionId, 'message.start', { turn_id: 'turn-test' })), 30)
       setTimeout(() => send(socket, event(sessionId, 'message.delta', { turn_id: 'turn-test', text: 'Réponse ' })), 60)
       setTimeout(() => send(socket, event(sessionId, 'message.delta', { turn_id: 'turn-test', text: 'Hermes simulée.' })), 90)
@@ -1097,6 +1241,11 @@ wss.on('connection', (socket) => {
       if (frame.params.prompt_id === 'q3') at(80, 'message.complete', { turn_id: 'turn-question', text: 'Images prêtes.', status: 'complete' })
       if (frame.params.prompt_id === 'qv') at(80, 'message.complete', { turn_id: 'turn-voice-choice', text: 'Version longue lancée.', status: 'complete' })
       if (frame.params.prompt_id === 'q-reprise') at(80, 'message.complete', { turn_id: 'turn-reprise', text: 'Reprise terminée.', status: 'complete' })
+      if (frame.params.prompt_id === 'ap-inturn') {
+        delete liveStatusByProfile[frame.params.profile]
+        at(80, 'message.complete', { turn_id: 'turn-approval-inturn', text: frame.params.choice === 'deny' ? 'Commande refusée.' : 'Commande autorisée.', status: 'complete' })
+      }
+      if (frame.params.prompt_id === 'ap-resume') at(80, 'message.complete', { turn_id: 'turn-approval-resume', text: 'Accord repris.', status: 'complete' })
       return
     }
     send(socket, { jsonrpc: '2.0', id: frame.id, error: { code: 4000, message: `unknown ${frame.method}` } })
@@ -1134,10 +1283,24 @@ cdpWss.on('connection', (socket, request) => {
   socket.on('message', (raw) => {
     const frame = JSON.parse(String(raw))
     const { id, method, params } = frame
+    if (method === 'Page.enable' || method === 'Page.startScreencast' || method === 'Page.stopScreencast') {
+      send(socket, { id, result: {} })
+      if (method === 'Page.startScreencast') {
+        socket.send(JSON.stringify({
+          method: 'Page.screencastFrame',
+          params: { data: Buffer.from('fake-jpeg').toString('base64'), sessionId: 's-e2e', metadata: { deviceWidth: 960, deviceHeight: 720 } },
+        }))
+      }
+      return
+    }
+    if (method === 'Page.screencastFrameAck') return
     if (method === 'Runtime.evaluate') {
       cdpExpressions.push(params.expression)
       if (params.expression === 'window.location.origin') {
         return send(socket, { id, result: { result: { type: 'string', value: new URL(cdpUrl).origin } } })
+      }
+      if (String(params.expression || '').includes('location.href')) {
+        return send(socket, { id, result: { result: { value: { url: cdpUrl, title: 'Page test' } } } })
       }
       if (params.expression.includes('federated sign-in')) return send(socket, { id, result: { result: { type: 'object', value: cdpSso } } })
       return send(socket, { id, result: { result: { type: 'object', objectId: 'champs-actifs' } } })
@@ -1352,7 +1515,7 @@ try {
   const roomId = await page.locator('.room-row.is-selected').getAttribute('data-room')
   if (!roomId) throw new Error('Le salon créé est absent du roster.')
   const roomBox = page.getByRole('textbox', { name: 'Message au salon' })
-  await roomBox.fill('Plan salon')
+  await roomBox.fill('@nova @orion Plan salon')
   await roomBox.press('Enter')
   await roomPanel.locator('.room-user-message').getByText('Plan salon').waitFor({ timeout: 5_000 })
   await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
@@ -1366,24 +1529,24 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}room-conversation.png` })
 
   // An indeterminate answer keeps the exact event and thread IDs; the second attempt commits once.
-  await roomBox.fill('Réessayer salon')
+  await roomBox.fill('@nova Réessayer salon')
   await roomBox.press('Enter')
   await roomPanel.locator('.room-pending').waitFor({ timeout: 5_000 })
   await roomPanel.locator('.room-pending').click()
   await roomPanel.locator('.room-pending').waitFor({ state: 'detached', timeout: 5_000 })
-  const retryCalls = roomSendCalls.filter((params) => params.payload.text === 'Réessayer salon')
+  const retryCalls = roomSendCalls.filter((params) => params.payload.text === '@nova Réessayer salon')
   if (retryCalls.length !== 2 || retryCalls[0].event_id !== retryCalls[1].event_id || retryCalls[0].payload.thread_id !== retryCalls[1].payload.thread_id) throw new Error(`Identifiants du retry de salon : ${JSON.stringify(retryCalls)}`)
   await roomPanel.locator('.room-notice.is-settled').last().waitFor({ timeout: 8_000 })
 
   // A pre-commit refusal returns the words to the composer without a pending retry.
-  await roomBox.fill('Refus salon')
+  await roomBox.fill('@nova Refus salon')
   await roomBox.press('Enter')
   await roomPanel.locator('.room-error').getByText('Hermes n’a pas publié le message.').waitFor({ timeout: 5_000 })
   if (await roomPanel.locator('.room-pending').count()) throw new Error('Un refus avant publication laisse un retry incertain.')
-  if (await roomBox.isDisabled() || await roomBox.inputValue() !== 'Refus salon') throw new Error('Le texte refusé doit rester modifiable.')
+  if (await roomBox.isDisabled() || await roomBox.inputValue() !== '@nova Refus salon') throw new Error('Le texte refusé doit rester modifiable.')
 
   // Stop uses the native room method and leaves a visible notice.
-  await roomBox.fill('Arrêter salon')
+  await roomBox.fill('@nova Arrêter salon')
   await roomBox.press('Enter')
   await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
   await page.getByRole('button', { name: 'Arrêter le salon', exact: true }).click()
@@ -1422,7 +1585,7 @@ try {
   if (await page.evaluate(() => navigator.clipboard.readText()) !== roomId) throw new Error('L’ID du salon copié n’est pas celui du salon.')
   await roomMenu.waitFor({ state: 'detached', timeout: 3_000 })
   // Stop is offered only while the room works, and goes through groups.stop.
-  await roomBox.fill('Menu salon')
+  await roomBox.fill('@nova Menu salon')
   await roomBox.press('Enter')
   await roomPanel.locator('.room-member-chip.is-active').first().waitFor({ timeout: 5_000 })
   await openRoomMenu()
@@ -1659,6 +1822,33 @@ try {
   await page.locator('.media-document').getByText('rapport.pdf').click()
   await page.locator('.rail-tab.is-active').getByText('rapport.pdf').waitFor({ timeout: 3_000 })
   await page.locator('.details-panel.has-document iframe[src*="rapport.pdf"]').waitFor({ timeout: 5_000 })
+  // Feature flags: pages library records opened documents (leave the document rail tab first).
+  await page.getByRole('tab', { name: 'Le bot' }).click()
+  await page.getByRole('tab', { name: 'Bibliothèque' }).click()
+  await page.locator('.pages-library-list .pages-library-open').filter({ hasText: 'rapport.pdf' }).waitFor({ timeout: 5_000 })
+  const libraryPath = path.join(TEST_DATA, 'pages-library', 'orion', 'index.json')
+  if (!existsSync(libraryPath)) throw new Error('Bibliothèque : index absent sur disque.')
+  const libraryIndex = JSON.parse(readFileSync(libraryPath, 'utf8'))
+  if (!libraryIndex.some((item) => String(item.path).includes('rapport.pdf'))) throw new Error('Bibliothèque : rapport.pdf non persisté.')
+  const pagesClosed = await page.evaluate(async () => {
+    const response = await fetch('/api/pages-library?profile=orion', { credentials: 'same-origin' })
+  return response.json()
+  })
+  if (!pagesClosed.items?.some((item) => String(item.path).includes('rapport.pdf'))) throw new Error('Bibliothèque : API sans rapport.pdf.')
+  // Computer panel: live screencast from mock CDP when the flag is on.
+  await page.getByRole('tab', { name: 'Ordinateur' }).click()
+  await page.waitForFunction(() => Boolean(document.querySelector('.computer-panel-view img')?.getAttribute('src')?.includes('base64')), null, { timeout: 10_000 })
+  if (await page.locator('.computer-panel-url').getByText(cdpUrl).count() === 0) throw new Error('Panneau Ordinateur : URL CDP absente.')
+  // Secure vault form in chat: values stay in the vault, only refs in the acknowledgement.
+  await page.locator('.messages-scroll .secure-vault-card').scrollIntoViewIfNeeded()
+  await page.locator('.secure-vault-card input[placeholder="Numéro de carte"]').fill('4000 0000 0000 9999')
+  await page.locator('.secure-vault-card input[placeholder="Nom sur la carte"]').fill('Test E2E')
+  await page.locator('.secure-vault-card input[placeholder="MM/AA"]').fill('12/30')
+  const vaultCardSubmit = page.locator('.secure-vault-card').getByRole('button', { name: 'Enregistrer dans le coffre' })
+  await vaultCardSubmit.click()
+  await page.locator('.message-user').getByText(/hbvault:card:/).waitFor({ timeout: 6_000 })
+  if (await page.locator('.messages-scroll').getByText('9999').count()) throw new Error('PAN visible dans le fil après formulaire sécurisé.')
+  if (serverLog.includes('4000 0000 0000 9999')) throw new Error('PAN dans les logs du serveur.')
   await page.locator('.media-document').getByText('page.html').click()
   await page.locator('.rail-tab.is-active').getByText('page.html').waitFor({ timeout: 3_000 })
   const htmlFrame = page.frameLocator('iframe[sandbox="allow-scripts"]')
@@ -1731,7 +1921,7 @@ try {
   if (!lastApiText?.includes('[HermesBot mode: PLAN.')) throw new Error(`api_text PLAN : ${lastApiText}`)
   await modeRadio('EXEC').click()
   await sendInMode('Test mode exec')
-  if (lastApiText !== undefined) throw new Error(`EXEC ne doit rien ajouter : ${lastApiText}`)
+  if (lastApiText !== undefined && lastApiText !== 'Test mode exec' && !lastApiText.includes('[HermesBot turn style: background task.')) throw new Error(`EXEC ne doit ajouter que la consigne tâche de fond optionnelle : ${lastApiText}`)
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}modes.png` })
 
@@ -1773,7 +1963,7 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}delivery.png` })
   await page.getByRole('button', { name: 'Envoyer en priorité' }).click()
   for (let attempt = 0; attempt < 40 && !interruptCalls.length; attempt += 1) await delay(25)
-  if (queuedPrompts[1]?.text !== 'Et ajoute le tableau' || !queuedPrompts[1].apiText?.startsWith('Et ajoute le tableau\n\n[HermesBot priority:')) throw new Error(`Prio : ${JSON.stringify(queuedPrompts[1])}`)
+  if (queuedPrompts[1]?.text !== 'Et ajoute le tableau' || !queuedPrompts[1].apiText?.includes('[HermesBot priority:')) throw new Error(`Prio : ${JSON.stringify(queuedPrompts[1])}`)
   if (interruptCalls[0]?.session_id !== 'chat-orion' || interruptCalls[0].execution_generation !== 1) throw new Error(`Interruption : ${JSON.stringify(interruptCalls)}`)
   await page.locator('.message-user').filter({ hasText: 'Et ajoute le tableau' }).locator('.message-delivery').getByText('Prioritaire').waitFor({ timeout: 2_000 })
   await page.locator('.message-assistant').getByText('Pilotage terminé.').waitFor({ timeout: 4_000 })
@@ -2198,10 +2388,10 @@ try {
 
   // Media tab: what the bot sent, documents included, excluding code examples.
   await page.getByRole('tab', { name: 'Médias' }).click()
-  await page.locator('.media-library .media-document').getByText('note.md').waitFor({ timeout: 3_000 })
-  await page.locator('.media-library img.media-image').first().waitFor({ timeout: 3_000 })
-  if (await page.locator('.media-library').getByText('exemple-de-syntaxe').count()) throw new Error('Un exemple de code est listé dans les médias.')
-  await page.locator('.media-library .media-document').getByText('rapport.pdf').click()
+  await page.locator('.media-gallery-grid .media-document').getByText('note.md').waitFor({ timeout: 3_000 })
+  await page.locator('.media-gallery-grid img.media-image').first().waitFor({ timeout: 3_000 })
+  if (await page.locator('.media-gallery-grid').getByText('exemple-de-syntaxe').count()) throw new Error('Un exemple de code est listé dans les médias.')
+  await page.locator('.media-gallery-grid .media-document').getByText('rapport.pdf').click()
   await page.locator('.rail-tab.is-active').getByText('rapport.pdf').waitFor({ timeout: 3_000 })
   await page.getByRole('button', { name: 'Fermer rapport.pdf' }).click()
   await page.getByRole('tab', { name: 'Routines' }).click()
@@ -2337,10 +2527,53 @@ try {
   for (const client of wss.clients) send(client, event('chat-orion', 'request.cancel', { id: 'srq-unlock', method: 'vault.unlock_prompt', reason: 'timeout' }))
   await sheet.waitFor({ state: 'detached', timeout: 3_000 })
   ask('srq-ok', 'approval', { request_id: 'r1', command: 'commande de test', description: 'Action à valider', choices: ['once', 'session', 'deny'] })
-  await sheet.getByText('commande de test').waitFor({ timeout: 3_000 })
-  await sheet.getByRole('button', { name: 'Autoriser une fois' }).click()
+  const approvalCard = page.locator('.prompt-card').filter({ hasText: 'commande de test' })
+  await approvalCard.getByText('commande de test').waitFor({ timeout: 3_000 })
+  await approvalCard.getByRole('button', { name: 'Autoriser une fois' }).click()
   if ((await answerOf('srq-ok')).result.choice !== 'once') throw new Error('Choix d’accord incorrect.')
-  await sheet.waitFor({ state: 'detached', timeout: 2_000 })
+  await approvalCard.waitFor({ state: 'detached', timeout: 2_000 })
+  // In-turn approval (approval.request): allow once, then deny; the card waits for approval.settled.
+  const approvalDenyCalls = promptAnswers.length
+  await orionBox.fill('Test accord')
+  await orionBox.press('Enter')
+  const inTurnCard = page.locator('.prompt-card').filter({ hasText: 'rm -rf /tmp/hermes-e2e-approval' })
+  await inTurnCard.waitFor({ timeout: 4_000 })
+  await inTurnCard.getByRole('button', { name: 'Autoriser une fois' }).click()
+  await page.locator('.message-assistant').getByText('Commande autorisée.').waitFor({ timeout: 4_000 })
+  await inTurnCard.waitFor({ state: 'detached', timeout: 2_000 })
+  const inTurnAllow = promptAnswers.slice(approvalDenyCalls).find((row) => row.method === 'approval.respond' && row.prompt_id === 'ap-inturn')
+  if (!inTurnAllow || inTurnAllow.choice !== 'once') throw new Error(`Accord en fil : ${JSON.stringify(promptAnswers.slice(approvalDenyCalls))}`)
+  const denyFrom = promptAnswers.length
+  await orionBox.fill('Test accord')
+  await orionBox.press('Enter')
+  const denyCard = page.locator('.prompt-card').filter({ hasText: 'rm -rf /tmp/hermes-e2e-approval' })
+  await denyCard.waitFor({ timeout: 4_000 })
+  await denyCard.getByRole('button', { name: 'Refuser' }).click()
+  await page.locator('.message-assistant').getByText('Commande refusée.').waitFor({ timeout: 4_000 })
+  await denyCard.waitFor({ state: 'detached', timeout: 2_000 })
+  const inTurnDeny = promptAnswers.slice(denyFrom).find((row) => row.method === 'approval.respond' && row.prompt_id === 'ap-inturn')
+  if (!inTurnDeny || inTurnDeny.choice !== 'deny') throw new Error(`Refus en fil : ${JSON.stringify(promptAnswers.slice(denyFrom))}`)
+  // Open approval restored on session resume (reopen the bot like after a reconnect).
+  resumePrompts['chat-orion'] = [{ kind: 'approval', prompt_id: 'ap-resume', execution_generation: 1, command: 'curl https://exemple.test/script', description: 'Téléchargement risqué', choices: ['once', 'deny'] }]
+  liveStatusByProfile.orion = 'waiting'
+  await page.locator('[data-bot=nova]').click()
+  await page.locator('[data-bot=orion]').click()
+  const resumeApproval = page.locator('.prompt-card').filter({ hasText: 'curl https://exemple.test/script' })
+  await resumeApproval.waitFor({ timeout: 6_000 })
+  delete resumePrompts['chat-orion']
+  delete liveStatusByProfile.orion
+  await resumeApproval.getByRole('button', { name: 'Refuser' }).click()
+  await page.locator('.message-assistant').getByText('Accord repris.').waitFor({ timeout: 4_000 })
+  await resumeApproval.waitFor({ state: 'detached', timeout: 2_000 })
+  // Background bot: approval notification while another chat is open.
+  const sentBeforeBgApproval = (await notificationsSent()).length
+  await page.locator('[data-bot=nova]').click()
+  liveStatusByProfile.orion = 'waiting'
+  for (const client of wss.clients) send(client, event('chat-orion', 'approval.request', { kind: 'approval', prompt_id: 'ap-bg', execution_generation: 1, command: 'chmod -R 777 /tmp', description: 'Permission large', choices: ['once', 'deny'] }))
+  const bgApproval = await notificationsSince(sentBeforeBgApproval)
+  if (bgApproval.length !== 1 || bgApproval[0].body !== 'Attend ton approbation') throw new Error(`Notification d’accord en arrière-plan : ${JSON.stringify(bgApproval)}`)
+  for (const client of wss.clients) send(client, event('chat-orion', 'approval.settled', { prompt_id: 'ap-bg', execution_generation: 1 }))
+  delete liveStatusByProfile.orion
   // A request this app does not answer gets no frame at all: on the gateway, any answer (even an error)
   // settles it for every other client, which would close the same card in another app.
   ask('srq-non-gere', 'clarify', { question: 'Question ?' })
@@ -2349,6 +2582,7 @@ try {
   if (clientResponses.has('srq-non-gere') || clientResponses.has('srq-fenetre')) throw new Error('Une demande non gérée a reçu une réponse.')
   // A request left open comes back when the session resumes.
   openRequests = [{ id: 'srq-reprise', method: 'vault.code', params: { session_id: 'chat-nova', site: 'reprise.test' } }]
+  await page.locator('[data-bot=orion]').click()
   await page.locator('[data-bot=nova]').click()
   await sheet.getByText('Code de vérification pour reprise.test').waitFor({ timeout: 5_000 })
   openRequests = []
@@ -2483,7 +2717,8 @@ try {
   const dockedContext = browserSheet.locator('.request-context')
   await dockedContext.getByText('Code à usage unique').waitFor({ timeout: 2_000 })
   if (await dockedContext.getByText('Orion', { exact: true }).count() !== 1) throw new Error('Le bot demandeur manque dans le rappel.')
-  if (!(await browserSheet.locator('.request-excerpt blockquote').innerText()).includes('Étape terminée.')) throw new Error('Le dernier message du bot manque dans la demande.')
+  const vaultExcerpt = await browserSheet.locator('.request-excerpt blockquote').innerText()
+  if (!['Commande refusée.', 'Étape terminée.', 'Accord repris.'].some((snippet) => vaultExcerpt.includes(snippet))) throw new Error(`Le dernier message du bot manque dans la demande : ${vaultExcerpt}`)
   // Minimize, then restore: the typed code stays.
   await codeInput.fill(BROWSER_CODE)
   await browserSheet.getByRole('button', { name: 'Réduire' }).click()
@@ -2575,6 +2810,15 @@ try {
   // Settings > Vault: the identifier shows without a password, Nova is authorized in addition to Orion.
   await page.keyboard.press('Meta+,')
   await page.locator('.settings-nav').getByRole('button', { name: 'Coffre' }).click()
+  // Vault wallet (cards): masked listing, nothing full in the DOM.
+  await page.locator('.vault-wallet-section').getByRole('button', { name: 'Ajouter une carte' }).click()
+  await page.locator('.vault-wallet-form input[name="label"]').fill('Carte E2E')
+  await page.locator('.vault-wallet-form input[name="holder"]').fill('Test Holder')
+  await page.locator('.vault-wallet-form input[name="number"]').fill('4111111111114242')
+  await page.locator('.vault-wallet-form input[name="expiry"]').fill('12/30')
+  await page.locator('.vault-wallet-form').getByRole('button', { name: 'Enregistrer' }).click()
+  await page.locator('.vault-wallet-list').getByText('4242').waitFor({ timeout: 5_000 })
+  if (await page.locator('.vault-wallet-section').getByText('4111').count()) throw new Error('Numéro de carte complet visible dans Réglages.')
   const vaultEntry = page.locator('.vault-entry').filter({ hasText: 'store.steampowered.com' })
   await vaultEntry.getByText('steam-test · Orion').waitFor({ timeout: 5_000 })
   if (await page.locator('.settings').getByText(BROWSER_SECRET).count()) throw new Error('Mot de passe visible dans les réglages.')
@@ -2882,13 +3126,15 @@ try {
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   await page.locator('.working-caption').getByText('Lance une commande').waitFor({ timeout: 3_000 })
   await page.locator('.working-row .live-avatar.is-working').waitFor({ timeout: 2_000 })
-  if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('Une étape du bot est restée dans le fil.')
+  await page.locator('.progress-bubble').getByText('Je regarde le code.').waitFor({ timeout: 3_000 })
+  if (await page.locator('.message-assistant .message-content').getByText('Je regarde le code.').count()) throw new Error('Une étape du bot est restée dans une bulle de réponse.')
   await page.locator('.working-caption').getByText('Je regarde le code.').waitFor({ timeout: 6_000 })
   await page.locator('.working-row').screenshot({ path: `${SCREENSHOTS}working-line.png` })
   await page.locator('.message-assistant').getByText('Les tests passent.').waitFor({ timeout: 8_000 })
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
   if (await page.locator('.message-assistant').count() !== stepsBefore + 1) throw new Error('Un tour avec étapes doit laisser un seul message du bot.')
-  if (await page.locator('.messages-column').getByText('Je regarde le code.').count()) throw new Error('L’étape est réapparue à la fin du tour.')
+  if (await page.locator('.message-assistant .message-content').getByText('Je regarde le code.').count()) throw new Error('L’étape est réapparue dans la réponse finale.')
+  if (!(await page.locator('.progress-turn.is-collapsed .progress-bubble').count())) throw new Error('Les étapes doivent être regroupées sous la réponse.')
   if (await page.locator('.details-panel').isVisible()) {
     await page.locator('.details-panel').getByRole('tab', { name: /Activité/ }).click()
     await page.locator('.details-panel').screenshot({ path: `${SCREENSHOTS}details-activity.png` })
@@ -3071,6 +3317,23 @@ try {
   const routines = await page.locator('.routine-row').count()
   if (routines !== 1) throw new Error(`Routines: ${routines} au lieu de 1`)
 
+  const routineEventBind = await fetch(`${E2E_APP_ORIGIN}/api/routines/events/bind`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: sessionCookie, Origin: E2E_APP_ORIGIN },
+    body: JSON.stringify({ profile: 'orion', jobId: 'routine-test', trigger: 'webhook', auth: 'bearer' }),
+  })
+  const bindBody = await routineEventBind.json()
+  if (!routineEventBind.ok || !bindBody.hookUrl || !bindBody.secret) throw new Error('Bind webhook routine échoué.')
+  const cronTriggersBefore = cronWrites.filter((row) => String(row.path).includes('/trigger')).length
+  const hookPost = await fetch(bindBody.hookUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${bindBody.secret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event: 'e2e-webhook' }),
+  })
+  if (!hookPost.ok) throw new Error(`Webhook routine: HTTP ${hookPost.status}`)
+  const cronTriggersAfter = cronWrites.filter((row) => String(row.path).includes('/trigger')).length
+  if (cronTriggersAfter !== cronTriggersBefore + 1) throw new Error('Webhook routine n’a pas déclenché le cron.')
+
   // The roster re-reads on a fixed 30 s timer: measure just after a tick, so the periodic refresh
   // cannot land inside the window. (Switching bots must never re-read it on its own.)
   for (let probe = 0; ; probe += 1) {
@@ -3173,6 +3436,36 @@ try {
   if (modelProbeCalls.some((call) => !String(call.model).startsWith('cursor/'))) throw new Error(`Un modèle hors des préfixes configurés a été sondé : ${JSON.stringify(modelProbeCalls)}`)
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
+
+  autoRouteFailOnce = true
+  const promptsBeforeAuto = promptCalls
+  const sessionCookieAuto = (await page.context().cookies(`${E2E_APP_ORIGIN}`)).map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+  await page.getByRole('button', { name: 'Choisir le modèle' }).click()
+  await page.locator('.model-option[data-row="model:auto-free"]').getByText('Auto gratuit', { exact: true }).waitFor({ timeout: 3_000 })
+  await page.locator('.model-option[data-row="model:auto"]').click()
+  await page.locator('.model-chip').getByText('Auto', { exact: true }).waitFor({ timeout: 3_000 })
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test auto route fallback')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  await page.locator('.message-user .message-auto-route').last().waitFor({ timeout: 8_000 })
+  await page.locator('.message-assistant').getByText('Auto route OK.').waitFor({ timeout: 8_000 })
+  await page.locator('.model-chip').getByText('Auto', { exact: true }).waitFor({ timeout: 3_000 })
+  if (promptCalls < promptsBeforeAuto + 2) throw new Error(`Auto fallback: ${promptCalls - promptsBeforeAuto} envois au lieu de 2.`)
+  const autoLog = await (await fetch(`${E2E_APP_ORIGIN}/api/auto-router/log?days=1`, { headers: { Cookie: sessionCookieAuto, Origin: E2E_APP_ORIGIN } })).json()
+  const autoEntry = autoLog.entries?.at(-1)
+  if (!autoEntry?.fallbacks?.length) throw new Error(`Journal auto sans repli: ${JSON.stringify(autoEntry)}`)
+  if (autoEntry.outcome !== 'ok') throw new Error(`Routage auto terminé en ${autoEntry.outcome}`)
+  if (autoEntry.mode !== 'auto') throw new Error(`Mode Auto absent du journal : ${autoEntry.mode}`)
+  const logDay = String(autoEntry?.at || '').slice(0, 10) || new Date().toISOString().slice(0, 10)
+  const logName = ['routing-' + logDay + '.jsonl', ...readdirSync(AUTO_ROUTER_LOG).filter((name) => name.startsWith('routing-') && name.endsWith('.jsonl'))].find((name) => existsSync(path.join(AUTO_ROUTER_LOG, name)))
+  if (!logName) throw new Error('Journal auto-routeur : aucun fichier routing-*.jsonl')
+  const logRaw = readFileSync(path.join(AUTO_ROUTER_LOG, logName), 'utf8')
+  if (logRaw.includes('Test auto route fallback')) throw new Error('Texte de prompt présent dans le journal de routage.')
+  if (logRaw.includes('secret') || logRaw.toLowerCase().includes('password')) throw new Error('Donnée sensible dans le journal de routage.')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('/model sonnet')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.locator('.model-option[data-model="claude-sonnet-5-5"]').click()
+  await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 8_000 })
 
   // Settings: theme, text, send key, then a hidden model leaves the picker and comes back in one click.
   const openSettings = async () => {
@@ -3304,6 +3597,11 @@ try {
   if (savedSettings.hiddenModels.join() !== 'custom:omlx:qwen-masque' || savedSettings.sendKey !== 'enter' || savedSettings.textSize !== 'normal') throw new Error(`Réglages mal enregistrés : ${JSON.stringify(savedSettings)}`)
   await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
   await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
+  await openSettings()
+  await settingsDialog.getByRole('button', { name: 'Conversations', exact: true }).click()
+  await settingsDialog.getByText('Intelligent (smart)', { exact: false }).waitFor({ timeout: 3_000 })
+  await settingsDialog.getByRole('button', { name: 'Fermer les réglages' }).click()
+  await settingsDialog.waitFor({ state: 'detached', timeout: 3_000 })
 
   // Zero-spend mode: the picker keeps what costs nothing more (here the local models and the Kimi
   // subscription); the active and profile models stay offered, marked Paid. Each switch saves the shared
@@ -3337,7 +3635,7 @@ try {
   await page.getByRole('button', { name: 'Choisir le modèle' }).click()
   await page.locator('.model-picker-note', { hasText: 'Mode zéro frais' }).waitFor({ timeout: 5_000 })
   await page.waitForTimeout(350)
-  const offeredFree = await page.locator('.model-picker .model-option').evaluateAll((rows) => rows.map((row) => ({ model: row.dataset.model, paid: Boolean(row.querySelector('.is-paid')) })))
+  const offeredFree = await page.locator('.model-picker .model-option:not(.is-auto)').evaluateAll((rows) => rows.map((row) => ({ model: row.dataset.model, paid: Boolean(row.querySelector('.is-paid')) })))
   const unpaidOffered = offeredFree.filter((row) => !row.paid).map((row) => row.model).sort()
   if (unpaidOffered.join() !== 'gemma-local,k3.1-pro,kimi-for-coding,kimi-k3,qwen-local-27b') throw new Error(`Mode zéro frais : modèles proposés ${JSON.stringify(offeredFree)}`)
   if (!offeredFree.some((row) => row.paid)) throw new Error(`Mode zéro frais : le modèle actif doit rester proposé, marqué Payant : ${JSON.stringify(offeredFree)}`)
@@ -3391,7 +3689,7 @@ try {
   await delay(500) // the simulated turn ends: the next send would be ignored while it runs
   await setCaveman(false)
   await sendInMode('Test sans caveman')
-  if (lastApiText !== undefined) throw new Error(`Mode caveman coupé : rien ne doit être ajouté : ${lastApiText}`)
+  if (lastApiText !== undefined && lastApiText !== 'Test sans caveman' && !lastApiText.includes('[HermesBot turn style: background task.')) throw new Error(`Mode caveman coupé : seule la consigne tâche de fond optionnelle est permise : ${lastApiText}`)
 
   // Context compaction. Auto is the default and writes nothing. Manual writes only the two compression keys into the
   // profile of every bot, then guards the open chat: a warning at 90 % of the user's limit, sending blocked at 100 %.
@@ -3659,13 +3957,15 @@ try {
   await openAtlasMenu()
   if (await botMenu.getAttribute('aria-label') !== 'Actions pour Atlas') throw new Error(`Nom du menu : ${await botMenu.getAttribute('aria-label')}`)
   const menuLabels = (await botMenu.locator('[role^="menuitem"]').allTextContents()).join(' | ')
-  if (menuLabels !== 'Épingler | Déplacer vers | Marquer comme lu | Renommer le bot | Copier l’ID de conversation | Masquer de la barre latérale | Supprimer') throw new Error(`Menu du bot : ${menuLabels}`)
+  if (menuLabels !== 'Épingler | Déplacer vers | Marquer comme lu | Fiche du bot… | Renommer le bot | Copier l’ID de conversation | Masquer de la barre latérale | Supprimer') throw new Error(`Menu du bot : ${menuLabels}`)
   if (await menuItem('Marquer comme lu').getAttribute('aria-disabled') !== 'true') throw new Error('« Marquer comme lu » est actif sans message non lu.')
   if (await focusedText() !== 'Épingler') throw new Error(`Le menu ne prend pas le clavier : ${await focusedText()}`)
   await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('ArrowDown')
-  if (await focusedText() !== 'Renommer le bot') throw new Error(`Les flèches ne sautent pas l’élément inactif : ${await focusedText()}`)
-  await page.keyboard.press('ArrowUp')
+  if (await focusedText() !== 'Déplacer vers') throw new Error(`La première flèche ne va pas sur Déplacer : ${await focusedText()}`)
+  await menuItem('Renommer le bot').focus()
+  if (await focusedText() !== 'Renommer le bot') throw new Error(`Le focus n’atteint pas Renommer : ${await focusedText()}`)
+  await menuItem('Déplacer vers').focus()
+  if (await focusedText() !== 'Déplacer vers') throw new Error(`Le focus n’atteint pas Déplacer : ${await focusedText()}`)
   await page.keyboard.press('ArrowRight')
   await sectionsMenu.waitFor({ timeout: 2_000 })
   await page.waitForFunction(() => document.activeElement?.closest('[role=menu]')?.getAttribute('aria-label') === 'Sections', null, { timeout: 2_000 })

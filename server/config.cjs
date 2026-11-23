@@ -17,9 +17,11 @@ const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9_.:()-]{0,127}$/
 const SSH_HOST = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,254}$/
 
 function dataDirectory(env = process.env, platform = process.platform, home = os.homedir()) {
-  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'HermesBot')
-  if (platform === 'win32') return path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'HermesBot')
-  return path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'HermesBot')
+  const raw = typeof env.HERMESBOT_DATA_NAME === 'string' ? env.HERMESBOT_DATA_NAME.trim() : ''
+  const folder = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(raw) ? raw : 'HermesBot'
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', folder)
+  if (platform === 'win32') return path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), folder)
+  return path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), folder)
 }
 
 function readJson(file) {
@@ -99,6 +101,30 @@ function modelProbes(value, allowRemote) {
   })
 }
 
+const POSITIVE = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0
+
+/** Subscription quota gauges: estimated from analytics in a rolling window, never a provider API. */
+function parseUsageQuotas(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  const out = []
+  for (const [id, entry] of Object.entries(value).slice(0, 16)) {
+    const cleanId = text(id, 64)
+    if (!cleanId || !PROVIDER.test(cleanId)) continue
+    const row = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+    const windowHours = POSITIVE(row.windowHours) ? Math.min(row.windowHours, 168) : 5
+    const tokenLimit = POSITIVE(row.tokenLimit) ? Math.min(row.tokenLimit, 1_000_000_000) : 0
+    if (!tokenLimit) continue
+    out.push({
+      id: cleanId,
+      label: text(row.label, 64) || cleanId,
+      windowHours,
+      tokenLimit,
+      modelPrefixes: strings(row.modelPrefixes, 16).filter((prefix) => /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(prefix)),
+    })
+  }
+  return out
+}
+
 function merge(...layers) {
   const result = {}
   for (const layer of layers) {
@@ -122,20 +148,33 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
   const ui = raw.ui && typeof raw.ui === 'object' ? raw.ui : {}
   const localChat = raw.localChat && typeof raw.localChat === 'object' ? raw.localChat : {}
   const browserTurn = raw.browserTurn && typeof raw.browserTurn === 'object' ? raw.browserTurn : {}
+  const computerPanel = raw.computerPanel && typeof raw.computerPanel === 'object' ? raw.computerPanel : {}
   const llmStats = raw.llmStats && typeof raw.llmStats === 'object' ? raw.llmStats : {}
+  const routines = raw.routines && typeof raw.routines === 'object' ? raw.routines : {}
+  const connectors = raw.connectors && typeof raw.connectors === 'object' ? raw.connectors : {}
+  const sharedMemory = raw.sharedMemory && typeof raw.sharedMemory === 'object' ? raw.sharedMemory : {}
+  const features = raw.features && typeof raw.features === 'object' ? raw.features : {}
+  const usageQuotas = raw.usageQuotas && typeof raw.usageQuotas === 'object' ? raw.usageQuotas : {}
+  const channels = raw.channels && typeof raw.channels === 'object' ? raw.channels : {}
+  const push = raw.push && typeof raw.push === 'object' ? raw.push : {}
+  const skills = raw.skills && typeof raw.skills === 'object' ? raw.skills : {}
+  const autoRouter = raw.autoRouter && typeof raw.autoRouter === 'object' ? raw.autoRouter : {}
 
   const allowRemoteGateway = raw.allowRemoteGateway === true
   const gatewayOrigin = pinnedOrigin(env.HERMES_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.gatewayOrigin, allowRemoteGateway) || 'http://127.0.0.1:9120'
   const sshHost = text(env.HERMES_SSH_HOST) || text(raw.sshHost)
   const defaultAnimations = path.join(privateDir, 'animations')
 
-  const hermesHome = [text(env.HERMES_HOME), text(raw.hermesHome)].find((value) => value && path.isAbsolute(value))
+  const hermesHome = [text(env.HERMES_HOME), text(raw.hermesHome)].find((value) => value && path.isAbsolute(value)) || path.join(home, '.hermes')
+  const optionalMcps = [text(env.HERMES_OPTIONAL_MCPS_DIR, 4096), text(connectors.optionalMcpsDir, 4096)].find((value) => value && path.isAbsolute(value))
+    || path.join(text(env.HERMES_AGENT_DIR, 4096) || path.join(hermesHome, 'hermes-agent'), 'optional-mcps')
 
   return {
     dataDir,
     gatewayOrigin,
     // Home of the Hermes that runs on this machine. Only read to sign in to a gateway without a password.
-    hermesHome: hermesHome || path.join(home, '.hermes'),
+    hermesHome,
+    optionalMcpsDir: optionalMcps,
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',
@@ -151,6 +190,10 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       user: env.BROWSER_TOUR_COMMAND ? '' : text(browserTurn.user, 64),
       remoteCommand: env.BROWSER_TOUR_COMMAND ? null : command(browserTurn.remoteCommand),
     },
+  computerPanel: {
+    enabled: env.HERMESBOT_COMPUTER_PANEL === '1' || computerPanel.enabled === true,
+    cdpOrigin: pinnedOrigin(env.HERMESBOT_COMPUTER_CDP_ORIGIN, false) || pinnedOrigin(computerPanel.cdpOrigin, false) || '',
+  },
     modelProbes: modelProbes(raw.modelProbes, allowRemoteGateway),
     llmStats: {
       // Optional local LLM Stats snapshot, for offline display. Empty on a generic install.
@@ -161,10 +204,51 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     },
     animationsDir: text(env.HERMESBOT_ANIMATIONS, 4096) || text(raw.animationsDir, 4096)
       || (usePrivate && fs.existsSync(defaultAnimations) ? defaultAnimations : path.join(dataDir, 'animations')),
+    sharedMemory: {
+      dir: [text(env.HERMESBOT_SHARED_MEMORY_DIR, 4096), text(sharedMemory.dir, 4096)]
+        .find((value) => path.isAbsolute(value)) || '',
+      // Off by default: injects a short summary into api_text each turn when enabled.
+      injectContext: sharedMemory.injectContext === true,
+      injectMaxChars: typeof sharedMemory.injectMaxChars === 'number' && sharedMemory.injectMaxChars > 200 && sharedMemory.injectMaxChars <= 8000
+        ? Math.floor(sharedMemory.injectMaxChars) : 2000,
+    },
+    // Optional persistent document library (per bot). Never in the repo.
+    pagesLibraryDir: [text(env.HERMESBOT_PAGES_LIBRARY, 4096), text(raw.pagesLibraryDir, 4096)]
+      .find((value) => path.isAbsolute(value)) || path.join(dataDir, 'pages-library'),
+    features: {
+      /** Global usage across roster bots and subscription quota gauges (read-only gateway data). */
+      usageGlobal: features.usageGlobal !== false,
+      /** Cards, addresses and in-chat secure vault forms (keychain writes). */
+      vaultWallet: features.vaultWallet === true,
+      /** Persist opened pages per bot, with a library screen. */
+      pagesLibrary: features.pagesLibrary === true,
+    },
+    usageQuotas: parseUsageQuotas(usageQuotas),
     // Interface preferences, sent as is to the window by /api/app-config.
+    channels: {
+      /** When false (default), the channel wizard is read-only; apply routes refuse to write. */
+      wizardWrites: channels.wizardWrites === true,
+    },
+    push: {
+      /** Empty (default): iPhone push relay disabled. Loopback URLs only unless remote gateway opt-in is set. */
+      relayUrl: pinnedOrigin(text(env.HERMESBOT_PUSH_RELAY, 512), allowRemoteGateway) || pinnedOrigin(text(push.relayUrl, 512), allowRemoteGateway) || '',
+      /** Trusted argv whose stdout is the shared relay secret (never stored on disk by the app). */
+      secretCommand: secretCommand(push.secretCommand),
+    },
     ui: {
       defaultBot: SLUG.test(text(ui.defaultBot)) ? text(ui.defaultBot) : '',
       sectionOrder: strings(ui.sectionOrder),
+      rosterOrder: (() => {
+        if (!ui.rosterOrder || typeof ui.rosterOrder !== 'object' || Array.isArray(ui.rosterOrder)) return {}
+        const roster = {}
+        for (const [key, list] of Object.entries(ui.rosterOrder)) {
+          const section = text(key, 128)
+          if (!section || !Array.isArray(list)) continue
+          const slugs = list.map((item) => text(item)).filter((item) => SLUG.test(item)).slice(0, 200)
+          if (slugs.length) roster[section] = slugs
+        }
+        return roster
+      })(),
       userInitial: text(ui.userInitial, 2),
       userName: text(ui.userName, 64),
       hiddenProviders: slugs(ui.hiddenProviders),
@@ -175,6 +259,28 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
       contrastAvatars: slugs(ui.contrastAvatars),
       // Name shown for the voice mode (empty: the interface's own name for it).
       voiceModeName: text(ui.voiceModeName, 32),
+      // Listen on each assistant reply (macOS speech via Electron). Off by default.
+      replyListenButton: ui.replyListenButton === true,
+    },
+    routines: {
+      editable: routines.editable !== false,
+      /** Event-driven routines (local webhooks + Gmail polling). Off by default. */
+      eventTriggers: routines.eventTriggers === true,
+    },
+    connectors: {
+      enabled: connectors.enabled !== false,
+      optionalMcpsDir: optionalMcps,
+    },
+    skills: {
+      hubManage: skills.hubManage !== false,
+    },
+    autoRouter: {
+      /** Automatic model routing (classifier + local scoring table). Off by default. */
+      enabled: autoRouter.enabled === true,
+      logDir: [text(env.HERMESBOT_AUTO_ROUTER_LOG, 4096), text(autoRouter.logDir, 4096)]
+        .find((value) => path.isAbsolute(value)) || '',
+      tablePath: [text(env.HERMESBOT_AUTO_ROUTER_TABLE, 4096), text(autoRouter.tablePath, 4096)]
+        .find((value) => path.isAbsolute(value)) || '',
     },
   }
 }

@@ -103,6 +103,7 @@
     "newSectionName": "Section name",
     "createSection": "Create",
     "markRead": "Mark as Read",
+    "editProfile": "Edit bot…",
     "rename": "Rename Bot",
     "copyId": "Copy conversation ID",
     "copied": "Conversation ID copied",
@@ -131,7 +132,34 @@
       "offline": "Hermes is not answering. Check the connection, then try again."
     }
   },
+  "botEdit": {
+    "title": "Edit {{name}}",
+    "hint": "Changes are written only when you confirm. SOUL and toolsets go through Hermes; the avatar uses the bot card.",
+    "model": "Model (read-only)",
+    "look": "Avatar",
+    "toolsets": "Enabled toolsets",
+    "toolsetsPlaceholder": "Comma-separated, e.g. web, places",
+    "soul": "Persona (SOUL.md)",
+    "diff": "Changes preview",
+    "previewHint": "Review changes before saving.",
+    "confirmHint": "Confirm to write to Hermes.",
+    "export": "Export template",
+    "back": "Edit again",
+    "saved": "Bot profile saved."
+  },
+  "botImport": {
+    "title": "Import a bot",
+    "hint": "Choose a JSON template exported from HermesBot. Nothing is created until you confirm.",
+    "chooseFile": "Choose file…",
+    "preview": "SOUL preview",
+    "toolsets": "Toolsets: {{list}}",
+    "fileHint": "Pick a template file to preview it.",
+    "createHint": "Review the name, then confirm creation.",
+    "confirmCreate": "Create bot «{{name}}» from this template?",
+    "create": "Create bot"
+  },
   "newBot": {
+    "importBot": "Import a bot…",
     "title": "New bot",
     "step": "Step {{current}} of 2",
     "stepName": "Name",
@@ -322,6 +350,9 @@
   "notifications": {
     "done": "Is done",
     "question": "Has a question for you",
-    "approval": "Waits for your approval"
+    "approval": "Waits for your approval",
+    "draft": "Draft waiting for approval",
+    "routineDone": "Routine finished: {{name}}",
+    "routineFailed": "Routine failed: {{name}}"
   }
 }

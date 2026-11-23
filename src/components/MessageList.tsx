@@ -1,16 +1,21 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, ArrowDown, ChevronDown } from 'lucide-react'
+import { Check, Copy, ArrowDown, ChevronDown, Volume2 } from 'lucide-react'
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AgentMessage, Bot, ChatMessage } from '../types'
 import { BotAvatar } from './BotAvatar'
+import { ViewEmpty } from './ViewEmpty'
 import { LiveAvatar } from './LiveAvatar'
 import { MediaEmbed, MediaViewer, mediaFailed, type ViewerState } from './MediaEmbed'
 import { MailBlock, MailContext } from './MailCard'
+import { DraftBlock, DraftContext } from './DraftCard'
+import { ProgressTurn } from './ProgressTurn'
 import { QuestionsCard } from './QuestionsCard'
 import { TweetCard } from './TweetCard'
 import { PlacesBlock } from './PlaceResultsCard'
+import { VaultFormBlock } from './SecureVaultFormCard'
+import { VAULT_FORM_FENCE } from '../lib/vault-form'
 import { findQuestions, parseAnswersPrompt } from '../lib/questions'
 import { findTweets, type TweetMatch } from '../lib/tweets'
 import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
@@ -18,13 +23,17 @@ import { normalizeHref } from '../lib/links'
 import { completedMessageStamp, findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
+import { approvedDraftIds, DRAFT_APPROVED_FENCE, DRAFT_FENCE, withoutDraftInstruction } from '../lib/draft'
+import { threadItems } from '../lib/progress'
+import { getSettings } from '../lib/settings'
 import { PLACES_FENCE } from '../lib/places'
 import { replyAnnouncement } from '../lib/local-chat-turn'
 import { nextStick } from '../lib/scroll-stick'
 import { useScrollIntent } from '../lib/use-scroll-intent'
-import { stepIds } from '../lib/turns'
 import { mayBecomeSilent } from '../lib/hermes'
 import { messageDay, shortTime } from '../lib/time'
+import { useAppConfig } from '../lib/app-config'
+import { guessLanguage, toSpokenText } from '../lib/spoken-text'
 
 type OpenImages = (images: MediaRef[], index: number, version: string) => void
 
@@ -38,6 +47,7 @@ interface MediaContextValue {
   role?: ChatMessage['role']
   openImage: (media: MediaRef) => void
   openDocument?: (media: MediaRef) => void
+  onVaultFormDone?: (message: string) => void
 }
 
 export interface MentionContextValue {
@@ -122,9 +132,15 @@ function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & Extra
   if (context?.botCards !== false && code?.type === 'element' && source && (language === `language-${MAIL_FENCE}` || language === `language-${MAIL_APPROVED_FENCE}`) && !(language === `language-${MAIL_APPROVED_FENCE}` && context?.role !== 'user')) {
     return <MailBlock source={source} approvedBlock={language === `language-${MAIL_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} role={context?.role} />
   }
+  if (context?.botCards !== false && code?.type === 'element' && source && (language === `language-${DRAFT_FENCE}` || language === `language-${DRAFT_APPROVED_FENCE}`) && !(language === `language-${DRAFT_APPROVED_FENCE}` && context?.role !== 'user')) {
+    return <DraftBlock source={source} approvedBlock={language === `language-${DRAFT_APPROVED_FENCE}`} streaming={Boolean(context?.streaming)} role={context?.role} />
+  }
   // Places cards, like mail cards, stay inert until the fence is complete and valid.
   if (context && context.botCards !== false && code?.type === 'element' && language === `language-${PLACES_FENCE}`) {
     return <PlacesBlock source={source} profile={context.profile} version={context.version} streaming={Boolean(context.streaming)} />
+  }
+  if (context && context.botCards !== false && code?.type === 'element' && language === `language-${VAULT_FORM_FENCE}` && context.onVaultFormDone) {
+    return <VaultFormBlock source={source} profile={context.profile} streaming={Boolean(context.streaming)} onDone={context.onVaultFormDone} />
   }
   const text = code ? hastText(code as HastNode).replace(/\n$/, '') : ''
   return (
@@ -153,6 +169,7 @@ interface MarkdownProps {
   botCards?: boolean
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
+  onVaultFormDone?: (message: string) => void
 }
 
 interface CitedFilesProps {
@@ -182,7 +199,7 @@ function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpe
   )
 }
 
-export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, onOpenImages, onOpenDocument }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, onOpenImages, onOpenDocument, onVaultFormDone }: MarkdownProps) {
   const cards = botCards ?? localMedia
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
   const tweets = useMemo(() => cards && !streaming ? findTweets(source) : [], [source, streaming, cards])
@@ -207,7 +224,8 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
       onOpenImages(images, Math.max(0, images.indexOf(item)), version)
     },
     openDocument: onOpenDocument,
-  }), [sink, profile, version, streaming, cards, role, onOpenImages, onOpenDocument])
+    onVaultFormDone,
+  }), [sink, profile, version, streaming, cards, role, onOpenImages, onOpenDocument, onVaultFormDone])
   // While streaming, a path can be cut off: the files show once the message is complete.
   const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
   return (
@@ -225,6 +243,7 @@ interface MessageProps {
   profile: string
   onOpenImages: OpenImages
   onOpenDocument: (media: MediaRef) => void
+  onVaultFormDone?: (message: string) => void
   /** The latest bot reply, nothing after it, no turn running: loose questions become a form. */
   askable?: boolean
 }
@@ -280,20 +299,33 @@ export function AgentNote({ message, profile, onOpenImages, onOpenDocument, init
   )
 }
 
-const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, askable = false }: MessageProps) {
-  const { t } = useTranslation()
+const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, onVaultFormDone, askable = false }: MessageProps) {
+  const { t, i18n } = useTranslation()
+  const replyListen = useAppConfig().ui.replyListenButton
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     await navigator.clipboard.writeText(message.content)
     setCopied(true)
     setTimeout(() => setCopied(false), 1400)
   }
+  const listen = () => {
+    const speech = window.hermesBot?.speech
+    if (!speech || message.role !== 'assistant') return
+    const language = guessLanguage(message.content, i18n.language.startsWith('fr') ? 'fr' : 'en')
+    const spoken = toSpokenText(message.content, { language, maxSentences: 8 })
+    if (!spoken.text.trim()) return
+    void speech.say({
+      id: Date.now() % 1_000_000_000,
+      text: spoken.text,
+      language: language === 'fr' ? 'fr-FR' : 'en-US',
+    })
+  }
   if (message.agent) return <AgentNote message={message} profile={profile} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
   if (message.role === 'system' || message.role === 'tool') {
     return <div className="system-message">{message.content}</div>
   }
   // The model instruction on an approved mail stays in the stored text and out of the bubble.
-  const shown = message.role === 'user' ? withoutMailInstruction(message.content) : message.content
+  const shown = message.role === 'user' ? withoutDraftInstruction(withoutMailInstruction(message.content)) : message.content
   // "Questions ouvertes" at the end of a reply: answered from fields, not by retyping them.
   const questions = message.role === 'assistant' && !message.streaming ? findQuestions(message.content, askable) : null
   // Answers sent from a questions card: a tight question / answer list, not the raw numbered text.
@@ -312,13 +344,13 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
             </dl>
           : questions
           ? <>
-              {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+              {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
               <QuestionsCard id={message.id} block={questions} />
-              {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+              {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
             </>
           : message.streaming
           ? <div className="stream-plain" style={{ whiteSpace: 'pre-wrap' }} aria-hidden="true">{message.content}</div>
-          : <Markdown content={shown} profile={profile} version={message.id} role={message.role} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+          : <Markdown content={shown} profile={profile} version={message.id} role={message.role} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
         {message.images?.length ? <CitedFiles files={message.images.map(mediaRef)} profile={profile} version={message.id} sent onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} /> : null}
         {message.streaming && <span className="stream-caret" />}
       </div>
@@ -326,7 +358,19 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
         <div className="message-meta">
           <span>{message.pending ? t('messages.sending') : message.failed ? t('messages.sendFailed') : shortTime(message.createdAt)}</span>
           {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? t('messages.priority') : t('messages.queued')}</span>}
-          {message.role === 'assistant' && <button className="message-copy" aria-label={t('messages.copyReply')} onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>}
+          {message.autoRoute && (
+            <span className="message-auto-route" title={message.autoRoute.reason}>
+              {t('autoRouter.badge', { model: message.autoRoute.chosen.split('/').pop() || message.autoRoute.chosen, category: message.autoRoute.category })}
+            </span>
+          )}
+          {message.role === 'assistant' && (
+            <>
+              <button type="button" className="message-copy" aria-label={t('messages.copyReply')} onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>
+              {replyListen && (
+                <button type="button" className="message-copy" aria-label={t('messages.listenReply')} onClick={listen}><Volume2 size={13} aria-hidden="true" /></button>
+              )}
+            </>
+          )}
         </div>
       )}
     </article>
@@ -350,17 +394,20 @@ interface MessageListProps {
   loading: boolean
   onSuggestion: (text: string) => Promise<boolean | void> | boolean | void
   onOpenDocument: (profile: string, media: MediaRef) => void
+  onVaultFormDone?: (message: string) => void
   onOpenBot: (slug: string) => void
   /** Find in the conversation: matches are highlighted, `position` is the current one, `jump` changes on each Enter. */
   search?: { query: string; position: number; jump: number }
   onSearchCount?: (count: number) => void
+  /** Milestone bubbles in the thread; defaults to the Conversations setting. */
+  progressInThread?: boolean
 }
 
 // Only one list owns the page highlights at a time (the local chat keeps its own list mounted).
 let highlightOwner: object | null = null
 const supportsHighlights = () => typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined'
 
-export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onOpenBot, search, onSearchCount }: MessageListProps) {
+export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onVaultFormDone, onOpenBot, search, onSearchCount, progressInThread = getSettings().progressInThread }: MessageListProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -379,19 +426,19 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   // One message per turn: the bot's steps (text written before a tool call) fold into the working line,
   // and its reply is not streamed, it appears whole when the turn ends.
-  const steps = useMemo(() => stepIds(messages, running, bot.slug), [messages, running, bot.slug])
-  const visibleMessages = messages.filter((message) => !steps.has(message.id) && (message.agent || (!message.technical && message.role !== 'system' && message.role !== 'tool')))
+  const thread = useMemo(() => threadItems(messages, running, bot.slug, progressInThread), [messages, running, bot.slug, progressInThread])
   // A `NOREPLY` being written never shows: the bot at work is shown instead.
   const liveReply = streamReply && Boolean(streaming) && !mayBecomeSilent(streaming)
   const items = liveReply
-    ? [...visibleMessages, { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage]
-    : visibleMessages
+    ? [...thread, { kind: 'message' as const, message: { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage }]
+    : thread
   const working = (running || Boolean(streaming)) && !liveReply
   // A card being written is never shown raw: the line says so until the card arrives.
-  const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : streaming.includes(PLACES_FENCE) ? t('places.drafting') : workText) || t('messages.working', { name: bot.name })
+  const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : streaming.includes(DRAFT_FENCE) ? t('draft.drafting') : streaming.includes(PLACES_FENCE) ? t('places.drafting') : workText) || t('messages.working', { name: bot.name })
   const count = items.length
   const profile = bot.slug
   const mailContext = useMemo(() => ({ profile, running, approved: approvedMailIds(messages), onApprove: onSuggestion }), [profile, running, messages, onSuggestion])
+  const draftContext = useMemo(() => ({ profile, running, approved: approvedDraftIds(messages), onApprove: onSuggestion }), [profile, running, messages, onSuggestion])
   // The roster is re-read every 30 s: as long as names don’t change, no message is re-parsed.
   const rosterKey = bots.map((item) => `${item.slug}\n${item.name}\n${item.avatar?.shape}\n${item.avatar?.color}`).join('\n')
   const mentionValue = useMemo<MentionContextValue>(() => ({
@@ -437,7 +484,8 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const position = search?.position ?? -1
   const jump = search?.jump ?? 0
   // Finished messages only. The streaming bubble is excluded, so a token does not walk the thread.
-  const completedStamp = completedMessageStamp(items)
+  const flatMessages = useMemo(() => items.flatMap((item) => item.kind === 'message' ? [item.message] : [...item.progress, ...(item.answer ? [item.answer] : [])]), [items])
+  const completedStamp = completedMessageStamp(flatMessages)
   useEffect(() => {
     const root = scrollRef.current
     const ranges = root && query.trim() ? findRanges(root, query) : []
@@ -479,7 +527,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     }
     if (!wasStreamingRef.current) return
     wasStreamingRef.current = false
-    const finished = items.find((message) => message.id === announcedIdRef.current && message.role === 'assistant' && !message.streaming)
+    const finished = flatMessages.find((message) => message.id === announcedIdRef.current && message.role === 'assistant' && !message.streaming)
     const speech = replyAnnouncement(false, finished?.content ?? '')
     if (speech) setAnnouncement(speech)
   }, [streamReply, streaming, streamKey])
@@ -535,6 +583,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
         }}
       >
       <MailContext.Provider value={mailContext}>
+      <DraftContext.Provider value={draftContext}>
       <MentionContext.Provider value={mentionValue}>
       <div className="messages-column" ref={columnRef}>
         {loading && (
@@ -546,25 +595,47 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           </div>
         )}
         {!loading && items.length === 0 && (
-          <div className="chat-empty">
-            <BotAvatar bot={bot} size={64} />
-            <h2>{bot.name}</h2>
-            <p>{bot.role}</p>
-            {/* A bot at work on an empty chat (a new bot introducing itself): no suggestions under its working line. */}
-            {!working && <div className="suggestions">
-              {[t('messages.suggestionCapabilities'), t('messages.suggestionDay'), t('messages.suggestionRecent')].map((suggestion) => (
-                <button key={suggestion} onClick={() => onSuggestion(suggestion)}>{suggestion}</button>
-              ))}
-            </div>}
-          </div>
+          <ViewEmpty
+            variant="hero"
+            icon={<BotAvatar bot={bot} size={64} />}
+            title={bot.name}
+            description={bot.role}
+            action={!working ? (
+              <div className="suggestions">
+                {[t('messages.suggestionCapabilities'), t('messages.suggestionDay'), t('messages.suggestionRecent')].map((suggestion) => (
+                  <button key={suggestion} type="button" onClick={() => onSuggestion(suggestion)}>{suggestion}</button>
+                ))}
+              </div>
+            ) : undefined}
+          />
         )}
-        {!loading && items.map((message, index) => {
-          const currentDay = messageDay(message.createdAt)
-          const previousDay = index > 0 ? messageDay(items[index - 1].createdAt) : ''
+        {!loading && items.map((row, index) => {
+          const stamp = (message: ChatMessage | undefined) => message ? messageDay(message.createdAt) : ''
+          const rowStamp = (entry: typeof row) => entry.kind === 'message' ? stamp(entry.message) : stamp(entry.answer ?? entry.progress.at(-1))
+          const currentDay = rowStamp(row)
+          const previousDay = index > 0 ? rowStamp(items[index - 1]) : ''
+          const renderMessage = (message: ChatMessage, askable: boolean) => (
+            <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} onVaultFormDone={onVaultFormDone} askable={askable} />
+          )
+          if (row.kind === 'turn') {
+            const lastAssistant = !working && index === items.length - 1
+            return (
+              <div key={`turn-${row.progress[0]?.id ?? row.answer?.id ?? index}`}>
+                {currentDay && currentDay !== previousDay && <div className="day-separator">{currentDay}</div>}
+                <ProgressTurn
+                  progress={row.progress}
+                  answer={row.answer}
+                  collapsed={row.collapsed}
+                  renderAnswer={(message) => renderMessage(message, lastAssistant && Boolean(row.answer))}
+                />
+              </div>
+            )
+          }
+          const message = row.message
           return (
             <div key={message.id}>
               {currentDay && currentDay !== previousDay && <div className="day-separator">{currentDay}</div>}
-              <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} askable={index === items.length - 1 && !working && message.role === 'assistant'} />
+              {renderMessage(message, index === items.length - 1 && !working && message.role === 'assistant')}
             </div>
           )
         })}
@@ -578,6 +649,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
         <div ref={endRef} className="messages-end" />
       </div>
       </MentionContext.Provider>
+      </DraftContext.Provider>
       </MailContext.Provider>
       </div>
       {showJump && <button type="button" className="jump-latest" aria-label={t('messages.newMessages')} title={t('messages.newMessages')} onClick={() => scrollToBottom()}><ArrowDown size={20} strokeWidth={2.25} aria-hidden="true" /></button>}

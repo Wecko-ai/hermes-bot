@@ -31,7 +31,8 @@ export function parseBrowserTurns(output) {
     const minutes = Number(/\bdepuis (\d+) min\b/.exec(line)?.[1] ?? 0)
     if (minutes >= BROWSER_TURN_MAX_MINUTES) continue
     const since = turnStart(match[2])
-    turns.push({ owner, since: since === null ? null : new Date(since).toISOString() })
+    const targetId = /\btarget=([A-Za-z0-9-]{4,})\b/.exec(line)?.[1] || ''
+    turns.push({ owner, since: since === null ? null : new Date(since).toISOString(), ...(targetId ? { targetId } : {}) })
   }
   return turns
 }

@@ -5,6 +5,7 @@ import { i18n, locale } from '../i18n'
 import type { ContextBreakdown, SessionUsage, UsageHistory } from '../types'
 import { compactNumber, modelLabel } from '../lib/model'
 import { mergeUsage } from '../lib/hermes'
+import { usageLooksLikeFallback } from '../lib/usage-fallback'
 import { dateTime } from '../lib/time'
 
 export interface UsageDetails {
@@ -17,6 +18,7 @@ interface UsageTabProps {
   slug: string
   /** Open chat session. A new session reloads even when the bot and the running flag stay the same. */
   sessionId?: string
+  configuredModel?: string
   running: boolean
   live: SessionUsage | null
   load: () => Promise<UsageDetails>
@@ -86,7 +88,7 @@ function DailyChart({ history }: { history: UsageHistory }) {
 }
 
 /** Counters read from Hermes without any model call: opening the tab costs nothing. */
-export function UsageTab({ slug, sessionId, running, live, load }: UsageTabProps) {
+export function UsageTab({ slug, sessionId, configuredModel, running, live, load }: UsageTabProps) {
   const { t } = useTranslation()
   const [details, setDetails] = useState<UsageDetails | null>(null)
   const [loading, setLoading] = useState(true)
@@ -99,6 +101,7 @@ export function UsageTab({ slug, sessionId, running, live, load }: UsageTabProps
     return () => { cancelled = true }
   }, [watch])
   const usage = mergeUsage(details?.usage ?? null, live)
+  const fallbackModel = usageLooksLikeFallback(configuredModel, usage)
   const context = details?.context
   const history = details?.history
   const largestCategory = Math.max(1, ...(context?.categories.map((item) => item.tokens) ?? []))
@@ -111,6 +114,9 @@ export function UsageTab({ slug, sessionId, running, live, load }: UsageTabProps
   return (
     <section className="details-section usage-section">
       <div className="details-section-heading"><span>{t('usage.heading')}</span><BarChart3 size={14} /></div>
+      {fallbackModel && usage?.model && (
+        <p className="usage-note usage-fallback" title={usage.model}>{t('usage.fallbackModel', { model: modelLabel(usage.model) })}</p>
+      )}
       {usage && usage.contextMax > 0 && (
         <div className="usage-context" title={t('usage.contextTokens', { used: exact(usage.contextUsed), max: exact(usage.contextMax) })}>
           <div><span>{usage.contextEstimated ? t('usage.contextEstimated') : t('usage.context')}</span><strong>{Math.round(usage.contextPercent)} %</strong></div>

@@ -26,6 +26,12 @@ export interface AppSettings {
   dictationLanguage: DictationLanguage
   /** Caveman mode: every bot answers in few words. A note read with each turn sent from the composer. */
   caveman: boolean
+  /** Background-task style: acknowledge, brief progress, then the result (`api_text` only). */
+  backgroundTask: boolean
+  /** Warm, concise tone charter on each turn (`api_text` only). */
+  toneCharter: boolean
+  /** Show `message.interim` milestones as bubbles grouped with the final reply. */
+  progressInThread: boolean
   activitySort: boolean
   showHidden: boolean
   /** Bots pinned at the top of the sidebar, in the order they were pinned. Kept on this Mac only. */
@@ -51,6 +57,9 @@ export interface AppSettings {
   compactionMode: 'auto' | 'manual'
   /** Manual mode: the user's limit, a share of the model's context window (0.1 to 1). */
   compactionGauge: number
+  /** When auto routing is enabled server-side, new sends pick a model automatically. */
+  useAutoModel: boolean
+  useAutoFreeModel: boolean
 }
 
 const STORAGE_KEY = 'hermesbot-settings'
@@ -77,6 +86,9 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     sendKey: oneOf(value.sendKey, SEND_KEYS, 'enter'),
     dictationLanguage: oneOf(value.dictationLanguage, DICTATION_LANGUAGES, 'interface'),
     caveman: flag(value.caveman, false),
+    backgroundTask: flag(value.backgroundTask, true),
+    toneCharter: flag(value.toneCharter, false),
+    progressInThread: flag(value.progressInThread, true),
     activitySort: flag(value.activitySort, legacy('hermesbot-sort') === 'activity'),
     showHidden: flag(value.showHidden, false),
     pinnedBots: strings(value.pinnedBots),
@@ -91,6 +103,8 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     voiceHandsFree: flag(value.voiceHandsFree, true),
     compactionMode: value.compactionMode === 'manual' ? 'manual' : 'auto',
     compactionGauge: typeof value.compactionGauge === 'number' && Number.isFinite(value.compactionGauge) ? Math.round(Math.min(1, Math.max(0.1, value.compactionGauge)) * 100) / 100 : 1,
+    useAutoModel: flag(value.useAutoModel, false),
+    useAutoFreeModel: flag(value.useAutoFreeModel, false),
   }
 }
 

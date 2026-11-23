@@ -1,0 +1,54 @@
+{
+  "channels": {
+    "title": "Channels",
+    "pickBot": "Bot profile",
+    "readOnly": "Read-only guide. Enable writes in installation config to apply non-secret profile settings.",
+    "apply": "Apply safe config",
+    "applied": "Non-secret settings applied.",
+    "failed": "Could not apply settings.",
+    "loading": "Reading channel status…",
+    "snippet": "Config snippet",
+    "ready": "Ready",
+    "missing": "Missing required keys",
+    "telegram": {
+      "title": "Telegram",
+      "steps": "Create a bot with @BotFather (/newbot), copy the bot token into TELEGRAM_BOT_TOKEN, add your numeric Telegram user id to TELEGRAM_ALLOWED_USERS (comma-separated), optionally TELEGRAM_HOME_CHANNEL, save the profile .env, apply safe config, then restart the gateway."
+    },
+    "slack": {
+      "title": "Slack",
+      "steps": "Create a Slack app (Socket Mode on), enable bot scopes (chat:write, app_mentions:read, channels:history, im:history, users:read, files:read/write, …), install to the workspace for SLACK_BOT_TOKEN (xoxb-), create an app-level token with connections:write for SLACK_APP_TOKEN (xapp-), add SLACK_ALLOWED_USERS member ids, save and apply, then restart the gateway."
+    },
+    "imessage": {
+      "title": "iMessage (BlueBubbles)",
+      "steps": "Run BlueBubbles Server on a Mac (Messages signed in, Full Disk Access for BlueBubbles). Copy Server URL and password into BLUEBUBBLES_SERVER_URL and BLUEBUBBLES_PASSWORD, optionally BLUEBUBBLES_ALLOWED_USERS or pairing, apply safe config, restart the gateway, and verify webhook registration in gateway logs."
+    },
+    "saveEnv": "Save credentials",
+    "envSaved": "Profile .env updated (backup written).",
+    "envFailed": "Could not update profile .env.",
+    "envField": "Value for {{name}}"
+  },
+  "team": {
+    "title": "Team",
+    "empty": "No recent messages between bots in loaded chats.",
+    "open": "Open Team view"
+  },
+  "roomRouting": {
+    "title": "Room routing",
+    "everyone": "All bots",
+    "mentions": "Mentioned only",
+    "facilitator": "Facilitator bot",
+    "pickLead": "Facilitator",
+    "save": "Save routing",
+    "saved": "Routing updated.",
+    "mentionRequired": "Mention at least one bot, or switch routing to All bots.",
+    "hintEveryone": "Unaddressed messages wake every member.",
+    "hintMentions": "Unaddressed messages are blocked; @mentions choose who answers.",
+    "hintFacilitator": "A facilitator bot picks who answers when nobody is mentioned."
+  },
+  "mediaGallery": {
+    "all": "All",
+    "images": "Images",
+    "videos": "Videos",
+    "audio": "Audio"
+  }
+}

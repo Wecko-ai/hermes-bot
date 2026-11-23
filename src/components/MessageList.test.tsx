@@ -145,6 +145,21 @@ describe('MessageList', () => {
     await act(async () => { root.unmount() })
   })
 
+  it('shows a calm empty state before the first message', () => {
+    const html = renderToStaticMarkup(list({ loading: false, messages: [] }))
+    expect(html).toContain('chat-empty')
+    expect(html).toContain('Demo')
+    expect(html).toContain('Helper')
+  })
+
+  it('styles a failed outbound message in the meta and bubble', () => {
+    const html = renderToStaticMarkup(list({
+      messages: [message({ id: 'f', role: 'user', content: 'Hello', failed: true })],
+    }))
+    expect(html).toContain('is-failed')
+    expect(html).toMatch(/sendFailed|Échec|Failed to send/i)
+  })
+
   it('does not announce a reply that was already finished when the list opened', async () => {
     const { container } = installTestDom()
     const root = createRoot(container as unknown as Element)

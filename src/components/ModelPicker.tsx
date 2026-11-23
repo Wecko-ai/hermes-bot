@@ -8,7 +8,9 @@ import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
+import { AUTO_FREE_MODEL_SENTINEL, AUTO_FREE_PICKER_OPTION, AUTO_MODEL_SENTINEL, AUTO_PICKER_OPTION } from '../lib/auto-router'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
+import { ViewEmpty } from './ViewEmpty'
 
 interface ModelPickerProps {
   options: ModelOption[]
@@ -21,6 +23,7 @@ interface ModelPickerProps {
   /** Providers the gateway says cannot serve this bot (no usable key), with its reason. */
   unusable?: Record<string, string>
   initialQuery: string
+  autoEnabled?: boolean
   onSelect: (option: ModelOption) => void | Promise<void>
   onClose: () => void
   onManage: () => void
@@ -74,7 +77,7 @@ function saveOpenGroups(slugs: string[]) {
   try { localStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(slugs)) } catch { /* storage unavailable */ }
 }
 
-export function ModelPicker({ options, freeMode = false, current, profileModel, loading, error, unusable = {}, initialQuery, onSelect, onClose, onManage }: ModelPickerProps) {
+export function ModelPicker({ options, freeMode = false, current, profileModel, loading, error, unusable = {}, initialQuery, autoEnabled = false, onSelect, onClose, onManage }: ModelPickerProps) {
   const { t } = useTranslation()
   const { ui } = useAppConfig()
   const scores = useScores()
@@ -205,9 +208,33 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
         </div>
         <div className="model-picker-list" id="model-picker-list" ref={listRef}>
           {loading && options.length === 0 && <div className="model-picker-skeleton" aria-label={t('models.loading')}><span /><span /><span /><span /></div>}
+          {autoEnabled && !searching && (
+            <button
+              type="button"
+              className={`model-option is-auto ${current === AUTO_MODEL_SENTINEL ? 'is-current' : ''}`}
+              data-row="model:auto"
+              onClick={() => choose(AUTO_PICKER_OPTION)}
+            >
+              <span className="model-option-label">{t('models.auto')}</span>
+              <span className="model-option-meta">{t('models.autoHint')}</span>
+            </button>
+          )}
+          {autoEnabled && !searching && (
+            <button
+              type="button"
+              className={`model-option is-auto ${current === AUTO_FREE_MODEL_SENTINEL ? 'is-current' : ''}`}
+              data-row="model:auto-free"
+              onClick={() => choose(AUTO_FREE_PICKER_OPTION)}
+            >
+              <span className="model-option-label">{t('models.autoFree')}</span>
+              <span className="model-option-meta">{t('models.autoFreeHint')}</span>
+            </button>
+          )}
           {freeMode && <p className="model-picker-note">{t('models.freeModeOn')}</p>}
           {error && <p className="model-picker-note is-error">{error}</p>}
-          {!loading && !error && filtered.length === 0 && <p className="model-picker-note">{t('models.none')}</p>}
+          {!loading && !error && filtered.length === 0 && (
+            <ViewEmpty variant="inline" description={t('models.none')} role="status" />
+          )}
           {groups.map((group) => {
             const open = isOpen(group.slug)
             const bodyId = `model-group-${group.slug}`

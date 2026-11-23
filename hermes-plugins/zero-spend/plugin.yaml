@@ -1,0 +1,12 @@
+name: zero-spend
+version: "0.1.0"
+description: "Block paid or unverified model API routes before inference. Local, documented-free, and subscription endpoints only when HermesBot zero-spend mode is on."
+author: "hermes-plugins"
+kind: hooks
+platforms:
+  - linux
+  - macos
+provides_hooks:
+  - pre_llm_call
+  - pre_api_request
+  - pre_auxiliary_call

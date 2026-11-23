@@ -1,4 +1,4 @@
-/* Bot menu (right click in the sidebar): floating glass, the shape of a macOS menu. */
+/* Bot menu (right click in the sidebar): floating matte menu, macOS shape. */
 .bot-menu {
   position: fixed;
   z-index: 70;
@@ -8,17 +8,13 @@
   flex-direction: column;
   padding: 5px;
   border-radius: 14px;
-  background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-highlight), var(--glass-shadow), 0 0 0 .5px var(--glass-line);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow), inset 0 0 0 .5px var(--border);
   color: var(--text);
   visibility: hidden;
   outline: 0;
-  /* The active row: the app's --selected is white in the light theme, invisible on white glass. */
-  --menu-active: rgb(20 38 43 / 8%);
+  --menu-active: var(--selected);
 }
-:root[data-theme='dark'] .bot-menu { --menu-active: rgb(255 255 255 / 10%); }
 .bot-menu.is-placed { visibility: visible; animation: bot-menu-in 140ms var(--ease-out) both; }
 .bot-menu.is-sub { min-width: 210px; }
 
@@ -50,8 +46,7 @@
 .bot-menu-item.is-danger, .bot-menu-item.is-danger .bot-menu-icon { color: var(--danger); }
 .bot-menu-item.is-danger:focus { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
-.bot-menu-separator { height: 1px; flex: none; margin: 4px 10px; background: var(--glass-line); }
-:root[data-theme='dark'] .bot-menu-separator { background: rgb(255 255 255 / 10%); }
+.bot-menu-separator { height: 1px; flex: none; margin: 4px 10px; background: var(--border); }
 
 /* New section: the item becomes a field, Enter files the bot there. */
 .bot-menu-new { min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 10px; color: var(--text-secondary); }

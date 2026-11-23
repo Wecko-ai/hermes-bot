@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ChatMessage, Routine, SessionUsage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
+import { pickerModelForSession } from '../lib/auto-router'
 import { resolveUpdater, type Updater } from './updater'
 
 /** What is kept of a Bot Chat to reopen it instantly, before the server re-read. */
@@ -8,6 +9,8 @@ export interface ChatCacheEntry {
   chat: ActiveChat
   messages: ChatMessage[]
   routines: Routine[]
+  /** Model picker choice (may be `hermesbot:auto` while `chat.model` is a routed model). */
+  pickerModel?: string
 }
 
 export function latestMessageTime(messages: ChatMessage[]) {
@@ -178,7 +181,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   cache: new Map(),
 
   setActiveChat: (activeChat) => set({ activeChat }),
-  setChatModel: (value) => set((state) => ({ chatModel: resolveUpdater(value, state.chatModel) })),
+  setChatModel: (value) => {
+    const chatModel = resolveUpdater(value, get().chatModel)
+    const profile = get().activeChat?.profile
+    if (profile) {
+      const cached = get().cache.get(profile)
+      if (cached) get().cache.set(profile, { ...cached, pickerModel: chatModel })
+    }
+    set({ chatModel })
+  },
   // The open thread keeps its whole history (the user scrolls it); only stored cache entries are capped.
   setMessages: (value) => set((state) => ({ messages: resolveUpdater(value, state.messages) })),
   setRoutines: (routines) => set({ routines }),
@@ -247,7 +258,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (cached) {
       set({
         activeChat: cached.chat,
-        chatModel: cached.chat.model || '',
+        chatModel: pickerModelForSession(cached.pickerModel, cached.chat.model),
         messages: cached.messages,
         routines: cached.routines,
         running: cached.chat.running,
@@ -269,10 +280,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   applySyncedChat: (profile, synced, { preserveLive, resumed }) => {
     const messages = trimCachedMessages(synced.messages)
     const stored = messages === synced.messages ? synced : { ...synced, messages }
-    get().cache.set(profile, stored)
+    const prev = get().cache.get(profile)
+    const pickerModel = prev?.pickerModel
+    get().cache.set(profile, { ...stored, ...(pickerModel ? { pickerModel } : {}) })
     set({
       activeChat: synced.chat,
-      chatModel: synced.chat.model || '',
+      chatModel: pickerModelForSession(pickerModel, synced.chat.model),
       running: synced.chat.running,
       ...(preserveLive ? {} : { messages: synced.messages }),
       ...(!synced.chat.running && resumed ? { streaming: '', streamKey: '', activity: '' } : {}),

@@ -21,5 +21,6 @@ export default defineConfig({
     // (every component test then fails with "act is not a function"). Tests always run in
     // Vitest's own "test" environment, like a shell without NODE_ENV.
     env: { NODE_ENV: 'test' },
+  exclude: ['**/node_modules/**', '**/dist/**', 'scripts/real-gateway-approvals.test.mjs'],
   },
 })

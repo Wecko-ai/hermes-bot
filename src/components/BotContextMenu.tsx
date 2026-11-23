@@ -20,6 +20,7 @@ interface BotContextMenuProps {
   canManage: boolean
   onAction: (action: BotAction) => void
   onRename: () => void
+  onEdit: () => void
   onDelete: () => void
   /** `restoreFocus`: closed from the keyboard or by an action, focus goes back to the bot's row. */
   onClose: (restoreFocus: boolean) => void
@@ -29,7 +30,7 @@ interface BotContextMenuProps {
  * Right-click menu of a bot in the sidebar. Pin and mark as read stay on this Mac; move, rename, hide and
  * delete write the bot's card in Hermes, through the sidebar's `onAction` and dialogs.
  */
-export function BotContextMenu({ bot, at, pinned, sections, canManage, onAction, onRename, onDelete, onClose }: BotContextMenuProps) {
+export function BotContextMenu({ bot, at, pinned, sections, canManage, onAction, onRename, onEdit, onDelete, onClose }: BotContextMenuProps) {
   const { t } = useTranslation()
   const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
@@ -170,6 +171,7 @@ export function BotContextMenu({ bot, at, pinned, sections, canManage, onAction,
         </div>
         <MenuItem icon={<Bell size={16} />} label={t('botMenu.markRead')} disabled={bot.unread === 0} onSelect={() => act({ type: 'markRead' })} onHover={hideSub} />
         <div className="bot-menu-separator" role="separator" />
+        <MenuItem icon={<SquarePen size={16} />} label={t('botMenu.editProfile')} disabled={!canManage} onSelect={() => { onClose(false); onEdit() }} onHover={hideSub} />
         <MenuItem icon={<SquarePen size={16} />} label={t('botMenu.rename')} disabled={!canManage} onSelect={() => { onClose(false); onRename() }} onHover={hideSub} />
         <div className="bot-menu-separator" role="separator" />
         <MenuItem icon={copy === 'done' ? <Check size={16} /> : <Copy size={16} />} label={copyLabel} disabled={!sessionId} onSelect={copyId} onHover={hideSub} />

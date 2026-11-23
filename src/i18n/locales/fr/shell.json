@@ -103,6 +103,7 @@
     "newSectionName": "Nom de la section",
     "createSection": "Créer",
     "markRead": "Marquer comme lu",
+    "editProfile": "Fiche du bot…",
     "rename": "Renommer le bot",
     "copyId": "Copier l’ID de conversation",
     "copied": "ID de conversation copié",
@@ -131,7 +132,34 @@
       "offline": "Hermes ne répond pas. Vérifie la connexion, puis réessaie."
     }
   },
+  "botEdit": {
+    "title": "Fiche {{name}}",
+    "hint": "Les changements ne partent qu’après confirmation. SOUL et toolsets passent par Hermes ; l’avatar utilise la fiche du bot.",
+    "model": "Modèle (lecture seule)",
+    "look": "Avatar",
+    "toolsets": "Toolsets activés",
+    "toolsetsPlaceholder": "Séparés par des virgules, ex. web, places",
+    "soul": "Persona (SOUL.md)",
+    "diff": "Aperçu des changements",
+    "previewHint": "Relis avant d’enregistrer.",
+    "confirmHint": "Confirme pour écrire dans Hermes.",
+    "export": "Exporter le gabarit",
+    "back": "Modifier encore",
+    "saved": "Fiche du bot enregistrée."
+  },
+  "botImport": {
+    "title": "Importer un bot",
+    "hint": "Choisis un gabarit JSON exporté depuis HermesBot. Rien n’est créé avant ta confirmation.",
+    "chooseFile": "Choisir un fichier…",
+    "preview": "Aperçu du SOUL",
+    "toolsets": "Toolsets : {{list}}",
+    "fileHint": "Choisis un fichier gabarit pour l’aperçu.",
+    "createHint": "Vérifie le nom, puis confirme la création.",
+    "confirmCreate": "Créer le bot « {{name}} » depuis ce gabarit ?",
+    "create": "Créer le bot"
+  },
   "newBot": {
+    "importBot": "Importer un bot…",
     "title": "Nouveau bot",
     "step": "Étape {{current}} sur 2",
     "stepName": "Nom",
@@ -322,6 +350,9 @@
   "notifications": {
     "done": "A terminé",
     "question": "Te pose une question",
-    "approval": "Attend ton approbation"
+    "approval": "Attend ton approbation",
+    "draft": "Brouillon à valider",
+    "routineDone": "Routine terminée : {{name}}",
+    "routineFailed": "Routine en échec : {{name}}"
   }
 }

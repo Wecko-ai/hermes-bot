@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { focusableElements, tabTrapIndex } from '../lib/a11y-focus'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Cpu, KeyRound, MessageSquare, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from 'lucide-react'
+import { BarChart3, Brain, ChevronRight, Cpu, KeyRound, MessageSquare, Radio, Search, SlidersHorizontal, Sparkles, UserRound, X, type LucideIcon } from 'lucide-react'
+import { MemorySetting } from './MemorySetting'
+import { SkillsSetting } from './SkillsSetting'
 import { version } from '../../package.json'
+import type { HermesClient } from '../lib/hermes'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { modelLabel } from '../lib/model'
@@ -18,14 +21,25 @@ import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/loca
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
 import { CompactionSetting } from './CompactionSetting'
+import { ApprovalsSetting } from './ApprovalsSetting'
+import { UsageGlobalSection } from './UsageGlobalSection'
+import { ViewEmpty } from './ViewEmpty'
+import { AutoRoutingSection } from './AutoRoutingSection'
+import { AUTO_FREE_MODEL_SENTINEL, AUTO_MODEL_SENTINEL } from '../lib/auto-router'
+import { useChatStore } from '../store/chat'
 
-export type SettingsTab = 'general' | 'chat' | 'models' | 'vault' | 'account'
+import { ChannelsWizard } from './ChannelsWizard'
 
-const TABS: { id: SettingsTab; icon: LucideIcon }[] = [
+export type SettingsTab = 'general' | 'chat' | 'models' | 'memory' | 'skills' | 'vault' | 'channels' | 'usage' | 'account'
+
+const BASE_TABS: { id: SettingsTab; icon: LucideIcon }[] = [
   { id: 'general', icon: SlidersHorizontal },
   { id: 'chat', icon: MessageSquare },
   { id: 'models', icon: Cpu },
+  { id: 'memory', icon: Brain },
+  { id: 'skills', icon: Sparkles },
   { id: 'vault', icon: KeyRound },
+  { id: 'channels', icon: Radio },
   { id: 'account', icon: UserRound },
 ]
 
@@ -39,6 +53,7 @@ interface SettingsDialogProps {
   modelsError: string
   onLoadModels: () => void
   connected: boolean
+  client?: HermesClient | null
   reconnecting: boolean
   onReconnect: () => void
   onLogout: () => void
@@ -161,9 +176,10 @@ function NotificationTest() {
   )
 }
 
-function ChatTab({ localModels, bots, demo, compactionContext }: { localModels?: LocalModels | null; bots: Bot[]; demo: boolean; compactionContext?: SettingsDialogProps['compactionContext'] }) {
+function ChatTab({ localModels, bots, demo, compactionContext, client, connected }: { localModels?: LocalModels | null; bots: Bot[]; demo: boolean; compactionContext?: SettingsDialogProps['compactionContext']; client?: HermesClient | null; connected: boolean }) {
   const { t } = useTranslation()
   const settings = useSettings()
+  const autoRouter = useAppConfig().autoRouter
   const [loaded, setLoaded] = useState<LocalModels | null>(null)
   // Models given by the app (the visual demo): Ollama is not asked.
   useEffect(() => { if (localModels === undefined) void loadLocalModels().then(setLoaded) }, [localModels])
@@ -178,7 +194,33 @@ function ChatTab({ localModels, bots, demo, compactionContext }: { localModels?:
         <Segments<DictationLanguage> label={t('settings.dictationLanguage')} value={settings.dictationLanguage} options={[{ id: 'interface', label: t('settings.dictationLanguageOptions.interface') }, { id: 'fr', label: t('settings.languageOptions.fr') }, { id: 'en', label: t('settings.languageOptions.en') }]} onChange={(dictationLanguage) => updateSettings({ dictationLanguage })} />
       </Row>
       <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
+      {autoRouter?.enabled && (
+        <Toggle
+          label={t('settings.autoModel')}
+          hint={t('settings.autoModelHint')}
+          checked={settings.useAutoModel || useChatStore.getState().chatModel === AUTO_MODEL_SENTINEL}
+          onChange={(useAutoModel) => {
+            updateSettings(useAutoModel ? { useAutoModel, useAutoFreeModel: false } : { useAutoModel })
+            if (useAutoModel) useChatStore.getState().setChatModel(AUTO_MODEL_SENTINEL)
+          }}
+        />
+      )}
+      {autoRouter?.enabled && (
+        <Toggle
+          label={t('settings.autoFreeModel')}
+          hint={t('settings.autoFreeModelHint')}
+          checked={settings.useAutoFreeModel || useChatStore.getState().chatModel === AUTO_FREE_MODEL_SENTINEL}
+          onChange={(useAutoFreeModel) => {
+            updateSettings(useAutoFreeModel ? { useAutoFreeModel, useAutoModel: false } : { useAutoFreeModel })
+            if (useAutoFreeModel) useChatStore.getState().setChatModel(AUTO_FREE_MODEL_SENTINEL)
+          }}
+        />
+      )}
       <Toggle label={t('settings.caveman')} hint={t('settings.cavemanHint')} checked={settings.caveman} onChange={(caveman) => updateSettings({ caveman })} />
+      <Toggle label={t('settings.backgroundTask')} hint={t('settings.backgroundTaskHint')} checked={settings.backgroundTask} onChange={(backgroundTask) => updateSettings({ backgroundTask })} />
+      <Toggle label={t('settings.toneCharter')} hint={t('settings.toneCharterHint')} checked={settings.toneCharter} onChange={(toneCharter) => updateSettings({ toneCharter })} />
+      <Toggle label={t('settings.progressInThread')} hint={t('settings.progressInThreadHint')} checked={settings.progressInThread} onChange={(progressInThread) => updateSettings({ progressInThread })} />
+      {!demo && <ApprovalsSetting client={client} connected={connected} />}
       <CompactionSetting slugs={bots.map((bot) => bot.slug)} context={compactionContext} demo={demo} />
       <VoiceSettings />
       <Row label={t('settings.sortBots')}>
@@ -391,7 +433,9 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
       </div>
       {modelsLoading && models.length === 0 && <p className="settings-note">{t('settings.loadingModels')}</p>}
       {modelsError && <p className="settings-note is-error">{modelsError} <button type="button" className="settings-link" onClick={onLoadModels}>{t('settings.retry')}</button></p>}
-      {!modelsLoading && !modelsError && filtered.length === 0 && <p className="settings-note">{t('settings.noModel')}</p>}
+      {!modelsLoading && !modelsError && filtered.length === 0 && (
+        <ViewEmpty variant="inline" className="settings-models-empty" description={t('settings.noModel')} role="status" />
+      )}
       <div className="settings-model-groups">
         {groups.map((group) => {
           const open = searching || openGroups.has(group.slug)
@@ -467,10 +511,25 @@ function AccountTab({ connected, reconnecting, onReconnect, onLogout }: Pick<Set
 }
 
 /** App settings, specific to this Mac. Only the compaction block writes into the Hermes profiles, on its Save button. */
+function UsageTab({ bots }: { bots: Bot[] }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <p className="settings-note">{t('usageGlobal.settingsIntro')}</p>
+      <UsageGlobalSection bots={bots} />
+      <AutoRoutingSection />
+    </>
+  )
+}
+
 export function SettingsDialog(props: SettingsDialogProps) {
   const { t } = useTranslation()
   const { tab, onSelectTab } = props
   const demo = props.demo === true
+  const { features } = useAppConfig()
+  const tabs = features.usageGlobal
+    ? [...BASE_TABS.filter((item) => item.id !== 'account'), { id: 'usage' as const, icon: BarChart3 }, ...BASE_TABS.filter((item) => item.id === 'account')]
+    : BASE_TABS
   const modelsDraft = useHiddenModelsDraft(demo)
   // Unsaved model choices are never dropped without asking.
   const onClose = () => {
@@ -512,7 +571,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
       >
         <nav className="settings-nav" aria-label={t('settings.sections')}>
           <h2>{t('settings.title')}</h2>
-          {TABS.map((item) => (
+          {tabs.map((item) => (
             <button key={item.id} type="button" className={item.id === tab ? 'is-active' : ''} aria-current={item.id === tab ? 'page' : undefined} onClick={() => onSelectTab(item.id)}>
               <item.icon size={15} />{t(`settings.tabs.${item.id}`)}
             </button>
@@ -525,9 +584,13 @@ export function SettingsDialog(props: SettingsDialogProps) {
           </header>
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
-            {tab === 'chat' && <ChatTab localModels={props.localModels} bots={props.bots} demo={demo} compactionContext={props.compactionContext} />}
+            {tab === 'chat' && <ChatTab localModels={props.localModels} bots={props.bots} demo={demo} compactionContext={props.compactionContext} client={props.client} connected={props.connected} />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} demo={demo} draft={modelsDraft} />}
+            {tab === 'memory' && <MemorySetting />}
+            {tab === 'skills' && <SkillsSetting bots={props.bots} client={props.client ?? null} />}
             {tab === 'vault' && <VaultTab bots={props.bots} />}
+            {tab === 'usage' && features.usageGlobal && <UsageTab bots={props.bots} />}
+            {tab === 'channels' && <ChannelsWizard bots={props.bots} />}
             {tab === 'account' && <AccountTab connected={props.connected} reconnecting={props.reconnecting} onReconnect={props.onReconnect} onLogout={props.onLogout} />}
           </div>
           {(tab === 'models' || modelsDraft.dirty) && <ModelsSaveBar draft={modelsDraft} />}

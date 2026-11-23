@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
+import { AUTO_FREE_MODEL_SENTINEL, AUTO_MODEL_SENTINEL } from '../lib/auto-router'
 import { CHAT_CACHE_LIMIT, freshNotes, latestMessageTime, markMessageFailed, resetChatStore, resolveSyncedMessages, trimCachedMessages, useChatStore, type ChatCacheEntry } from './chat'
 
 const message = (id: string, createdAt: string | null = null, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id, role: 'assistant', content: id, createdAt, ...extra })
@@ -182,7 +183,26 @@ describe('store de conversation', () => {
     const state = useChatStore.getState()
     expect(state.messages.map((item) => item.id)).toEqual(['live'])
     expect(state.running).toBe(true)
-    expect(s.getCached('a')).toBe(synced)
+    expect(s.getCached('a')).toMatchObject({ chat: synced.chat, messages: synced.messages })
+  })
+
+  it('applySyncedChat garde Auto sur le sélecteur malgré un modèle de session routé', () => {
+    const s = useChatStore.getState()
+    s.setCached('a', { ...entry('a', []), pickerModel: AUTO_MODEL_SENTINEL })
+    s.setActiveChat(chat('a', { model: 'kimi-for-coding' }))
+    s.setChatModel(AUTO_MODEL_SENTINEL)
+    const synced = { chat: chat('a', { model: 'gemma-local' }), messages: [message('m')], routines: [] }
+    s.applySyncedChat('a', synced, { preserveLive: false, resumed: true })
+    expect(useChatStore.getState().chatModel).toBe(AUTO_MODEL_SENTINEL)
+    expect(s.getCached('a')?.pickerModel).toBe(AUTO_MODEL_SENTINEL)
+    expect(s.getCached('a')?.chat.model).toBe('gemma-local')
+  })
+
+  it('enterProfile restaure le sentinel Auto depuis le cache', () => {
+    const s = useChatStore.getState()
+    s.setCached('a', { ...entry('a', [message('m1')], { model: 'kimi-for-coding' }), pickerModel: AUTO_FREE_MODEL_SENTINEL })
+    s.enterProfile('a')
+    expect(useChatStore.getState().chatModel).toBe(AUTO_FREE_MODEL_SENTINEL)
   })
 
   it('applySyncedChat après une coupure vide le streaming d’un tour fini', () => {

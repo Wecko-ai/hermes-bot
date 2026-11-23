@@ -125,6 +125,10 @@ export interface ChatMessage {
   delegation?: DelegationTask[]
   /** Terminal call that started a coding agent headless (`claude -p`…), never the command itself. */
   agentRun?: AgentRun & { background: boolean }
+  /** Short milestone the bot wrote before the final reply (`message.interim`). */
+  progress?: boolean
+  /** Auto routing badge for this user turn (no prompt text). */
+  autoRoute?: { category: string; chosen: string; reason: string }
 }
 
 /** One child asked for by `delegate_task`: its goal and the background the bot gave it. */
@@ -145,14 +149,39 @@ export interface AgentMessage {
   text: string
 }
 
+export type RoutineTrigger = 'schedule' | 'webhook' | 'email'
+
+export interface RoutineEventBinding {
+  trigger: RoutineTrigger
+  auth?: 'bearer' | 'hmac'
+  preset?: 'generic' | 'github'
+  emailQuery?: string
+  pollMinutes?: number
+  hookId?: string
+  hookUrl?: string
+  enabled?: boolean
+}
+
+export interface RoutineRun {
+  at: string
+  source: string
+  ok: boolean
+  detail?: string
+}
+
 export interface Routine {
   id: string
   name: string
+  prompt?: string
   schedule: string
   scheduleText: string
   enabled: boolean
   nextRunAt: string | null
   lastRunAt: string | null
+  lastStatus?: string | null
+  trigger?: RoutineTrigger
+  event?: RoutineEventBinding
+  runs?: RoutineRun[]
 }
 
 export interface BotDetails {

@@ -23,8 +23,36 @@ const { guardNavigation } = require('./navigation.cjs')
 const { grantPermission, grantDevicePermission } = require('./permissions.cjs')
 const { sshForwardArgs, stopTunnel } = require('./ssh-tunnel.cjs')
 const { adoptEnvironmentVaultToken, currentVaultToken, envWithoutVaultToken, rememberVaultToken } = require('./vault-token.cjs')
+const os = require('node:os')
 
-const ORIGIN = 'http://127.0.0.1:4330'
+function applyPackVariant() {
+  let variant = {}
+  try {
+    variant = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'private', 'variant.json'), 'utf8')) || {}
+  } catch {
+    variant = {}
+  }
+  const dataName = typeof variant.dataName === 'string' ? variant.dataName.trim() : ''
+  const port = Number(variant.port)
+  if (dataName && /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(dataName)) {
+    process.env.HERMESBOT_DATA_NAME = process.env.HERMESBOT_DATA_NAME || dataName
+    try {
+      app.setName(dataName)
+      if (process.platform === 'darwin') {
+        app.setPath('userData', path.join(os.homedir(), 'Library', 'Application Support', dataName))
+      }
+    } catch {
+      // setName/setPath can be unavailable in unit tests
+    }
+  }
+  if (Number.isInteger(port) && port >= 1024 && port <= 65535) {
+    process.env.PORT = process.env.PORT || String(port)
+  }
+  return { port: Number(process.env.PORT || 4330) }
+}
+
+const packVariant = applyPackVariant()
+const ORIGIN = `http://127.0.0.1:${packVariant.port}`
 // Optional settings: environment variables, then config.json in the app's data folder (see server/config.cjs).
 const config = loadConfig()
 const HERMES_ORIGIN = config.gatewayOrigin
@@ -56,7 +84,7 @@ const storeIo = {
 
 async function startServer() {
   process.env.NODE_ENV = 'production'
-  process.env.PORT = '4330'
+  if (!process.env.PORT) process.env.PORT = '4330'
   configureSessionPersistence()
   localKey = randomBytes(32).toString('base64url')
   globalThis.__hermesBotLocalKey = localKey
@@ -64,7 +92,7 @@ async function startServer() {
   try {
     await listening
   } catch (error) {
-    if (error.code === 'EADDRINUSE') throw new Error(text().portTaken(error.port || 4330))
+    if (error.code === 'EADDRINUSE') throw new Error(text().portTaken(error.port || Number(process.env.PORT || 4330)))
     throw error
   }
 }
@@ -231,6 +259,26 @@ function windowInFront(win = mainWindow) {
   return win.isFocused() && win.isVisible() && !win.isMinimized()
 }
 
+function reportPushWindow() {
+  if (!localKey) return
+  const body = JSON.stringify({ inFront: windowInFront() })
+  const port = Number(process.env.PORT || 4330)
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port,
+    path: '/api/push/window',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      'X-HermesBot-Local-Key': localKey,
+    },
+  }, (res) => { res.resume() })
+  req.on('error', () => {})
+  req.write(body)
+  req.end()
+}
+
 function showMainWindow() {
   const win = mainWindow
   if (!win || win.isDestroyed()) return false
@@ -309,8 +357,13 @@ async function createWindow() {
     mainWindow.on(name, () => {
       dictationGate?.disarm()
       dictation.stop()
+      reportPushWindow()
     })
   }
+  for (const name of ['focus', 'show', 'restore']) {
+    mainWindow.on(name, () => reportPushWindow())
+  }
+  reportPushWindow()
   // A dictation never outlives the page that asked for it: reload, navigation, crash, closed window.
   mainWindow.webContents.on('did-start-navigation', (event) => {
     if (event.isMainFrame && !event.isSameDocument) {

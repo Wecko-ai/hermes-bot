@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { nextRovingIndex } from '../lib/a11y-focus'
-import { Activity, Clock3, FileText, Images, Info, X } from 'lucide-react'
+import { Activity, Clock3, FileText, Images, Info, Monitor, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { Bot, ChatMessage, Routine, SessionUsage } from '../types'
+import type { HermesClient } from '../lib/hermes'
+import { deleteRoutine, pauseRoutine, resumeRoutine, triggerRoutine } from '../lib/routines'
+import { RoutineEditorDialog } from './RoutineEditorDialog'
+import { ConnectorsTab } from './ConnectorsTab'
 import { statusLabel } from './BotAvatar'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
 import { DocumentView, type OpenDocument } from './DocumentView'
-import { MediaEmbed, MediaViewer, type ViewerState } from './MediaEmbed'
+import { MediaViewer, type ViewerState } from './MediaEmbed'
+import { MediaGallery } from './MediaGallery'
 import { UsageTab, type UsageDetails } from './UsageTab'
+import { PagesLibraryPanel } from './PagesLibraryPanel'
+import { useAppConfig } from '../lib/app-config'
+import type { LibraryPage } from '../lib/pages-library'
 import { dateTime, relativeTime, shortTime } from '../lib/time'
 import { conversationMedia, type MediaRef } from '../lib/media'
 import { workLine, type WorkSummary } from '../lib/work-summary'
@@ -15,6 +23,8 @@ import { stepIds } from '../lib/turns'
 import { backgroundSummary, effectiveStatus, type SubagentTail } from '../lib/background'
 import { isEntryActive, type SubagentEntry } from '../lib/subagent-history'
 import { SubagentHistory } from './SubagentHistory'
+import { ComputerPanel } from './ComputerPanel'
+import { ViewEmpty } from './ViewEmpty'
 
 function cleanRoutineName(name: string, bot: Bot) {
   const strip = (value: string, prefix: string) =>
@@ -22,7 +32,7 @@ function cleanRoutineName(name: string, bot: Bot) {
   return strip(strip(name, `[bot:${bot.slug}]`), `${bot.name}:`)
 }
 
-type Tab = 'routines' | 'activity' | 'subagents' | 'media' | 'usage' | 'about'
+type Tab = 'routines' | 'connectors' | 'activity' | 'subagents' | 'media' | 'computer' | 'usage' | 'library' | 'about'
 
 /** A tab asked for from outside (the Subagents block's History); `at` makes each request new. */
 export interface DetailsTabRequest {
@@ -54,10 +64,18 @@ interface DetailsPanelProps {
   onCloseDocument: (id: string) => void
   onReloadDocument: (id: string) => void
   onClose: () => void
+  client: HermesClient | null
+  routinesEditable: boolean
+  connectorsEnabled: boolean
+  onReloadRoutines: () => void
+  computerPanelEnabled?: boolean
+  onComputerSteer?: (text: string) => Promise<void>
+  onOpenLibraryPage?: (page: LibraryPage) => void
 }
 
-export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose }: DetailsPanelProps) {
+export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose, client, routinesEditable, connectorsEnabled, onReloadRoutines, computerPanelEnabled, onComputerSteer, onOpenLibraryPage }: DetailsPanelProps) {
   const { t } = useTranslation()
+  const { features, routines: routineConfig } = useAppConfig()
   const workText = avatarPhase(bot) === 'working' ? workLine(work, bot.workTitle) : ''
   const [tab, setTab] = useState<Tab>(() => tabRequest?.tab ?? 'routines')
   // The Usage tab stays open from one bot to the next: that is where they get compared.
@@ -72,6 +90,9 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
   const activeDocument = documents.find((document) => document.id === railTab)
   const media = useMemo(() => conversationMedia(messages), [messages])
   const [viewer, setViewer] = useState<ViewerState | null>(null)
+  const [editingRoutine, setEditingRoutine] = useState<Routine | null | false>(false)
+  const [routineBusy, setRoutineBusy] = useState('')
+  const [routineError, setRoutineError] = useState('')
   const closeViewer = useCallback(() => setViewer(null), [])
   const moveViewer = useCallback((index: number) => setViewer((current) => current && { ...current, index }), [])
   const onTabListKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -83,10 +104,29 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
     tabs[next].focus()
     tabs[next].click()
   }
-  const openImage = (item: MediaRef, version: string) => {
-    const images = media.filter((entry) => entry.ref.kind === 'image').map((entry) => entry.ref)
-    setViewer({ images, index: Math.max(0, images.indexOf(item)), profile: bot.slug, version })
+  const mutateRoutine = async (routine: Routine, action: 'pause' | 'resume' | 'run' | 'delete') => {
+    const prompts = {
+      pause: t('routines.confirmPause', { name: cleanRoutineName(routine.name, bot) }),
+      resume: t('routines.confirmResume', { name: cleanRoutineName(routine.name, bot) }),
+      run: t('routines.confirmRun', { name: cleanRoutineName(routine.name, bot) }),
+      delete: t('routines.confirmDelete', { name: cleanRoutineName(routine.name, bot) }),
+    }
+    if (!routinesEditable || !window.confirm(prompts[action])) return
+    setRoutineBusy(routine.id)
+    setRoutineError('')
+    try {
+      if (action === 'pause') await pauseRoutine(bot.slug, routine.id)
+      if (action === 'resume') await resumeRoutine(bot.slug, routine.id)
+      if (action === 'run') await triggerRoutine(bot.slug, routine.id)
+      if (action === 'delete') await deleteRoutine(bot.slug, routine.id)
+      onReloadRoutines()
+    } catch (cause) {
+      setRoutineError(cause instanceof Error ? cause.message : t('routines.error.generic'))
+    } finally {
+      setRoutineBusy('')
+    }
   }
+
   return (
     <aside className={`details-panel ${activeDocument ? 'has-document' : ''}`} aria-label={t('details.ariaLabel', { name: bot.name })}>
       <div className="details-topbar">
@@ -120,34 +160,72 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
         )}
         <div className="details-tabs" role="tablist" aria-orientation="horizontal" aria-label={t('details.infoTabs')} onKeyDown={onTabListKey}>
           <button role="tab" tabIndex={tab === 'routines' ? 0 : -1} aria-selected={tab === 'routines'} className={tab === 'routines' ? 'is-active' : ''} onClick={(event) => { setTab('routines'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.routines')}</button>
+          {connectorsEnabled && <button role="tab" tabIndex={tab === 'connectors' ? 0 : -1} aria-selected={tab === 'connectors'} className={tab === 'connectors' ? 'is-active' : ''} onClick={(event) => { setTab('connectors'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.connectors')}</button>}
           <button role="tab" tabIndex={tab === 'activity' ? 0 : -1} aria-selected={tab === 'activity'} className={tab === 'activity' ? 'is-active' : ''} onClick={(event) => { setTab('activity'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.activity')}{activity.length > 0 && <span>{activity.length}</span>}</button>
           <button role="tab" tabIndex={tab === 'subagents' ? 0 : -1} aria-selected={tab === 'subagents'} className={tab === 'subagents' ? 'is-active' : ''} onClick={(event) => { setTab('subagents'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.subagents')}{subagents.length > 0 && <span className={runningSubagents > 0 ? 'is-running' : ''}>{runningSubagents || subagents.length}</span>}</button>
           <button role="tab" tabIndex={tab === 'media' ? 0 : -1} aria-selected={tab === 'media'} className={tab === 'media' ? 'is-active' : ''} onClick={(event) => { setTab('media'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.media')}</button>
+          {computerPanelEnabled && <button role="tab" tabIndex={tab === 'computer' ? 0 : -1} aria-selected={tab === 'computer'} className={tab === 'computer' ? 'is-active' : ''} onClick={(event) => { setTab('computer'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}><Monitor size={14} />{t('details.tabs.computer')}</button>}
           <button role="tab" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} className={tab === 'usage' ? 'is-active' : ''} onClick={(event) => { setTab('usage'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.usage')}</button>
+          {features.pagesLibrary && <button role="tab" tabIndex={tab === 'library' ? 0 : -1} aria-selected={tab === 'library'} className={tab === 'library' ? 'is-active' : ''} onClick={(event) => { setTab('library'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.library')}</button>}
           <button role="tab" tabIndex={tab === 'about' ? 0 : -1} aria-selected={tab === 'about'} className={tab === 'about' ? 'is-active' : ''} onClick={(event) => { setTab('about'); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>{t('details.tabs.about')}</button>
         </div>
 
         {tab === 'routines' && <section className="details-section">
-          <div className="details-section-heading"><span>{t('details.tabs.routines')}</span><span className="details-count">{t('routines.active', { count: active })}</span></div>
+          <div className="details-section-heading">
+            <span>{t('details.tabs.routines')}</span>
+            <span className="details-count">{t('routines.active', { count: active })}</span>
+          </div>
+          {routinesEditable && (
+            <div className="routine-toolbar">
+              <button type="button" className="is-primary" onClick={() => setEditingRoutine(null)}>{t('routines.create')}</button>
+            </div>
+          )}
           {loading && <div className="routine-loading"><span /><span /><span /></div>}
-          {!loading && routines.length === 0 && <p className="details-empty">{t('routines.none')}</p>}
+          {!loading && routines.length === 0 && <ViewEmpty variant="inline" description={t('routines.none')} role="status" />}
+          {routineError && <p className="request-error" role="alert">{routineError}</p>}
           {!loading && routines.length > 0 && <div className="routine-card">{routines.map((routine) => (
             <article className={`routine-row ${routine.enabled ? '' : 'is-paused'}`} key={routine.id}>
               <div className="routine-icon"><Clock3 size={16} /></div>
               <div className="routine-copy">
                 <h3>{cleanRoutineName(routine.name, bot)}</h3>
-                <p>{routine.enabled ? `${dateTime(routine.nextRunAt)} · ${relativeTime(routine.nextRunAt)}` : t('routines.paused')}</p>
-                <code>{routine.schedule}</code>
+                <p>
+                  {routineConfig.eventTriggers && routine.trigger && routine.trigger !== 'schedule'
+                    ? t(`routines.trigger.${routine.trigger}`)
+                    : routine.enabled ? `${dateTime(routine.nextRunAt)} · ${relativeTime(routine.nextRunAt)}` : t('routines.paused')}
+                </p>
+                <code>{routine.trigger === 'schedule' || !routine.trigger ? routine.schedule : t(`routines.triggerSummary.${routine.trigger}`)}</code>
+                {routineConfig.eventTriggers && routine.runs && routine.runs.length > 0 && (
+                  <ul className="routine-run-history">
+                    {routine.runs.slice(0, 3).map((run) => (
+                      <li key={`${run.at}-${run.source}`}>
+                        {shortTime(run.at)} · {t('routines.runSource', { source: run.source })}{run.ok ? '' : ` · ${t('routines.runFailed')}`}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {routinesEditable && (
+                  <div className="routine-actions">
+                    <button type="button" disabled={routineBusy === routine.id} onClick={() => mutateRoutine(routine, routine.enabled ? 'pause' : 'resume')}>
+                      {routine.enabled ? t('routines.pause') : t('routines.resume')}
+                    </button>
+                    <button type="button" disabled={routineBusy === routine.id} onClick={() => mutateRoutine(routine, 'run')}>{t('routines.runNow')}</button>
+                    <button type="button" disabled={routineBusy === routine.id} onClick={() => setEditingRoutine(routine)}>{t('routines.edit')}</button>
+                    <button type="button" disabled={routineBusy === routine.id} onClick={() => mutateRoutine(routine, 'delete')}>{t('routines.delete')}</button>
+                  </div>
+                )}
               </div>
               <span className={`routine-state ${routine.enabled ? 'is-on' : ''}`} aria-label={routine.enabled ? t('routines.stateActive') : t('routines.paused')} />
             </article>
           ))}</div>}
-          <p className="readonly-note">{t('routines.readonly')}</p>
+          {!routinesEditable && <p className="readonly-note">{t('routines.readonlyDisabled')}</p>}
+          {routinesEditable && <p className="readonly-note">{t('routines.confirmHint')}</p>}
         </section>}
+
+        {tab === 'connectors' && connectorsEnabled && <ConnectorsTab profile={bot.slug} client={client} enabled={connectorsEnabled} />}
 
         {tab === 'activity' && <section className="details-section activity-section">
           <div className="details-section-heading"><span>{t('details.activityHeading')}</span><Activity size={14} /></div>
-          {activity.length === 0 && <p className="details-empty">{t('details.activityEmpty')}</p>}
+          {activity.length === 0 && <ViewEmpty variant="inline" description={t('details.activityEmpty')} role="status" />}
           {activity.map((message) => (
             <article className={`activity-row ${steps.has(message.id) ? 'is-step' : ''}`} key={message.id}>
               <span>{shortTime(message.createdAt)}</span>
@@ -160,13 +238,14 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
 
         {tab === 'media' && <section className="details-section media-section">
           <div className="details-section-heading"><span>{t('details.mediaHeading')}</span><span className="details-count"><Images size={13} /> {media.length}</span></div>
-          {media.length === 0 && <p className="details-empty">{t('details.mediaEmpty')}</p>}
-          <div className="media-library">
-            {media.map(({ ref, version }) => <MediaEmbed key={ref.path} media={ref} profile={bot.slug} version={version} onOpenImage={(item) => openImage(item, version)} onOpenDocument={(item) => onOpenDocument(bot.slug, item)} />)}
-          </div>
+          {media.length === 0 && <ViewEmpty variant="inline" description={t('details.mediaEmpty')} role="status" />}
+          {media.length > 0 && <MediaGallery items={media} profile={bot.slug} onOpenDocument={(item) => onOpenDocument(bot.slug, item)} />}
         </section>}
 
-        {tab === 'usage' && <UsageTab slug={bot.slug} sessionId={sessionId ?? bot.sessionId} running={running} live={usage} load={loadUsageDetails} />}
+        {tab === 'computer' && computerPanelEnabled && <ComputerPanel bot={bot} onSteer={onComputerSteer} />}
+
+        {tab === 'usage' && <UsageTab slug={bot.slug} sessionId={sessionId ?? bot.sessionId} configuredModel={bot.model} running={running} live={usage} load={loadUsageDetails} />}
+        {tab === 'library' && features.pagesLibrary && onOpenLibraryPage && <PagesLibraryPanel profile={bot.slug} onOpen={onOpenLibraryPage} />}
 
         {tab === 'about' && <section className="details-section about-section">
           <div className="details-section-heading"><span>{t('details.tabs.about')}</span><Info size={14} /></div>
@@ -178,6 +257,15 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
         </section>}
       </div>}
       {viewer && <MediaViewer viewer={viewer} onClose={closeViewer} onMove={moveViewer} />}
+      {editingRoutine !== false && routinesEditable && (
+        <RoutineEditorDialog
+          profile={bot.slug}
+          routine={editingRoutine}
+          eventTriggers={routineConfig.eventTriggers}
+          onClose={() => setEditingRoutine(false)}
+          onSaved={onReloadRoutines}
+        />
+      )}
     </aside>
   )
 }

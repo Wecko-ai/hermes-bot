@@ -154,7 +154,7 @@ const LISTING_WAITS = [0, 250, 500, 1_000, 2_000]
 
 const rpcCode = (error: unknown) => error instanceof Error && error.name === 'HermesRpcError' ? (error as HermesRpcError).code : undefined
 
-async function creationError(client: BotCreateClient, slug: string, error: unknown): Promise<BotCreateError> {
+export async function creationError(client: BotCreateClient, slug: string, error: unknown): Promise<BotCreateError> {
   // By name, not `instanceof`: a value import of hermes.ts here would be a cycle (hermes.ts reads bot-kickoff).
   if (!(error instanceof Error) || error.name !== 'HermesRpcError') {
     return new BotCreateError('offline', error instanceof Error ? error.message : String(error))
@@ -172,7 +172,7 @@ async function creationError(client: BotCreateClient, slug: string, error: unkno
   return new BotCreateError('refused', error.message)
 }
 
-async function waitUntilListed(client: BotCreateClient, slug: string, wait: (ms: number) => Promise<void>) {
+export async function waitUntilListed(client: BotCreateClient, slug: string, wait: (ms: number) => Promise<void> = delay) {
   for (const ms of LISTING_WAITS) {
     if (ms) await wait(ms)
     const known = await loadProfileNames(client).catch(() => null)
@@ -182,7 +182,7 @@ async function waitUntilListed(client: BotCreateClient, slug: string, wait: (ms:
 }
 
 /** `setup.runtime_check` for the new profile, as Hermes Desktop asks before the intro turn. Unknown answers never block. */
-async function modelIssue(client: BotCreateClient, slug: string): Promise<string | null> {
+export async function modelIssue(client: BotCreateClient, slug: string): Promise<string | null> {
   try {
     const result = await client.request('setup.runtime_check', { profile: slug }, 8_000)
     return result?.ok === false ? (typeof result.error === 'string' && result.error) || i18n.t('hermes.routeUnusable') : null

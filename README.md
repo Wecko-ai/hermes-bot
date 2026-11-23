@@ -35,6 +35,18 @@ Give this message to an agent that can run shell commands on your Mac:
 
 [AGENT-INSTALL.md](AGENT-INSTALL.md) is written for the agent. It checks your Mac, builds the app, tries the demo and tells you whether HermesBot can sign in to your Hermes. It asks you before it touches your Hermes or your Applications folder, and it never handles your password.
 
+## One-command setup
+
+From a clone, with Node.js 22+ and `npm ci` already done:
+
+```bash
+./scripts/install.sh          # checks tools and runs npm run check
+./scripts/install.sh --dry-run   # print steps without running them
+./scripts/install.sh --pack        # also run npm run pack
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for components, gateway contract, and Linux/Intel build notes.
+
 ## Try it without Hermes
 
 You need Node.js 22 or later.

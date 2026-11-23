@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, resetTurns, sendTestNotification, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden } from './notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, notificationForWaiting, resetTurns, sendTestNotification, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden } from './notifications'
 
 describe('notifications', () => {
   it('ne notifie pas un tour entre bots ni un tour fini en silence', () => {
@@ -100,6 +100,12 @@ describe('notifications', () => {
     expect(notificationForRequest('approval')).toBe('approval')
     expect(notificationForRequest('vault.unlock_prompt')).toBe('question')
     expect(notificationForRequest('autre')).toBeNull()
+  })
+
+  it('distingue approbation et question quand le bot attend', () => {
+    expect(notificationForWaiting('chat-orion', [{ sessionId: 'chat-orion', kind: 'approval' }])).toBe('approval')
+    expect(notificationForWaiting('chat-orion', [{ sessionId: 'chat-orion', kind: 'clarify' }])).toBe('question')
+    expect(notificationForWaiting('chat-nova', [{ sessionId: 'chat-orion', kind: 'approval' }])).toBe('question')
   })
 
   it('se tait seulement quand le chat du bot est sous les yeux', () => {

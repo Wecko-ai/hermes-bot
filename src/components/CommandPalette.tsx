@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { Bot } from '../types'
 import { BotAvatar } from './BotAvatar'
+import { ViewEmpty } from './ViewEmpty'
 import { locale } from '../i18n'
 import { isImeComposition } from '../lib/keyboard'
 
@@ -46,7 +47,9 @@ export function CommandPalette({ bots, onSelect, onClose }: CommandPaletteProps)
           />
         </div>
         <div className="palette-results" role="listbox" aria-label={t('palette.bots')}>
-          {results.length === 0 && <p>{t('palette.none')}</p>}
+          {results.length === 0 && (
+            <ViewEmpty variant="panel" description={t('palette.none')} role="status" />
+          )}
           {results.map((bot, position) => (
             <button type="button" key={bot.slug} role="option" aria-selected={position === active} className={position === active ? 'is-active' : ''} onMouseEnter={() => setIndex(position)} onClick={() => onSelect(bot)}>
               <BotAvatar bot={bot} size={26} />

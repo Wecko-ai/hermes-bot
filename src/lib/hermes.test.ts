@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, completeUsage, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
 import { BOT_KICKOFF_TEXT } from './bot-kickoff'
 
 const chat: ActiveChat = {
@@ -317,11 +317,22 @@ describe('usage', () => {
   })
 
   it('ne perd pas un compteur absent de la trame suivante', () => {
-    const first = parseUsage({ input_tokens: 10, cache_read_tokens: 7 })
+    const first = completeUsage(parseUsage({ input_tokens: 10, cache_read_tokens: 7 })!)
     const merged = mergeUsage(first, parseUsage({ input: 20, output: 1, total: 21 }))
     expect(merged).toMatchObject({ inputTokens: 20, cacheReadTokens: 7, totalTokens: 21 })
-    expect(mergeUsage(null, first)).toBe(first)
+    expect(mergeUsage(null, parseUsage({ input_tokens: 10 })!)).toMatchObject({ inputTokens: 10 })
     expect(mergeUsage(first, null)).toBe(first)
+  })
+
+  it('ne zero pas la fenêtre de contexte sur un usage de fin de tour', () => {
+    const session = completeUsage(parseUsage({
+      context_used: 41_000,
+      context_max: 1_000_000,
+      context_percent: 4.1,
+      input_tokens: 10,
+    })!)
+    const merged = mergeUsage(session, parseUsage({ input_tokens: 120, output_tokens: 40 })!)
+    expect(merged).toMatchObject({ contextUsed: 41_000, contextMax: 1_000_000, inputTokens: 120, outputTokens: 40 })
   })
 
   it('préfère session.stats et retombe sur session.usage', async () => {

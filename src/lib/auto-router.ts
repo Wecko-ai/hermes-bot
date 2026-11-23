@@ -1,0 +1,153 @@
+import type { ModelOption } from '../types'
+import { getAppConfig } from './app-config'
+import { modelCost } from './free-models'
+import { getSettings } from './settings'
+
+/** Conversation-only choice: routing runs before each send. */
+export const AUTO_MODEL_SENTINEL = 'hermesbot:auto'
+/** Same routing, free models only (no subscription quota): see `isStrictlyFree` on the server. */
+export const AUTO_FREE_MODEL_SENTINEL = 'hermesbot:auto-free'
+
+export type AutoMode = 'auto' | 'auto-free'
+
+export function isAutoModel(model: string | undefined) {
+  return model === AUTO_MODEL_SENTINEL || model === AUTO_FREE_MODEL_SENTINEL
+}
+
+/** Picker label when reopening a chat: Auto sticks across routed gateway models. */
+export function pickerModelForSession(pickerModel: string | undefined, sessionModel: string | undefined) {
+  if (isAutoModel(pickerModel)) return pickerModel
+  if (pickerModel) return pickerModel
+  return sessionModel || ''
+}
+
+/** After auto routing switches the gateway session, keep the Auto picker's sentinel. */
+export function pickerModelAfterRoute(currentPicker: string, routedModel: string) {
+  return isAutoModel(currentPicker) ? currentPicker : (routedModel || currentPicker)
+}
+
+/** The Auto mode of a send: the picker's choice first, then the Settings switches. */
+export function autoModeFor(model: string | undefined, settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean }): AutoMode | null {
+  if (model === AUTO_FREE_MODEL_SENTINEL) return 'auto-free'
+  if (model === AUTO_MODEL_SENTINEL) return 'auto'
+  if (settings.useAutoFreeModel) return 'auto-free'
+  if (settings.useAutoModel) return 'auto'
+  return null
+}
+
+export function autoRouterEnabled() {
+  return getAppConfig().autoRouter?.enabled === true
+}
+
+export interface AutoRouteDecision {
+  ok: boolean
+  mode?: AutoMode
+  category?: string
+  chosen?: string
+  provider?: string
+  model?: string
+  reason?: string
+  candidates?: { model: string; score: number }[]
+  fallbacks?: { provider: string; model: string; fullId: string; score: number }[]
+  error?: string
+  tokenEstimate?: number
+}
+
+export interface AutoRouteLogEntry {
+  mode?: AutoMode
+  bot: string
+  sessionId: string
+  category: string
+  chosen: string
+  reason: string
+  candidates: { model: string; score: number }[]
+  fallbacks: { model: string; error: string }[]
+  tokensIn?: number | null
+  tokensOut?: number | null
+  costUsd?: number | null
+  latencyMs?: number | null
+  outcome: 'ok' | 'error' | 'cancelled'
+}
+
+export interface AutoRouteBadge {
+  mode?: AutoMode
+  category: string
+  chosen: string
+  reason: string
+}
+
+export const AUTO_PICKER_OPTION: ModelOption = {
+  model: AUTO_MODEL_SENTINEL,
+  provider: 'hermesbot',
+  providerName: 'HermesBot',
+}
+
+export const AUTO_FREE_PICKER_OPTION: ModelOption = {
+  model: AUTO_FREE_MODEL_SENTINEL,
+  provider: 'hermesbot',
+  providerName: 'HermesBot',
+}
+
+export async function decideAutoRoute(input: {
+  bot: string
+  sessionId: string
+  text: string
+  imageCount: number
+  contextUsed?: number
+  contextMax?: number
+  models: ModelOption[]
+  analyticsProfiles?: string[]
+  mode?: AutoMode
+}): Promise<AutoRouteDecision> {
+  const subscriptions = getAppConfig().ui.subscriptionProviders
+  const zeroSpend = getSettings().freeMode
+  const models = input.models.map((option) => ({
+    provider: option.provider,
+    model: option.model,
+    free: modelCost(option, subscriptions) !== 'paid',
+  }))
+  const response = await fetch('/api/auto-router/decide', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: input.mode ?? 'auto',
+      bot: input.bot,
+      sessionId: input.sessionId,
+      text: input.text,
+      imageCount: input.imageCount,
+      contextUsed: input.contextUsed ?? 0,
+      contextMax: input.contextMax ?? 0,
+      models,
+      zeroSpend,
+      subscriptionProviders: subscriptions,
+      analyticsProfiles: input.analyticsProfiles ?? [],
+    }),
+  })
+  return response.json() as Promise<AutoRouteDecision>
+}
+
+export async function appendAutoRouteLog(entry: AutoRouteLogEntry) {
+  await fetch('/api/auto-router/log', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...entry, ts: new Date().toISOString() }),
+  })
+}
+
+export interface AutoRoutingLogResponse {
+  entries: AutoRouteLogEntry[]
+  summary: {
+    total: number
+    fallbacks: number
+    costUsd: number
+    byModel: { model: string; count: number; errors: number }[]
+  }
+}
+
+export async function loadAutoRoutingLog(days = 7): Promise<AutoRoutingLogResponse> {
+  const response = await fetch(`/api/auto-router/log?days=${days}`, { credentials: 'same-origin' })
+  if (!response.ok) throw new Error('auto_router_log_unavailable')
+  return response.json() as Promise<AutoRoutingLogResponse>
+}

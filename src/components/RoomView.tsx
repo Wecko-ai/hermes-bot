@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { ArrowDown, ArrowUp, Menu, Pause, RotateCcw, RotateCw, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { PendingRoomSend } from '../store/rooms'
-import { roomTimeline, type Room, type RoomDriverStatus, type RoomEvent, type RoomMember, type RoomMemberActivity } from '../lib/rooms'
+import { roomTimeline, type Room, type RoomContext, type RoomDriverStatus, type RoomEvent, type RoomMember, type RoomMemberActivity } from '../lib/rooms'
+import { roomRoutingMode, roomSendAllowed, type RoomRoutingMode } from '../lib/room-routing'
 import { mentionIndex, mentionOptions, mentionTokenAt, resolveMentions } from '../lib/mentions'
 import { mentionKeyAction } from '../lib/room-mention'
 import { nextStick, roomSendSettled, roomStopStillCurrent } from '../lib/room-scroll'
@@ -31,6 +32,8 @@ interface RoomViewProps {
   onOpenMobile: () => void
   onOpenBot: (slug: string) => void
   onReplay?: () => void
+  context?: RoomContext | null
+  onOpenRouting?: () => void
 }
 
 const DRAFTS_KEY = 'hermesbot-room-drafts'
@@ -70,6 +73,7 @@ export function RoomView(props: RoomViewProps) {
   const [mentionIndexState, setMentionIndex] = useState(0)
   const [stopping, setStopping] = useState(false)
   const [showJump, setShowJump] = useState(false)
+  const [routingBlock, setRoutingBlock] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -100,7 +104,10 @@ export function RoomView(props: RoomViewProps) {
   const menuOpen = Boolean(token && options.length > 0 && !locked)
   const activeOption = Math.min(mentionIndexState, Math.max(0, options.length - 1))
   const addressed = resolveMentions(draft, roomBots, '')
-  const targetLabel = addressed.length ? t('room.only', { names: addressed.map((bot) => bot.name).join(', ') }) : t('room.everyone')
+  const routingMode: RoomRoutingMode = roomRoutingMode(room.room_id, props.context)
+  const targetLabel = routingMode === 'mentions' && !addressed.length
+    ? t('roomRouting.hintMentions')
+    : addressed.length ? t('room.only', { names: addressed.map((bot) => bot.name).join(', ') }) : t('room.everyone')
   const working = Boolean(driver?.working || activities.length)
 
   useLayoutEffect(() => {
@@ -157,6 +164,11 @@ export function RoomView(props: RoomViewProps) {
     const roomId = room.room_id
     const content = (props.pending?.text || draft).trim()
     if (!content || props.sending) return
+    if (!roomSendAllowed(content, room.members, roomBots, routingMode)) {
+      setRoutingBlock(t('roomRouting.mentionRequired'))
+      return
+    }
+    setRoutingBlock('')
     const sent = await props.onSend(content)
     const settled = roomSendSettled(roomId, shownRoomId.current, sent)
     if (settled.clearStorage) writeDraft(roomId, '')
@@ -236,6 +248,7 @@ export function RoomView(props: RoomViewProps) {
         <div className="chat-header-actions">
           {props.onReplay && <button className="plain-icon" aria-label={t('room.replay')} title={t('room.replay')} onClick={props.onReplay}><RotateCcw size={17} /></button>}
           {(working || props.sending || props.pending) && <button className="plain-icon room-stop" aria-label={t('room.stop')} title={t('room.stop')} disabled={stopping} onClick={() => void stop()}><Pause size={17} fill="currentColor" /></button>}
+          {props.onOpenRouting && <button className="plain-icon" aria-label={t('roomRouting.title')} title={t('roomRouting.title')} onClick={props.onOpenRouting}><UsersRound size={17} /></button>}
           <button className="plain-icon" aria-label={t('room.refresh')} title={t('room.refresh')} onClick={props.onRefresh}><RotateCw size={17} /></button>
         </div>
       </header>
@@ -348,6 +361,7 @@ export function RoomView(props: RoomViewProps) {
           </div>
         )}
         <div className="room-routing" title={targetLabel}><UsersRound size={13} /><span>{targetLabel}</span></div>
+        {routingBlock && <p className="room-routing-block" role="alert">{routingBlock}</p>}
         <div className="composer room-composer">
           <textarea
             ref={textareaRef}

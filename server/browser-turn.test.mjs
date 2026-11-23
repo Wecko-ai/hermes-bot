@@ -94,6 +94,9 @@ describe('propriétaire du Chrome partagé', () => {
       { owner: 'nova', since: null },
     ])
     expect(parseBrowserTurns('tour : vega 2026-01-05T10:00:00Z pid=1 depuis 0 min')).toEqual([{ owner: 'vega', since: '2026-01-05T10:00:00.000Z' }])
+    expect(parseBrowserTurns('tour : orion 2026-01-05T10:00:00Z target=ABCDEF pid=1 depuis 0 min')).toEqual([
+      { owner: 'orion', since: '2026-01-05T10:00:00.000Z', targetId: 'ABCDEF' },
+    ])
   })
 
   it('laisse de côté un tour tenu au-delà de la limite de l’arbitre', () => {

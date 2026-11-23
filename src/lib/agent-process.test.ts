@@ -82,6 +82,8 @@ describe('commande d’un agent de code', () => {
     expect(agentRun('dsh headless --json "Corrige le test login"')).toMatchObject({ tool: 'DeepSeek Harness', prompt: 'Corrige le test login' })
     expect(agentRun('cd /tmp/app && dsh --profile headless --json --permission-mode workspace-write "Ajoute les tests"')).toMatchObject({ tool: 'DeepSeek Harness', cwd: '/tmp/app', prompt: 'Ajoute les tests' })
     expect(agentRun('dsh tui')).toBeNull()
+    expect(agentRun('~/bin/dsh-sub --level hard --cwd /tmp/app "Ajoute les tests"')).toMatchObject({ tool: 'DeepSeek Harness', cwd: '/tmp/app', prompt: 'Ajoute les tests' })
+    expect(agentRun('dsh-sub -p "Corrige le build" --output-format json')).toMatchObject({ tool: 'DeepSeek Harness', prompt: 'Corrige le build' })
     expect(agentRun('dsh web --help')).toBeNull()
     const lines = parseDshProgress([
       JSON.stringify({ type: 'tool_call', tool: 'read_file', input: { path: 'src/App.tsx' } }),

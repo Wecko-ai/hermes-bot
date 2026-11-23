@@ -25,6 +25,7 @@ interface NewBotDialogProps {
   /** Creates the bot and opens its chat; rejects with a `BotCreateError` when the profile was not created. */
   onCreate: (draft: BotDraft) => Promise<void>
   onClose: () => void
+  onImport?: () => void
 }
 
 /** A row of choices with the keyboard of a radio group: arrows move the choice, Tab leaves the row. */
@@ -77,7 +78,7 @@ function Choices<T extends string>({ label, options, value, onChange, labelOf, r
  * New bot, in two steps: its name (and the Hermes profile name derived from it), then its look. Create makes the
  * profile and its card; the app then opens the bot's chat, where it introduces itself.
  */
-export function NewBotDialog({ bots, connected, loadKnown, onCreate, onClose }: NewBotDialogProps) {
+export function NewBotDialog({ bots, connected, loadKnown, onCreate, onClose, onImport }: NewBotDialogProps) {
   const { t } = useTranslation()
   const titleId = useId()
   const stepId = useId()
@@ -238,6 +239,9 @@ export function NewBotDialog({ bots, connected, loadKnown, onCreate, onClose }: 
         {error && <p className="request-error" role="alert">{error}</p>}
         {!connected && <p className="request-error" role="status">{t('newBot.offline')}</p>}
         <div className="request-actions">
+          {step === 0 && onImport && (
+            <button type="button" className="secondary import-bot-link" disabled={busy} onClick={onImport}>{t('newBot.importBot')}</button>
+          )}
           {step === 0
             ? <button type="button" onClick={close} disabled={busy}>{t('newBot.cancel')}</button>
             : <button type="button" onClick={() => setStep(0)} disabled={busy}>{t('newBot.back')}</button>}

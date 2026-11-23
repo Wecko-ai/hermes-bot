@@ -2,7 +2,7 @@ import type { BotStatus, ChatMessage } from '../types'
 import { isSilentMessage, withoutSilentMarkers } from './hermes'
 import { parseIncomingAgentMessage } from './inter-agent'
 
-export type NotificationKind = 'done' | 'question' | 'approval'
+export type NotificationKind = 'done' | 'question' | 'approval' | 'draft' | 'routine'
 
 const BUSY: BotStatus[] = ['working', 'thinking']
 
@@ -12,6 +12,12 @@ export function notificationForStatus(previous: BotStatus | undefined, next: Bot
   if (next === 'done' && BUSY.includes(previous)) return 'done'
   if (next === 'waiting') return 'question'
   return null
+}
+
+/** Distinguishes an approval card from a clarify question while the bot is `waiting`. */
+export function notificationForWaiting(sessionId: string | undefined, prompts: { sessionId: string; kind: string }[]): NotificationKind {
+  if (sessionId && prompts.some((prompt) => prompt.sessionId === sessionId && prompt.kind === 'approval')) return 'approval'
+  return 'question'
 }
 
 /** Methods of a gateway request that wait on the user's answer. */

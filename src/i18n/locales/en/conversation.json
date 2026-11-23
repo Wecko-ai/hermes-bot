@@ -40,6 +40,7 @@
     "priority": "Priority",
     "queued": "Queued",
     "copyReply": "Copy the reply",
+    "listenReply": "Listen to the reply",
     "copyCode": "Copy",
     "copiedCode": "Copied",
     "opening": "Opening the conversation with {{name}}…",
@@ -126,6 +127,31 @@
     "botBusy": "The bot is still working.",
     "drafting": "Drafting mail…",
     "sentTo": "{{subject}}, to {{to}}"
+  },
+  "draft": {
+    "approved": "Draft approved for {{channel}}: {{recipient}}",
+    "discarded": "Draft dismissed ({{channel}})",
+    "restore": "Restore",
+    "cardLabel": "Outbound draft ({{channel}})",
+    "title": "Message draft",
+    "channel": "Channel",
+    "channels": { "x": "X", "slack": "Slack", "telegram": "Telegram" },
+    "recipient": "Recipient",
+    "thread": "Thread",
+    "threadPlaceholder": "Channel, DM, or thread id",
+    "attachments": "Attachments",
+    "attachmentsPlaceholder": "Paths or ids shown on the card",
+    "text": "Message",
+    "pending": "Awaiting approval",
+    "dismiss": "Dismiss",
+    "send": "Send",
+    "botBusy": "The bot is still working.",
+    "drafting": "Drafting message…",
+    "sent": "Sent on {{channel}} to {{recipient}}"
+  },
+  "progress": {
+    "toggle_one": "Show {{count}} progress step",
+    "toggle_other": "Show {{count}} progress steps"
   },
   "media": {
     "externalLink": "External link",

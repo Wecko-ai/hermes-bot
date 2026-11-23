@@ -30,9 +30,24 @@ describe('configuration locale', () => {
     expect(config.ollamaOrigin).toBe('http://127.0.0.1:11434')
     expect(config.localChat.model).toBe('')
     expect(config.browserTurn.command).toBeNull()
+    expect(config.computerPanel).toEqual({ enabled: false, cdpOrigin: '' })
     expect(config.llmStats).toEqual({ snapshotPath: '', keyCommand: null })
     expect(config.animationsDir).toBe(path.join(dataDir, 'animations'))
-    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '' })
+    expect(config.sharedMemory).toEqual({ dir: '', injectContext: false, injectMaxChars: 2000 })
+    expect(config.features).toEqual({ usageGlobal: true, vaultWallet: false, pagesLibrary: false })
+    expect(config.usageQuotas).toEqual([])
+    expect(config.pagesLibraryDir).toBe(path.join(dataDir, 'pages-library'))
+    expect(config.channels).toEqual({ wizardWrites: false })
+    expect(config.push).toEqual({ relayUrl: '', secretCommand: null })
+    expect(config.ui).toEqual({ defaultBot: '', sectionOrder: [], rosterOrder: {}, userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '', replyListenButton: false })
+    expect(config.routines.eventTriggers).toBe(false)
+  })
+
+  it('active les déclencheurs d’événements uniquement quand la clé est à true', () => {
+    const off = fixture({ userConfig: { routines: { eventTriggers: false } } })
+    expect(loadConfig({ env: {}, platform: 'darwin', home: off.home, root: off.root }).routines.eventTriggers).toBe(false)
+    const on = fixture({ userConfig: { routines: { eventTriggers: true } } })
+    expect(loadConfig({ env: {}, platform: 'darwin', home: on.home, root: on.root }).routines.eventTriggers).toBe(true)
   })
 
   it('superpose environnement, fichier utilisateur et fichier privé, dans cet ordre', () => {
@@ -140,6 +155,8 @@ describe('configuration locale', () => {
 
   it('range les données selon le système', () => {
     expect(dataDirectory({}, 'darwin', '/h')).toBe('/h/Library/Application Support/HermesBot')
+    expect(dataDirectory({ HERMESBOT_DATA_NAME: 'HermesBot Refonte' }, 'darwin', '/h')).toBe('/h/Library/Application Support/HermesBot Refonte')
+    expect(dataDirectory({ HERMESBOT_DATA_NAME: '../etc' }, 'darwin', '/h')).toBe('/h/Library/Application Support/HermesBot')
     expect(dataDirectory({}, 'linux', '/h')).toBe('/h/.config/HermesBot')
     expect(dataDirectory({ XDG_CONFIG_HOME: '/x' }, 'linux', '/h')).toBe('/x/HermesBot')
   })

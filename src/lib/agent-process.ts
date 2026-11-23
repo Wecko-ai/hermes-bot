@@ -116,6 +116,8 @@ const AGENTS: Record<string, { tool: string; headless: (words: string[]) => bool
   kimi: { tool: 'Kimi CLI', headless: (words) => words.some((word) => word === '-p' || word === '--print' || word === '-c' || word === '--command'), promptFlags: ['-p', '--print', '-c', '--command'] },
   'office-agent': { tool: 'Office agent', headless: () => true },
   dsh: { tool: DSH_TOOL, headless: isDshHeadless },
+  /** `~/bin/dsh-sub`: the owner's headless dsh sub-agent launcher, always headless (`--cwd DIR`, `-p` compat). */
+  'dsh-sub': { tool: DSH_TOOL, headless: () => true, promptFlags: ['-p', '--print'] },
 }
 
 /** Wrappers that run the command after them. `mq run … -- cmd` is the shared queue of the machine. */
@@ -258,6 +260,10 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
     if (!agent.headless(argWords.map((token) => token.value)) && !args.some((token) => token.kind === 'op' && (token.value === '<' || token.value === '<<')) && !pipedFrom) continue
 
     const run: AgentRun = { tool: agent.tool, key: commandKey(command), ...(cwd ? { cwd } : {}) }
+    if (name === 'dsh-sub') {
+      const at = argWords.findIndex((token) => token.value === '--cwd')
+      if (at >= 0 && argWords[at + 1]) run.cwd = argWords[at + 1].value
+    }
     // Redirections: stdin is the prompt, stdout the log.
     for (let index = 0; index < args.length; index += 1) {
       const token = args[index]

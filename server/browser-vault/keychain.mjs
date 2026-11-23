@@ -63,8 +63,8 @@ export function passwordValue(stderr) {
   return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value
 }
 
-/** `inet` items from `dump-keychain`, attributes decoded. */
-export function parseDump(text) {
+/** Items from `dump-keychain`, attributes decoded. */
+export function parseKeychainItems(text) {
   const items = []
   let current = null
   for (const line of String(text).split('\n')) {
@@ -86,7 +86,12 @@ export function parseDump(text) {
     const number = type === 'uint32' ? /^0x([0-9A-Fa-f]+)\s*$/.exec(raw.trim()) : null
     current.attributes[name] = number ? Number.parseInt(number[1], 16) : attributeValue(raw)
   }
-  return items.filter((item) => item.class === 'inet')
+  return items
+}
+
+/** `inet` items from `dump-keychain`, attributes decoded. */
+export function parseDump(text) {
+  return parseKeychainItems(text).filter((item) => item.class === 'inet')
 }
 
 const PROTOCOLS = { 'https:': 'htps', 'http:': 'http' }
@@ -132,7 +137,7 @@ const keychainDate = (value) => {
 }
 
 /** String for `security -i`: quotes and `\` escaped. Line breaks are refused beforehand. */
-const quote = (value) => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+export const quote = (value) => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 
 export function validBots(value) {
   const bots = Array.isArray(value) ? [...new Set(value)] : []

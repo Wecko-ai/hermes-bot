@@ -8,6 +8,7 @@ import type { ChatMode } from '../lib/modes'
 import type { DeliveryMode } from '../lib/delivery'
 import { LiveAvatar, avatarPhase } from './LiveAvatar'
 import { MessageList } from './MessageList'
+import { useSettings } from '../lib/settings'
 import { Composer, type ComposerHandle } from './Composer'
 import { PromptCard } from './PromptCard'
 import type { PendingPrompt } from '../lib/hermes'
@@ -36,6 +37,7 @@ interface ChatViewProps {
   onStop: () => void
   onNotice: (text: string) => void
   onOpenDocument: (profile: string, media: MediaRef) => void
+  onVaultFormDone?: (message: string) => void
   onOpenBot: (slug: string) => void
   modelLabel: string
   onOpenModels: (query: string) => void
@@ -66,6 +68,7 @@ const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).
 
 export function ChatView(props: ChatViewProps) {
   const { t } = useTranslation()
+  const { progressInThread } = useSettings()
   const { bot } = props
   // An open question blocks the turn: the bot is waiting for the user, not working.
   const waiting = props.prompts.length > 0
@@ -191,7 +194,9 @@ export function ChatView(props: ChatViewProps) {
         loading={props.loading}
         onSuggestion={async (text) => (await props.onSend(text, [])) !== false}
         onOpenDocument={props.onOpenDocument}
+        onVaultFormDone={props.onVaultFormDone}
         onOpenBot={props.onOpenBot}
+        progressInThread={progressInThread}
       />
       {props.modelPicker}
       {!props.hidden && props.voiceOverlay}

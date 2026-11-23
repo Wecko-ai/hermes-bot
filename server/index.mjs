@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { readFileSync } from 'node:fs'
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, pipeline } from 'node:stream'
@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
+import { createComputerPanelService } from './computer-panel/service.mjs'
+import { ComputerPanelError } from './computer-panel/errors.mjs'
 import configModule from './config.cjs'
 import { attachGatewayUpgrade } from './gateway-upgrade.mjs'
 import { DOCUMENT_TEXT_MAX_BYTES, IMAGE_MAX_BYTES, createByteCap, forwardRequestHeaders, isApiPath, readCappedText, relayLimitStatus, staticCacheControl } from './http-limits.mjs'
@@ -20,24 +22,148 @@ import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
 import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction } from './shared-settings.mjs'
 import { COMPACTION_BODY_MAX_BYTES, applyCompaction, compactionFrom, compressionOfConfig, gaugeFrom, profilesFrom } from './compaction.mjs'
+import {
+  MEMORY_BODY_MAX_BYTES, MEMORY_ENTRY_MAX_BYTES, MEMORY_TYPES, ensureStore, filePath, memoryDir, memoryType, parseMemoryFile,
+  removeEntry, searchEntries, summarizeForTurn, upsertEntry,
+} from './shared-memory.mjs'
+import { listSkillsCatalog, skillToggleBody } from './skills-catalog.mjs'
+import {
+  PROFILE_SLUG, SOUL_MAX_BYTES, TEMPLATE_MAX_BYTES, diffLines, exportTemplate, importTemplateBody, modelFromConfig,
+  soulPath, toolsetsBody, toolsetsFromConfig,
+} from './bot-profile.mjs'
+import {
+  backupPath, channelStatusFromKeys, configPatchFor, envKeysPresent, mergeEnvText, profileConfigPath, profileEnvPath,
+  validateChannelEnvBody, validateChannelRequest,
+} from './channels.mjs'
+import { createPushRelay } from './push-relay.mjs'
+import { pushAccountId } from './push-account.mjs'
+import { loadUiLayout, normalizeUiLayout, saveUiLayout } from './ui-layout.mjs'
 import { postVaultLogout, reduceVaultPoll, selectVaultToken, vaultRequestHeaders } from './vault-client.mjs'
+import { previewSchedule } from './cron-schedule.mjs'
+import { createMissingEmailAdapter } from './routine-events/email-adapter.mjs'
+import { fireRoutineWithExtra } from './routine-events/fire.mjs'
+import { createRoutineEventHandlers } from './routine-events/handlers.mjs'
+import { createRoutineEventStore, EVENT_ONLY_SCHEDULE } from './routine-events/store.mjs'
+import { startEmailWatcher } from './routine-events/watcher.mjs'
+import { loadConnectorsCatalog } from './connectors-catalog.mjs'
+import { aggregateAnalytics, estimateQuotas, profilesFromQuery } from './usage-global.mjs'
+import { PagesLibrary } from './pages-library.mjs'
+import { createAutoRouter, resolveAutoRouterPaths } from './auto-router/decide.mjs'
+import { appendRoutingLog, readRoutingLog, sanitizeLogEntry, summarizeRoutingLog } from './auto-router/log.mjs'
+import { estimateTokenCost, loadScoringTable } from './auto-router/scorer.mjs'
 
 const CONFIG = configModule.loadConfig()
+const SHARED_MEMORY_DIR = memoryDir(CONFIG.sharedMemory.dir, CONFIG.dataDir)
+void ensureStore(SHARED_MEMORY_DIR).catch(() => {})
+const pagesLibrary = new PagesLibrary(CONFIG.pagesLibraryDir)
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.PORT || 4330)
 const HERMES_ORIGIN = CONFIG.gatewayOrigin
 const HERMES_BROWSER_ORIGIN = CONFIG.browserOrigin
 const BROWSER_TURN_COMMAND = browserTurnCommand(CONFIG.browserTurn)
+const CHROME_TEAMS_FILE = process.env.HERMESBOT_CHROME_TEAMS || path.join(os.homedir(), '.config', 'chrome-teams.json')
+const computerPanel = createComputerPanelService({
+  enabled: CONFIG.computerPanel.enabled,
+  chromeTeamsFile: CHROME_TEAMS_FILE,
+  chromeTeams: CONFIG.computerPanel.cdpOrigin ? null : undefined,
+  cdpOrigin: CONFIG.computerPanel.cdpOrigin || process.env.HERMESBOT_COMPUTER_CDP_ORIGIN || '',
+  browserTurnCommand: BROWSER_TURN_COMMAND,
+})
 const HERMES_WS_ORIGIN = HERMES_ORIGIN.replace(/^http/, 'ws')
 const DEVELOPMENT = process.env.NODE_ENV !== 'production'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const autoRouterPaths = resolveAutoRouterPaths(CONFIG, ROOT)
+const autoRouterTablePath = CONFIG.autoRouter?.tablePath || autoRouterPaths.tablePath
+let autoRouterTableCache = { mtime: 0, table: null }
+async function loadAutoRouterTable() {
+  try {
+    const { stat, readFile } = await import('node:fs/promises')
+    const st = await stat(autoRouterTablePath)
+    if (autoRouterTableCache.table && autoRouterTableCache.mtime === st.mtimeMs) return autoRouterTableCache.table
+    const table = await loadScoringTable(autoRouterTablePath)
+    autoRouterTableCache = { mtime: st.mtimeMs, table }
+    return table
+  } catch {
+    return { models: {} }
+  }
+}
+
+let autoRouterQuotaCache = { at: 0, quotas: [] }
+async function quotasForAutoRouter(request, profileSlugs) {
+  const now = Date.now()
+  if (now - autoRouterQuotaCache.at < 60_000) return autoRouterQuotaCache.quotas
+  if (!CONFIG.features.usageGlobal || !CONFIG.usageQuotas.length) {
+    autoRouterQuotaCache = { at: now, quotas: [] }
+    return []
+  }
+  const profiles = profilesFromQuery(Array.isArray(profileSlugs) ? profileSlugs.join(',') : String(profileSlugs || ''))
+  const roster = profiles.length ? profiles : []
+  if (!roster.length) {
+    autoRouterQuotaCache = { at: now, quotas: [] }
+    return []
+  }
+  const results = await Promise.all(roster.slice(0, 32).map(async (profile) => {
+    try {
+      const upstream = await hermesFetch(request, `/api/analytics/usage?${new URLSearchParams({ profile, days: '1' })}`)
+      if (!upstream.ok) return { profile, error: upstream.status }
+      const body = await upstream.json()
+      return { profile, body }
+    } catch {
+      return { profile, error: 'unavailable' }
+    }
+  }))
+  const summary = aggregateAnalytics(results, 1)
+  const quotas = estimateQuotas(summary, CONFIG.usageQuotas)
+  autoRouterQuotaCache = { at: now, quotas }
+  return quotas
+}
+
+const autoRouter = CONFIG.autoRouter?.enabled
+  ? createAutoRouter({
+    tablePath: autoRouterTablePath,
+    logDir: CONFIG.autoRouter.logDir || autoRouterPaths.logDir,
+    subscriptions: CONFIG.ui.subscriptionProviders || [],
+    resolveQuotas: async () => autoRouterQuotaCache.quotas,
+  })
+  : null
 const DIST = path.join(ROOT, 'dist')
+const REPO_SKILLS_DIR = path.join(ROOT, 'skills')
 const LOCAL_ORIGINS = new Set([
   `http://${HOST}:${PORT}`,
   `http://localhost:${PORT}`,
 ])
 // A Hermes gateway without a password, its default setup on one machine: see local-gateway.mjs.
 const localGateway = createLocalGateway({ gatewayOrigin: HERMES_ORIGIN, hermesHome: CONFIG.hermesHome })
+const pushRelay = createPushRelay({ relayUrl: CONFIG.push?.relayUrl || '', secretCommand: CONFIG.push?.secretCommand || null })
+const routineEventStore = createRoutineEventStore(CONFIG.dataDir)
+async function fetchGatewayForEvents(route, options = {}) {
+  const check = await localGateway.check()
+  if (check?.ok) return localGateway.fetch(route, options)
+  const active = [...sessions.values()].find((session) => session.cookieHeader)
+  if (active) {
+    const request = { headers: { cookie: active.cookieHeader || `${SESSION_COOKIE}=${active.id}`, origin: [...LOCAL_ORIGINS][0] } }
+    return hermesFetch(request, route, options)
+  }
+  return localGateway.fetch(route, options)
+}
+
+const routineEvents = createRoutineEventHandlers({
+  store: routineEventStore,
+  fetchGateway: fetchGatewayForEvents,
+  host: HOST,
+  port: PORT,
+  enabled: CONFIG.routines?.eventTriggers === true,
+})
+const emailWatcher = CONFIG.routines?.eventTriggers === true
+  ? startEmailWatcher({
+    store: routineEventStore,
+    adapter: createMissingEmailAdapter(),
+    fire: fireRoutineWithExtra,
+    fetchGateway: fetchGatewayForEvents,
+    pollMs: 60_000,
+  })
+  : null
+emailWatcher?.start()
 // Signing in without a password needs a proof that the caller is the person who runs this server: any
 // process of any account on this machine can reach this port. The desktop app gives its key to its own
 // window. Started by hand, the server prints a sign-in link that carries the key.
@@ -416,6 +542,220 @@ async function handleCompaction(request, response, url) {
   return json(response, saved ? 200 : 502, { ok: saved, settings: { mode: result.settings.mode, gauge: result.settings.gauge }, applied: result.applied, failed: result.failed })
 }
 
+async function readMemoryFiles() {
+  const files = {}
+  for (const type of MEMORY_TYPES) {
+    try { files[type] = await readFile(filePath(SHARED_MEMORY_DIR, type), 'utf8') } catch { files[type] = '' }
+  }
+  return files
+}
+
+async function handleSharedMemory(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const parts = url.pathname.slice('/api/shared-memory'.length).split('/').filter(Boolean)
+  if (parts[0] === 'search' && request.method === 'GET') {
+    const files = await readMemoryFiles()
+    return json(response, 200, { query: url.searchParams.get('q') || '', hits: searchEntries(files, url.searchParams.get('q') || '') })
+  }
+  if (parts[0] === 'summary' && request.method === 'GET') {
+    const files = await readMemoryFiles()
+    return json(response, 200, {
+      enabled: CONFIG.sharedMemory.injectContext,
+      summary: summarizeForTurn(files, CONFIG.sharedMemory.injectMaxChars),
+    })
+  }
+  const type = memoryType(parts[0] || url.searchParams.get('type') || '')
+  if (!type) {
+    if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
+    const files = await readMemoryFiles()
+    const types = Object.fromEntries(MEMORY_TYPES.map((key) => {
+      const parsed = parseMemoryFile(files[key], key)
+      return [key, { entries: parsed.entries.length, preview: parsed.entries[0]?.title || '' }]
+    }))
+    return json(response, 200, { dir: SHARED_MEMORY_DIR, types })
+  }
+  const file = filePath(SHARED_MEMORY_DIR, type)
+  if (request.method === 'GET') {
+    let text = ''
+    try { text = await readFile(file, 'utf8') } catch { text = '' }
+    return json(response, 200, parseMemoryFile(text, type))
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (request.method === 'PUT' && parts.length === 1) {
+    const body = await bodyJson(request, MEMORY_BODY_MAX_BYTES)
+    const content = typeof body.text === 'string' ? body.text : ''
+    await writeFile(file, content, 'utf8')
+    return json(response, 200, parseMemoryFile(content, type))
+  }
+  if (parts[1] === 'entries' && request.method === 'POST') {
+    const body = await bodyJson(request, MEMORY_ENTRY_MAX_BYTES)
+    let text = ''
+    try { text = await readFile(file, 'utf8') } catch { text = '' }
+    const entry = {
+      id: typeof body.id === 'string' ? body.id : undefined,
+      type,
+      title: String(body.title || '').trim().slice(0, 200),
+      date: String(body.date || new Date().toISOString()).slice(0, 64),
+      source: String(body.source || 'user').slice(0, 120),
+      body: String(body.body || '').trim(),
+    }
+    if (!entry.title) return json(response, 400, { error: 'invalid_entry' })
+    if (!entry.id) entry.id = entry.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 80)
+    const next = upsertEntry(text, entry)
+    await writeFile(file, next, 'utf8')
+    return json(response, 200, parseMemoryFile(next, type))
+  }
+  if (parts[1] === 'entries' && parts[2] && request.method === 'DELETE') {
+    let text = ''
+    try { text = await readFile(file, 'utf8') } catch { text = '' }
+    const next = removeEntry(text, parts[2])
+    await writeFile(file, next, 'utf8')
+    return json(response, 200, parseMemoryFile(next, type))
+  }
+  return json(response, 404, { error: 'not_found' })
+}
+
+async function readSoul(request, slug) {
+  const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: soulPath(slug) })}`)
+  try {
+    if (upstream.status === 404) return ''
+    if (!upstream.ok) throw new Error(`soul_${upstream.status}`)
+    const body = await upstream.json().catch(() => ({}))
+    return String(body.text || '')
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function writeSoul(request, slug, content) {
+  const upstream = await hermesFetch(request, '/api/fs/write-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: soulPath(slug), content }),
+  })
+  await upstream.body?.cancel?.().catch(() => {})
+  if (!upstream.ok) throw new Error(`soul_${upstream.status}`)
+}
+
+async function readHermesText(request, filePath, profile = '') {
+  const params = new URLSearchParams({ path: filePath })
+  if (profile) params.set('profile', profile)
+  const upstream = await hermesFetch(request, `/api/fs/read-text?${params}`)
+  try {
+    if (upstream.status === 404) return ''
+    if (!upstream.ok) throw new Error(`read_${upstream.status}`)
+    const body = await upstream.json().catch(() => ({}))
+    return String(body.text || '')
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function writeHermesText(request, filePath, content, profile = '') {
+  const upstream = await hermesFetch(request, '/api/fs/write-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath, content, ...(profile ? { profile } : {}) }),
+  })
+  await upstream.body?.cancel?.().catch(() => {})
+  if (!upstream.ok) throw new Error(`write_${upstream.status}`)
+}
+
+async function pushAccountForSession(request) {
+  const upstream = await hermesFetch(request, '/api/auth/me')
+  try {
+    if (!upstream.ok) return ''
+    const body = await upstream.json().catch(() => ({}))
+    const user = typeof body?.username === 'string' ? body.username
+      : typeof body?.user_id === 'string' ? body.user_id
+      : typeof body?.display_name === 'string' ? body.display_name
+      : ''
+    return pushAccountId(CONFIG.browserOrigin || CONFIG.gatewayOrigin, user)
+  } finally {
+    await upstream.body?.cancel?.().catch(() => {})
+  }
+}
+
+async function handleSkills(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const profile = String(url.searchParams.get('profile') || '').trim()
+  if (request.method === 'GET') {
+    const catalog = await listSkillsCatalog({ hermesHome: CONFIG.hermesHome, repoSkillsDir: REPO_SKILLS_DIR, profile: PROFILE_SLUG.test(profile) ? profile : '' })
+    let disabled = []
+    if (PROFILE_SLUG.test(profile)) {
+      try {
+        const config = await readProfileConfig(request, profile)
+        disabled = Array.isArray(config?.skills?.disabled) ? config.skills.disabled.filter((item) => typeof item === 'string') : []
+      } catch { /* no profile config */ }
+    }
+    return json(response, 200, { ...catalog, disabled, hubInstallCommand: 'hermes skills install <skill-id>', hubManage: CONFIG.skills?.hubManage !== false })
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (request.method !== 'POST' || url.pathname !== '/api/skills/toggle') return json(response, 404, { error: 'not_found' })
+  const body = await bodyJson(request, 16_384)
+  const slug = String(body.profile || '').trim()
+  if (!PROFILE_SLUG.test(slug)) return json(response, 400, { error: 'invalid_profile' })
+  const config = await readProfileConfig(request, slug).catch(() => null)
+  if (!config) return json(response, 502, { error: 'profile_unreadable' })
+  const disabled = Array.isArray(config.skills?.disabled) ? config.skills.disabled : []
+  const payload = skillToggleBody({ disabled, skillId: body.skillId, enabled: body.enabled === true })
+  if (!payload) return json(response, 400, { error: 'invalid_skill' })
+  await writeProfileConfig(request, slug, payload)
+  return json(response, 200, { ok: true, disabled: payload.config.skills.disabled })
+}
+
+async function handleBotProfile(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const slug = String(url.searchParams.get('profile') || '').trim()
+  if (!PROFILE_SLUG.test(slug)) return json(response, 400, { error: 'invalid_profile' })
+  if (request.method === 'GET') {
+    const [config, soul] = await Promise.all([
+      readProfileConfig(request, slug).catch(() => ({})),
+      readSoul(request, slug).catch(() => ''),
+    ])
+    return json(response, 200, {
+      profile: slug,
+      soul,
+      model: modelFromConfig(config),
+      toolsets: toolsetsFromConfig(config),
+    })
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (request.method !== 'PUT') return json(response, 405, { error: 'method_not_allowed' })
+  const body = await bodyJson(request, SOUL_MAX_BYTES + 32_768)
+  const previousSoul = typeof body.previousSoul === 'string' ? body.previousSoul : await readSoul(request, slug).catch(() => '')
+  const nextSoul = typeof body.soul === 'string' ? body.soul.slice(0, SOUL_MAX_BYTES) : previousSoul
+  const preview = { soul: diffLines(previousSoul, nextSoul) }
+  if (body.confirm !== true) return json(response, 200, { preview, requiresConfirm: true })
+  if (typeof body.soul === 'string') await writeSoul(request, slug, nextSoul)
+  if (body.toolsets && typeof body.toolsets === 'object') {
+    await writeProfileConfig(request, slug, toolsetsBody(body.toolsets))
+  }
+  return json(response, 200, { ok: true, preview })
+}
+
+async function handleBotTemplate(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const slug = String(url.searchParams.get('profile') || '').trim()
+  if (request.method === 'GET' && PROFILE_SLUG.test(slug)) {
+    const [config, soul] = await Promise.all([
+      readProfileConfig(request, slug).catch(() => ({})),
+      readSoul(request, slug).catch(() => ''),
+    ])
+    return json(response, 200, exportTemplate({ slug, soul, config, card: {} }))
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (request.method === 'POST' && url.pathname === '/api/bot-template/import') {
+    const body = await bodyJson(request, TEMPLATE_MAX_BYTES)
+    const parsed = importTemplateBody(body.template)
+    if (!parsed) return json(response, 400, { error: 'invalid_template' })
+    const redacted = JSON.stringify(body.template)
+    if (/(sk-[A-Za-z0-9]{16,})/.test(redacted)) return json(response, 400, { error: 'template_contains_secrets' })
+    return json(response, 200, { ok: true, ready: true, soul: parsed.soul, configBody: parsed.configBody })
+  }
+  return json(response, 404, { error: 'not_found' })
+}
+
 const READ_ROUTES = new Set(['auth/me', 'cron/jobs', 'sessions', 'profiles', 'profiles/sessions', 'analytics/usage'])
 
 async function handleReadProxy(request, response, url) {
@@ -427,6 +767,125 @@ async function handleReadProxy(request, response, url) {
   const upstreamPath = url.pathname.replace(/^\/api\/hermes\//, '/api/')
   const upstream = await hermesFetch(request, `${upstreamPath}${url.search}`)
   return proxyJson(response, upstream)
+}
+
+const CRON_WRITE = /^cron\/jobs(?:\/[A-Za-z0-9_-]+(?:\/(?:pause|resume|trigger))?)?$/
+
+async function handleCronWrite(request, response, url) {
+  if (!CONFIG.routines?.editable) return json(response, 403, { error: 'routines_readonly' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const route = url.pathname.slice('/api/hermes/'.length)
+  if (!CRON_WRITE.test(route)) return json(response, 404, { error: 'not_found' })
+  const upstreamPath = url.pathname.replace(/^\/api\/hermes\//, '/api/')
+  const init = { method: request.method, headers: { 'Content-Type': 'application/json' } }
+  if (request.method === 'POST' || request.method === 'PUT') {
+    const body = await bodyJson(request, 256_000)
+    init.body = JSON.stringify(body)
+  }
+  const upstream = await hermesFetch(request, `${upstreamPath}${url.search}`, init)
+  if (request.method === 'DELETE' && CONFIG.routines?.eventTriggers === true) {
+    const match = route.match(/^cron\/jobs\/([A-Za-z0-9_-]+)$/)
+    if (match) {
+      const profile = url.searchParams.get('profile') || ''
+      await routineEvents.removeJob(profile, match[1]).catch(() => {})
+    }
+  }
+  return proxyJson(response, upstream)
+}
+
+const ROUTINE_HOOK = /^\/api\/routines\/hooks\/([A-Za-z0-9_-]+)$/
+
+async function handleRoutineEventsList(request, response, url) {
+  if (CONFIG.routines?.eventTriggers !== true) return json(response, 403, { error: 'event_triggers_disabled' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const profile = url.searchParams.get('profile') || ''
+  return json(response, 200, await routineEvents.listBindings(profile))
+}
+
+async function handleRoutineEventsBind(request, response) {
+  if (CONFIG.routines?.eventTriggers !== true) return json(response, 403, { error: 'event_triggers_disabled' })
+  if (!CONFIG.routines?.editable) return json(response, 403, { error: 'routines_readonly' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 64_000)
+  try {
+    return json(response, 200, await routineEvents.bind(request, body))
+  } catch {
+    return json(response, 400, { error: 'invalid_binding' })
+  }
+}
+
+async function handleRoutineEventsRegenerate(request, response) {
+  if (CONFIG.routines?.eventTriggers !== true) return json(response, 403, { error: 'event_triggers_disabled' })
+  if (!CONFIG.routines?.editable) return json(response, 403, { error: 'routines_readonly' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 4096)
+  const result = await routineEvents.regenerate(String(body.hookId || ''))
+  if (result.error) return json(response, 404, result)
+  return json(response, 200, result)
+}
+
+async function handleRoutineEventRuns(request, response, url) {
+  if (CONFIG.routines?.eventTriggers !== true) return json(response, 403, { error: 'event_triggers_disabled' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const profile = url.searchParams.get('profile') || ''
+  const jobId = url.searchParams.get('jobId') || ''
+  return json(response, 200, await routineEvents.runs(profile, jobId))
+}
+
+async function handleRoutineWebhook(request, response, hookId) {
+  try {
+    const result = await routineEvents.handleWebhook(request, hookId)
+    return json(response, result.status, result.body)
+  } catch (error) {
+    if (error?.message === 'payload_too_large') return json(response, 413, { error: 'payload_too_large' })
+    return json(response, 400, { error: 'bad_request' })
+  }
+}
+
+async function handleRoutinesSchedule(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 4096)
+  const lang = body.lang === 'fr' ? 'fr' : 'en'
+  const preview = previewSchedule(String(body.schedule || ''), lang)
+  if (preview.error) return json(response, 400, { error: preview.error })
+  return json(response, 200, preview)
+}
+
+async function handleRoutinesDryRun(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 256_000)
+  const lang = body.lang === 'fr' ? 'fr' : 'en'
+  const name = String(body.name || '').trim()
+  const prompt = String(body.prompt || '').trim()
+  const schedule = previewSchedule(String(body.schedule || ''), lang)
+  if (!name || !prompt) return json(response, 400, { error: 'missing_fields' })
+  if (schedule.error) return json(response, 400, { error: schedule.error })
+  return json(response, 200, {
+    ok: true,
+    dryRun: true,
+    profile: String(body.profile || ''),
+    job: { name, prompt, schedule: schedule.expr, scheduleDisplay: schedule.display, nextRuns: schedule.nextRuns },
+  })
+}
+
+let catalogCache = null
+let catalogCacheAt = 0
+
+async function handleConnectorsCatalog(response) {
+  if (!CONFIG.connectors?.enabled) return json(response, 403, { error: 'connectors_disabled' })
+  const now = Date.now()
+  if (!catalogCache || now - catalogCacheAt > 60_000) {
+    catalogCache = await loadConnectorsCatalog(CONFIG.connectors.optionalMcpsDir)
+    catalogCacheAt = now
+  }
+  return json(response, 200, { servers: catalogCache })
 }
 
 async function mintSocketTicket(request, profile) {
@@ -865,6 +1324,103 @@ function handleBrowserVaultEvents(request, response) {
 }
 
 /** App window to the vault: session and local origin required, as for Hermes. */
+async function handleAutoRouterDecide(request, response) {
+  if (!autoRouter) return json(response, 404, { error: 'not_found' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 256_000)
+  const analyticsProfiles = Array.isArray(body.analyticsProfiles)
+    ? body.analyticsProfiles.filter((item) => typeof item === 'string').slice(0, 64)
+    : []
+  const quotas = await quotasForAutoRouter(request, analyticsProfiles.length ? analyticsProfiles : [body.bot].filter(Boolean))
+  autoRouterQuotaCache = { at: Date.now(), quotas }
+  const decision = await autoRouter.decide({ ...body, quotas: quotas.map((row) => ({ id: row.id, usedPercent: row.usedPercent, modelPrefixes: row.modelPrefixes })) })
+  return json(response, decision.ok === false ? 400 : 200, decision)
+}
+
+async function handleAutoRouterLogWrite(request, response) {
+  if (!autoRouter) return json(response, 404, { error: 'not_found' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 16_384)
+  const entry = sanitizeLogEntry(body)
+  if (!entry.bot || !entry.chosen) return json(response, 400, { error: 'invalid_entry' })
+  if (entry.costUsd === null) {
+    const table = await loadAutoRouterTable()
+    entry.costUsd = estimateTokenCost(table, entry.chosen, entry.tokensIn ?? 0, entry.tokensOut ?? 0)
+  }
+  await appendRoutingLog(autoRouter.logDir, entry)
+  return json(response, 200, { ok: true })
+}
+
+async function handleAutoRouterLogRead(request, response, url) {
+  if (!autoRouter) return json(response, 404, { error: 'not_found' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7))
+  const entries = await readRoutingLog(autoRouter.logDir, days)
+  return json(response, 200, { entries, summary: summarizeRoutingLog(entries) })
+}
+
+async function handleUsageGlobal(request, response, url) {
+  if (!CONFIG.features.usageGlobal) return json(response, 404, { error: 'not_found' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 30))
+  const profiles = profilesFromQuery(url.searchParams.get('profiles'))
+  if (!profiles.length) return json(response, 400, { error: 'invalid_profiles' })
+  const results = await Promise.all(profiles.map(async (profile) => {
+    try {
+      const upstream = await hermesFetch(request, `/api/analytics/usage?${new URLSearchParams({ profile, days: String(days) })}`)
+      if (!upstream.ok) return { profile, error: upstream.status }
+      const body = await upstream.json()
+      return { profile, body }
+    } catch {
+      return { profile, error: 'unavailable' }
+    }
+  }))
+  const summary = aggregateAnalytics(results, days)
+  const quotas = estimateQuotas(summary, CONFIG.usageQuotas)
+  return json(response, 200, { summary, quotas })
+}
+
+async function handlePagesLibrary(request, response, url) {
+  if (!CONFIG.features.pagesLibrary) return json(response, 404, { error: 'not_found' })
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (request.method === 'GET') {
+    const profile = url.searchParams.get('profile') || ''
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(profile)) return json(response, 400, { error: 'invalid_profile' })
+    const query = url.searchParams.get('q') || ''
+    const archived = url.searchParams.get('archived') === '1'
+    try {
+      return json(response, 200, { items: await pagesLibrary.list(profile, { query, archived }) })
+    } catch {
+      return json(response, 400, { error: 'invalid_profile' })
+    }
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 16_384)
+  const profile = typeof body.profile === 'string' ? body.profile : ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(profile)) return json(response, 400, { error: 'invalid_profile' })
+  try {
+    if (body.action === 'touch') {
+      const id = await pagesLibrary.touch({ profile, filePath: body.path, title: body.title, name: body.name })
+      return json(response, 200, { id })
+    }
+    if (body.action === 'rename') {
+      await pagesLibrary.rename(profile, body.id, body.title)
+      return json(response, 200, { ok: true })
+    }
+    if (body.action === 'archive') {
+      await pagesLibrary.archive(profile, body.id)
+      return json(response, 200, { ok: true })
+    }
+    return json(response, 400, { error: 'invalid_action' })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    const status = message === 'not_found' ? 404 : 400
+    return json(response, status, { error: message || 'pages_library_failed' })
+  }
+}
+
 async function handleBrowserVaultAdmin(request, response, pathname) {
   if (request.method === 'POST' && !LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
   const session = browserSession(request)
@@ -940,10 +1496,203 @@ async function serveAnimation(response, slug, phase) {
 /** Interface settings for this installation. Nothing secret: preferences and the list of animated bots. */
 async function handleAppConfig(response) {
   return json(response, 200, {
+    channels: CONFIG.channels,
     ui: CONFIG.ui,
     animatedBots: await animatedBots(),
     localChat: { name: CONFIG.localChat.name },
+    routines: { editable: CONFIG.routines?.editable !== false, eventTriggers: CONFIG.routines?.eventTriggers === true },
+    connectors: { enabled: CONFIG.connectors?.enabled !== false },
+    sharedMemory: {
+      injectContext: CONFIG.sharedMemory.injectContext,
+      types: MEMORY_TYPES,
+    },
+    computerPanel: { enabled: CONFIG.computerPanel.enabled },
+    features: CONFIG.features,
+    usageQuotas: CONFIG.usageQuotas,
+    autoRouter: {
+      enabled: CONFIG.autoRouter?.enabled === true,
+      tableConfigured: Boolean(CONFIG.autoRouter?.tablePath || autoRouterPaths.tablePath),
+      tablePath: autoRouterTablePath,
+    },
   })
+}
+
+function computerPanelSlug(url) {
+  const slug = url.searchParams.get('bot') || ''
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(slug) ? slug : ''
+}
+
+function handleComputerPanelError(response, error) {
+  if (error instanceof ComputerPanelError) return json(response, error.status, { error: error.code })
+  return json(response, 502, { error: 'computer_panel_unavailable' })
+}
+
+async function handleComputerPanelStatus(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  const slug = computerPanelSlug(url)
+  if (!slug) return json(response, 400, { error: 'invalid_request' })
+  try {
+    return json(response, 200, await computerPanel.statusForBot(slug))
+  } catch (error) {
+    return handleComputerPanelError(response, error)
+  }
+}
+
+async function handleComputerPanelStream(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  const slug = computerPanelSlug(url)
+  if (!slug) return json(response, 400, { error: 'invalid_request' })
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  let detach = () => {}
+  try {
+    ({ detach } = await computerPanel.attachStream(slug, response))
+  } catch (error) {
+    return handleComputerPanelError(response, error)
+  }
+  const heartbeat = setInterval(() => response.write(': keepalive\n\n'), 20_000)
+  heartbeat.unref()
+  response.on('close', () => {
+    clearInterval(heartbeat)
+    detach()
+  })
+}
+
+async function handleComputerPanelTakeover(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  if (request.method === 'POST' && !LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  let body
+  try { body = await bodyJson(request) } catch { return json(response, 400, { error: 'invalid_request' }) }
+  const slug = computerPanelSlug(new URL(`http://local/?bot=${body.bot || ''}`))
+  if (!slug || typeof body.active !== 'boolean') return json(response, 400, { error: 'invalid_request' })
+  try {
+    return json(response, 200, { bot: slug, ...(await computerPanel.setTakeover(slug, body.active)) })
+  } catch (error) {
+    return handleComputerPanelError(response, error)
+  }
+}
+
+async function handleComputerPanelInput(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  let body
+  try { body = await bodyJson(request, 4096) } catch { return json(response, 400, { error: 'invalid_request' }) }
+  const slug = computerPanelSlug(new URL(`http://local/?bot=${body.bot || ''}`))
+  if (!slug || typeof body.kind !== 'string') return json(response, 400, { error: 'invalid_request' })
+  try {
+    return json(response, 200, await computerPanel.forwardInput(slug, body))
+  } catch (error) {
+    return handleComputerPanelError(response, error)
+  }
+}
+
+async function handleComputerPanelControl(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  const slug = computerPanelSlug(url)
+  if (!slug) return json(response, 400, { error: 'invalid_request' })
+  return json(response, 200, { bot: slug, ...computerPanel.controlFlag(slug) })
+}
+
+async function handleChannelStatus(request, response, url) {
+  if (request.method !== 'GET' || !browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  const profile = url.searchParams.get('profile') || ''
+  if (!PROFILE_SLUG.test(profile)) return json(response, 400, { error: 'invalid_profile' })
+  try {
+    const envPath = profileEnvPath(CONFIG.hermesHome, profile)
+    const upstream = await hermesFetch(request, `/api/fs/read-text?${new URLSearchParams({ path: envPath, profile })}`)
+    const text = upstream.ok ? await upstream.text() : ''
+    await upstream.body?.cancel?.().catch(() => {})
+    const keys = [...envKeysPresent(text)]
+    const { platforms, snippet } = channelStatusFromKeys(keys)
+    return json(response, 200, { profile, platforms, snippet })
+  } catch {
+    return json(response, 502, { error: 'channels_unavailable' })
+  }
+}
+
+async function handleChannelApply(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!CONFIG.channels.wizardWrites) return json(response, 403, { error: 'channels_read_only' })
+  const body = await bodyJson(request, 4096)
+  const parsed = validateChannelRequest(body)
+  if (!parsed) return json(response, 400, { error: 'invalid_channels_apply' })
+  const patch = configPatchFor(parsed.platform)
+  if (!patch) return json(response, 400, { error: 'invalid_platform' })
+  try {
+    const configPath = profileConfigPath(CONFIG.hermesHome, parsed.profile)
+    const existing = await readProfileConfig(request, parsed.profile).catch(() => null)
+    if (existing) {
+      const backup = backupPath(configPath)
+      await writeHermesText(request, backup, JSON.stringify(existing, null, 2) + '\n', parsed.profile)
+    }
+    await writeProfileConfig(request, parsed.profile, { config: patch })
+    return json(response, 200, { ok: true })
+  } catch {
+    return json(response, 502, { error: 'channels_apply_failed' })
+  }
+}
+
+async function handleChannelEnv(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (!CONFIG.channels.wizardWrites) return json(response, 403, { error: 'channels_read_only' })
+  const body = await bodyJson(request, 32_768)
+  const parsed = validateChannelEnvBody(body)
+  if (!parsed) return json(response, 400, { error: 'invalid_channels_env' })
+  const envPath = profileEnvPath(CONFIG.hermesHome, parsed.profile)
+  try {
+    const previous = await readHermesText(request, envPath, parsed.profile)
+    const merged = mergeEnvText(previous, parsed.env)
+    if (!merged) return json(response, 400, { error: 'invalid_channels_env' })
+    const backup = backupPath(envPath)
+    if (previous.trim()) await writeHermesText(request, backup, previous, parsed.profile)
+    await writeHermesText(request, envPath, merged, parsed.profile)
+    return json(response, 200, { ok: true, keys: Object.keys(parsed.env).sort() })
+  } catch {
+    return json(response, 502, { error: 'channels_env_failed' })
+  }
+}
+
+async function handlePushWindow(request, response) {
+  if (request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' })
+  if (!sameSecret(request.headers['x-hermesbot-local-key'] || '', LOCAL_KEY)) return json(response, 403, { error: 'local_key_required' })
+  const body = await bodyJson(request, 256)
+  pushRelay.setWindowInFront(body?.inFront === true)
+  return json(response, 200, { ok: true })
+}
+
+async function handlePushEnqueue(request, response) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  if (pushRelay.disabled()) return json(response, 200, { ok: true, skipped: 'relay_off' })
+  const body = await bodyJson(request, 4096)
+  const slug = typeof body?.slug === 'string' && PROFILE_SLUG.test(body.slug) ? body.slug : ''
+  const title = typeof body?.title === 'string' ? body.title.slice(0, 120) : ''
+  const preview = typeof body?.body === 'string' ? body.body : ''
+  if (!slug || !title) return json(response, 400, { error: 'invalid_push_enqueue' })
+  const accountId = await pushAccountForSession(request)
+  if (!accountId) return json(response, 502, { error: 'push_account_unavailable' })
+  const result = pushRelay.enqueue({ accountId, slug, title, body: preview })
+  return json(response, 200, result)
+}
+
+async function handleUiLayout(request, response) {
+  if (request.method === 'GET') return json(response, 200, loadUiLayout(CONFIG.dataDir))
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  const body = await bodyJson(request, 32_768)
+  const saved = saveUiLayout(CONFIG.dataDir, normalizeUiLayout(body))
+  CONFIG.ui = { ...CONFIG.ui, sectionOrder: saved.sectionOrder, rosterOrder: saved.rosterOrder }
+  return json(response, 200, saved)
 }
 
 async function serveProduction(response, pathname) {
@@ -990,6 +1739,36 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/browser-vault/settings' && (request.method === 'GET' || request.method === 'POST')) {
       return await handleBrowserVaultAdmin(request, response, '/admin/v1/settings')
     }
+    if (CONFIG.features.vaultWallet) {
+      if (url.pathname === '/api/browser-vault/wallet' && request.method === 'GET') {
+        return await handleBrowserVaultAdmin(request, response, '/admin/v1/wallet')
+      }
+      const walletPost = {
+        '/api/browser-vault/wallet/card': '/admin/v1/wallet/card',
+        '/api/browser-vault/wallet/address': '/admin/v1/wallet/address',
+        '/api/browser-vault/wallet/remove': '/admin/v1/wallet/remove',
+        '/api/browser-vault/wallet/secure-form': '/admin/v1/wallet/secure-form',
+      }
+      const walletPath = walletPost[url.pathname]
+      if (walletPath && request.method === 'POST') {
+        return await handleBrowserVaultAdmin(request, response, walletPath)
+      }
+    }
+    if (url.pathname === '/api/auto-router/decide' && request.method === 'POST') {
+      return await handleAutoRouterDecide(request, response)
+    }
+    if (url.pathname === '/api/auto-router/log' && request.method === 'POST') {
+      return await handleAutoRouterLogWrite(request, response)
+    }
+    if (url.pathname === '/api/auto-router/log' && request.method === 'GET') {
+      return await handleAutoRouterLogRead(request, response, url)
+    }
+    if (url.pathname === '/api/usage/global' && request.method === 'GET') {
+      return await handleUsageGlobal(request, response, url)
+    }
+    if (url.pathname === '/api/pages-library' && (request.method === 'GET' || request.method === 'POST')) {
+      return await handlePagesLibrary(request, response, url)
+    }
     if (url.pathname === '/api/auth/providers' && request.method === 'GET') {
       return await proxyJson(response, await hermesFetch(request, '/api/auth/providers'))
     }
@@ -1026,8 +1805,48 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/compaction' && (request.method === 'GET' || request.method === 'PUT')) {
       return await handleCompaction(request, response, url)
     }
+    if (url.pathname.startsWith('/api/shared-memory')) {
+      return await handleSharedMemory(request, response, url)
+    }
+    if (url.pathname === '/api/skills' || url.pathname === '/api/skills/toggle') {
+      return await handleSkills(request, response, url)
+    }
+    if (url.pathname === '/api/bot-profile' && (request.method === 'GET' || request.method === 'PUT')) {
+      return await handleBotProfile(request, response, url)
+    }
+    if (url.pathname === '/api/bot-template' || url.pathname === '/api/bot-template/import') {
+      return await handleBotTemplate(request, response, url)
+    }
     if (url.pathname.startsWith('/api/hermes/') && request.method === 'GET') {
       return await handleReadProxy(request, response, url)
+    }
+    if (url.pathname.startsWith('/api/hermes/cron/') && request.method !== 'GET') {
+      return await handleCronWrite(request, response, url)
+    }
+    if (url.pathname === '/api/routines/schedule' && request.method === 'POST') {
+      return await handleRoutinesSchedule(request, response)
+    }
+    if (url.pathname === '/api/routines/dry-run' && request.method === 'POST') {
+      return await handleRoutinesDryRun(request, response)
+    }
+    if (url.pathname === '/api/routines/events' && request.method === 'GET') {
+      return await handleRoutineEventsList(request, response, url)
+    }
+    if (url.pathname === '/api/routines/events/bind' && request.method === 'POST') {
+      return await handleRoutineEventsBind(request, response)
+    }
+    if (url.pathname === '/api/routines/events/regenerate' && request.method === 'POST') {
+      return await handleRoutineEventsRegenerate(request, response)
+    }
+    if (url.pathname === '/api/routines/events/runs' && request.method === 'GET') {
+      return await handleRoutineEventRuns(request, response, url)
+    }
+    const hookMatch = ROUTINE_HOOK.exec(url.pathname)
+    if (hookMatch && request.method === 'POST') {
+      return await handleRoutineWebhook(request, response, hookMatch[1])
+    }
+    if (url.pathname === '/api/connectors/catalog' && request.method === 'GET') {
+      return await handleConnectorsCatalog(response)
     }
     if (url.pathname === '/api/media' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleMedia(request, response, url)
@@ -1059,11 +1878,44 @@ const server = http.createServer(async (request, response) => {
       const owners = turns.map((turn) => turn.owner)
       return json(response, 200, { owner: owners[0] || '', owners, turns })
     }
+    if (url.pathname === '/api/computer-panel/status' && request.method === 'GET') {
+      return await handleComputerPanelStatus(request, response, url)
+    }
+    if (url.pathname === '/api/computer-panel/stream' && request.method === 'GET') {
+      return await handleComputerPanelStream(request, response, url)
+    }
+    if (url.pathname === '/api/computer-panel/takeover' && request.method === 'POST') {
+      return await handleComputerPanelTakeover(request, response)
+    }
+    if (url.pathname === '/api/computer-panel/input' && request.method === 'POST') {
+      return await handleComputerPanelInput(request, response)
+    }
+    if (url.pathname === '/api/computer-panel/control' && request.method === 'GET') {
+      return await handleComputerPanelControl(request, response, url)
+    }
     if (url.pathname === '/api/model-scores' || url.pathname === '/api/model-scores/key') {
       return await handleModelScores(request, response, url)
     }
     if (url.pathname === '/api/app-config' && request.method === 'GET') {
       return await handleAppConfig(response)
+    }
+    if (url.pathname === '/api/channels/status') {
+      return await handleChannelStatus(request, response, url)
+    }
+    if (url.pathname === '/api/channels/apply' && request.method === 'PUT') {
+      return await handleChannelApply(request, response)
+    }
+    if (url.pathname === '/api/channels/env' && request.method === 'PUT') {
+      return await handleChannelEnv(request, response)
+    }
+    if (url.pathname === '/api/push/window' && request.method === 'POST') {
+      return await handlePushWindow(request, response)
+    }
+    if (url.pathname === '/api/push/enqueue' && request.method === 'POST') {
+      return await handlePushEnqueue(request, response)
+    }
+    if (url.pathname === '/api/ui-layout') {
+      return await handleUiLayout(request, response)
     }
     const animation = ANIMATION_FILE.exec(url.pathname)
     if (animation && (request.method === 'GET' || request.method === 'HEAD')) {
@@ -1129,6 +1981,7 @@ server.listen(PORT, HOST, () => {
 async function shutdown() {
   wss.clients.forEach((client) => client.close(1001, 'server_shutdown'))
   if (vaultPoll) clearInterval(vaultPoll)
+  emailWatcher?.stop()
   sessionStore.stop()
   if (vite) await vite.close()
   server.close(() => process.exit(0))

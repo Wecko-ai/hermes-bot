@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { i18n } from '../i18n'
 import type { Bot } from '../types'
 import { getVaultSettings, listVaultEntries, removeVaultEntry, saveVaultEntry, saveVaultSettings, type VaultEntry, type VaultSettings } from '../lib/browser-vault'
+import { useAppConfig } from '../lib/app-config'
+import { VaultWalletSection } from './VaultWalletSection'
 
 interface Draft {
   /** Origin of the credentials being edited; empty when adding. */
@@ -52,6 +54,7 @@ export function ShareCredentialsSetting(props: SwitchProps) {
  */
 export function VaultTab({ bots }: { bots: Bot[] }) {
   const { t } = useTranslation()
+  const { features } = useAppConfig()
   const [entries, setEntries] = useState<VaultEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -182,6 +185,7 @@ export function VaultTab({ bots }: { bots: Bot[] }) {
       )}
       {loading && !entries.length && <p className="settings-note">{t('vault.reading')}</p>}
       {!loading && !entries.length && !error && <p className="settings-note">{t('vault.empty')}</p>}
+      {features.vaultWallet && <VaultWalletSection bots={bots} />}
       <div className="vault-list">
         {entries.map((entry) => (
           <div key={entry.origin} className="settings-row vault-entry">

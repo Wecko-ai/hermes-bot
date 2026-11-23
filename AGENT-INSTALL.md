@@ -116,6 +116,8 @@ Otherwise, read `auth_required` and `auth_providers` in the answer of the second
 
 **`"auth_required": false`.** This is the default setup of Hermes: no password. HermesBot signs in by itself, as long as it runs on this Mac under the same macOS account as Hermes. Go to step 5.
 
+**Approvals (new Hermes only).** If the person is setting up Hermes for the first time and `~/.hermes/config.yaml` does not exist yet—or exists but has never set `approvals.mode`—suggest they run `hermes config set approvals.mode smart` so risky commands can ask in HermesBot's thread. **Do not change `approvals.mode` on an existing install that already has a value** (for example `off`); only document the suggestion for greenfield setups.
+
 - Nothing has to change in Hermes. Do not change the address it listens on, and do not give it a public URL: either one makes Hermes reachable from outside this Mac.
 - If Hermes runs under another macOS account than the person's, say so: the sign-in without a password will not work from their account.
 
