@@ -26,6 +26,7 @@ describe('configuration locale', () => {
     const config = loadConfig({ env: {}, platform: 'darwin', home, root })
     expect(config.gatewayOrigin).toBe('http://127.0.0.1:9120')
     expect(config.videoRoots).toContain(path.join(home, 'projects'))
+    expect(config.videoRoots.some((root) => root.startsWith('/Volumes/'))).toBe(false)
     expect(config.browserOrigin).toBe('http://127.0.0.1:9120')
     expect(config.sshHost).toBe('')
     expect(config.ollamaOrigin).toBe('http://127.0.0.1:11434')

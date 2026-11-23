@@ -1653,6 +1653,8 @@ try {
   await page.getByRole('textbox', { name: 'Message à Nova' }).press('Enter')
   await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
   await page.locator('.details-panel .live-avatar.is-working img.live-avatar-motion').waitFor({ timeout: 9_000 })
+  // Auto is the default: the first send routes, so the working line names the model.
+  await page.locator('.working-auto-route, .message-auto-route').getByText(/^Auto · /).first().waitFor({ timeout: 5_000 })
   await page.waitForFunction(() => { const image = document.querySelector('.details-panel .live-avatar.is-working img.live-avatar-motion'); return image?.complete && image.naturalWidth > 0 }, null, { timeout: 10_000 })
   // Status visible at a glance: banner, roster row, chat header.
   await page.locator('.working-strip.has-work').getByText('1 au travail').waitFor({ timeout: 2_000 })
@@ -1694,6 +1696,7 @@ try {
     const images = [...document.querySelectorAll('.media-group.is-grid img.media-image')]
     return images.length === 2 && images.every((image) => image.complete && image.naturalWidth > 0)
   }, null, { timeout: 5_000 })
+  await page.locator('.media-video-card').first().click()
   await page.waitForFunction(() => {
     const video = document.querySelector('video.media-video')
     return Boolean(video && video.readyState >= 1 && video.duration > 1)
@@ -1730,6 +1733,7 @@ try {
   // Files quoted by path, without MEDIA:: readable under the message, never those inside a code block.
   const cited = page.locator('.message-assistant .cited-files')
   await cited.locator('.cited-files-label').getByText('3 fichiers cités').waitFor({ timeout: 5_000 })
+  await cited.locator('.media-video-card').click()
   await page.waitForFunction(() => {
     const video = document.querySelector('.cited-files video.media-video')
     return Boolean(video && video.readyState >= 1 && video.duration > 1)
@@ -1769,7 +1773,7 @@ try {
   if (await page.locator('.message-user').getByText('Vois avec').count()) throw new Error('Entrée a envoyé au lieu de choisir le bot.')
   await orionBox.press('Enter')
   await page.locator('.message-user .mention-chip').getByText('@nova').last().waitFor({ timeout: 5_000 })
-  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 5_000 })
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
   if (!lastPromptText.includes('@nova = agent profile "nova"') || !lastPromptText.includes('message_agent')) throw new Error('La note de mentions n’est pas partie.')
   if (await page.locator('.messages-scroll').getByText('Bot Mode roster').count()) throw new Error('La note de mentions est visible.')
 
@@ -1815,7 +1819,7 @@ try {
   if (!fileAttachCalls[0].data_url?.startsWith('data:video/mp4;base64,') || fileAttachCalls[0].session_id !== 'chat-orion') throw new Error('file.attach mal formé.')
   if (!lastPromptText.includes('@file:attachments/film.mp4')) throw new Error('La référence du fichier n’est pas dans le prompt.')
   if (await page.locator('.messages-scroll').getByText('@file:').count()) throw new Error('Un @file: brut est visible.')
-  await page.getByRole('button', { name: 'Envoyer' }).waitFor({ timeout: 5_000 })
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
 
   // Documents: tabs next to the chat. Isolated HTML, rendered Markdown, nothing remote loads.
   await page.locator('.media-document').getByText('rapport.pdf').scrollIntoViewIfNeeded()
@@ -1902,7 +1906,7 @@ try {
     await orionBox.press('Enter')
     for (let attempt = 0; attempt < 60 && lastPromptText !== text; attempt += 1) await delay(25)
     if (lastPromptText !== text) throw new Error(`Le texte stocké doit rester celui de l’utilisateur : ${lastPromptText}`)
-    await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 3_000 })
+    await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
   }
   if (await modeRadio('EXEC').getAttribute('aria-checked') !== 'true') throw new Error('EXEC doit être le mode par défaut.')
   await modeRadio('BRAIN').click()
@@ -2306,8 +2310,7 @@ try {
   }
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
   await orionBox.fill('')
-  const disabledSend = await sendButton().evaluate((button) => ({ disabled: button.disabled, background: getComputedStyle(button).backgroundColor, text: getComputedStyle(document.querySelector('.composer textarea')).color }))
-  if (!disabledSend.disabled || disabledSend.background === disabledSend.text) throw new Error(`Envoyer vide doit avoir l’air désactivé : ${JSON.stringify(disabledSend)}`)
+  if (await sendButton().count() !== 0) throw new Error('Un champ vide ne doit pas montrer Envoyer.')
   // Stop the turn: the pause of a music player (two bars, filled), same disc, and it still stops the turn.
   const interruptsBeforeStop = interruptCalls.length
   const assistantRepliesBeforeStop = await page.locator('.message-assistant').count()
@@ -3117,7 +3120,7 @@ try {
   await delay(600)
   if (await page.locator('.message.is-streaming').count()) throw new Error('Une réponse en cours d’écriture ne doit plus avoir de bulle.')
   await page.locator('.message-assistant').getByText('Et la suite du texte.').waitFor({ timeout: 6_000 })
-  if (await page.locator('.message-assistant').filter({ hasText: 'Et la suite du texte.' }).locator('video.media-video').count() !== 1) throw new Error('La vidéo doit arriver une fois, avec la réponse.')
+  if (await page.locator('.message-assistant').filter({ hasText: 'Et la suite du texte.' }).locator('.media-video-card').count() !== 1) throw new Error('La vidéo doit arriver une fois, avec la réponse.')
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
 
   // While the turn runs, only the latest step shows. After the reply, the steps stay collapsed.
@@ -3241,7 +3244,7 @@ try {
     [{ profile: 'orion', path: '/Users/test/auth.json' }, 415],
     [{ profile: 'orion', path: '/Users/test/logo.svg' }, 415],
     [{ profile: 'orion', path: '/Users/test/../../etc/passwd.png' }, 400],
-    [{ profile: 'orion', path: 'relatif/slide.png' }, 400],
+    [{ profile: 'orion', path: 'relatif/slide.png' }, 404],
     [{ profile: 'orion', path: '/Users/test/visuels.png/' }, 400],
     [{ profile: 'orion', path: '//hote/partage/slide.png' }, 400],
     [{ profile: 'orion', path: '/Users/./test/slide.png' }, 400],
@@ -3379,10 +3382,10 @@ try {
   if (await page.locator('.model-option[data-model="modele-interdit"]').count()) throw new Error('Fournisseur non connecté proposé.')
   if (await page.locator('.model-option[data-model="hidden-model"]').count()) throw new Error('Un fournisseur masqué par les réglages doit être retiré du sélecteur.')
   page.once('dialog', (dialog) => dialog.accept())
-  // The active model's group is open, the others are collapsed; collapsing persists between launches.
+  // Auto is the current choice, so no provider group is the active model. Collapsing still persists.
   const kimiGroup = page.locator('.model-group', { hasText: 'Kimi' })
   const anthropicGroup = page.locator('.model-group', { hasText: 'Anthropic' })
-  if (!await anthropicGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Le groupe du modèle actif doit être ouvert.')
+  if (await anthropicGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Auto est le choix courant : Anthropic ne doit pas s’ouvrir tout seul.')
   if (await kimiGroup.evaluate((group) => group.classList.contains('is-open'))) throw new Error('Les autres fournisseurs doivent être pliés.')
   // The real logos (Anthropic, Kimi, Cursor) pass the app’s CSP; all local servers form a single group with no brand logo.
   await page.waitForFunction(() => {
@@ -3413,13 +3416,19 @@ try {
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('k3.1')
   await kimiGroup.locator('.model-option[data-model="k3.1-pro"]').waitFor({ state: 'visible', timeout: 3_000 })
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
+  // Auto is the choice, so Anthropic stays folded. Open it to pick Sonnet.
+  await anthropicGroup.locator('.model-group-head').click()
+  await anthropicGroup.locator('.model-option[data-model="claude-sonnet-5-5"]').waitFor({ state: 'visible', timeout: 3_000 })
+  const mutationsBeforePick = modelMutations.length
   await page.locator('.model-option[data-model="claude-sonnet-5-5"]').click()
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 5_000 })
-  const lastMutation = modelMutations.at(-1)
-  if (modelMutations.length !== 2) throw new Error(`session.mutate: ${modelMutations.length} appels au lieu de 2`)
-  if (lastMutation?.expected_revision !== 4 || lastMutation?.expected_generation !== 1) throw new Error(`Clôtures inattendues: ${JSON.stringify(lastMutation)}`)
+  const pick = modelMutations.slice(mutationsBeforePick)
+  const lastMutation = pick.at(-1)
+  // Auto already switched the session on earlier sends. This click is one more confirmed change.
+  if (pick.length !== 2) throw new Error(`session.mutate: ${pick.length} appels pour le choix au lieu de 2 (${modelMutations.length} au total)`)
+  if (lastMutation?.expected_revision !== pick[0]?.expected_revision || lastMutation?.expected_generation !== pick[0]?.expected_generation) throw new Error(`Clôtures inattendues: ${JSON.stringify(pick)}`)
   if (lastMutation?.payload?.model !== 'claude-sonnet-5-5' || lastMutation?.payload?.provider !== 'anthropic' || lastMutation?.payload?.confirm !== 'confirm-test') throw new Error(`Mutation inattendue: ${JSON.stringify(lastMutation)}`)
-  if (!lastMutation?.request_id || lastMutation.request_id === modelMutations[0].request_id) throw new Error('La confirmation doit avoir une nouvelle request_id.')
+  if (!lastMutation?.request_id || lastMutation.request_id === pick[0]?.request_id) throw new Error('La confirmation doit avoir une nouvelle request_id.')
   if (!routeChecks.some((check) => check.profile === 'orion' && check.provider === 'anthropic')) throw new Error(`La route doit être vérifiée avant le changement: ${JSON.stringify(routeChecks)}`)
 
   // A provider with no usable key is marked in the picker, and choosing it asks first: refused, nothing is switched.
@@ -3428,21 +3437,23 @@ try {
   const noKeyRow = page.locator('.model-option[data-model="gemma-local"]')
   await noKeyRow.locator('.model-option-tag.is-unusable').getByText('Sans clé').waitFor({ timeout: 5_000 })
   const routeDialog = new Promise((resolve) => page.once('dialog', (dialog) => { resolve(dialog.message()); void dialog.dismiss() }))
+  const mutationsBeforeNoKey = modelMutations.length
   await noKeyRow.click()
   const routeMessage = await routeDialog
   if (!String(routeMessage).includes('No usable credentials found for lmstudio.')) throw new Error(`Avertissement de route inattendu: ${routeMessage}`)
   await page.waitForTimeout(300)
-  if (modelMutations.length !== 2) throw new Error('Un changement refusé vers une route sans clé a été envoyé.')
+  if (modelMutations.length !== mutationsBeforeNoKey) throw new Error('Un changement refusé vers une route sans clé a été envoyé.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
 
   // A model its provider refuses for quota is not switched to: the live check answers first, no credential sent.
+  const mutationsBeforeQuota = modelMutations.length
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('/model cursor')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   await page.locator('.model-option[data-model="cursor/claude-sonnet-5-5"]').click()
   await page.getByText('quota épuisé', { exact: false }).waitFor({ timeout: 5_000 })
   await page.waitForTimeout(300)
-  if (modelMutations.length !== 2) throw new Error('Un modèle refusé pour quota a été envoyé à la gateway.')
+  if (modelMutations.length !== mutationsBeforeQuota) throw new Error('Un modèle refusé pour quota a été envoyé à la gateway.')
   if (!modelProbeCalls.some((call) => call.model === 'cursor/claude-sonnet-5-5')) throw new Error(`Le modèle Cursor n’a pas été essayé avant le changement : ${JSON.stringify(modelProbeCalls)}`)
   if (modelProbeCalls.some((call) => call.authorization)) throw new Error('La sonde de modèle ne doit envoyer aucun identifiant.')
   if (modelProbeCalls.some((call) => !String(call.model).startsWith('cursor/'))) throw new Error(`Un modèle hors des préfixes configurés a été sondé : ${JSON.stringify(modelProbeCalls)}`)
@@ -3464,7 +3475,9 @@ try {
   await autoLabel.waitFor({ timeout: 8_000 })
   if (!/^Auto · \S/.test((await autoLabel.textContent()) || '')) throw new Error(`Étiquette Auto inattendue : ${await autoLabel.textContent()}`)
   if (!(await autoLabel.getAttribute('title'))) throw new Error('Étiquette Auto sans détail (catégorie, raison).')
-  if (await page.locator('.message-user .message-auto-route').count()) throw new Error('Le badge Auto reste sur la question alors que la réponse le porte.')
+  // Earlier sends are Auto too. An interrupted turn never gets an answer, so its badge stays on the question.
+  const autoQuestion = page.locator('.message-user').filter({ hasText: 'Test auto route fallback' })
+  if (await autoQuestion.locator('.message-auto-route').count()) throw new Error('Le badge Auto reste sur la question alors que la réponse le porte.')
   await page.locator('.model-chip').getByText('Auto', { exact: true }).waitFor({ timeout: 3_000 })
   if (promptCalls < promptsBeforeAuto + 2) throw new Error(`Auto fallback: ${promptCalls - promptsBeforeAuto} envois au lieu de 2.`)
   const autoLog = await (await fetch(`${E2E_APP_ORIGIN}/api/auto-router/log?days=1`, { headers: { Cookie: sessionCookieAuto, Origin: E2E_APP_ORIGIN } })).json()
@@ -3702,7 +3715,7 @@ try {
   if (promptCalls !== promptsBeforeCavemanMail + 1 || !lastPromptText.includes('Id: m3')) throw new Error('Le mail approuvé en mode caveman doit lancer un seul tour.')
   if (lastApiText !== undefined) throw new Error(`Un mail validé ne doit pas porter la note caveman : ${lastApiText}`)
   await card.waitFor({ state: 'detached', timeout: 3_000 })
-  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 3_000 })
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
   await delay(500) // the simulated turn ends: the next send would be ignored while it runs
   await setCaveman(false)
   await sendInMode('Test sans caveman')
@@ -3790,7 +3803,7 @@ try {
   for (let attempt = 0; attempt < 60 && lastPromptText !== 'Message bloqué'; attempt += 1) await delay(25)
   if (lastPromptText !== 'Message bloqué') throw new Error('Compaction : après la compaction, l’envoi doit repartir.')
   await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 10_000 })
-  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 5_000 })
+  if (await page.locator('.composer-send[aria-label="Envoyer"]').count()) throw new Error('Champ vide : le bouton Envoyer doit rester caché.')
   await delay(500)
 
   // Hermes compacting on its own during a turn: the status line says so, then the text resumes.
@@ -3801,7 +3814,8 @@ try {
   await page.screenshot({ path: `${SCREENSHOTS}compaction-live-notice.png` })
   await page.locator('.messages-scroll').getByText('Reprise après compaction.').waitFor({ timeout: 6_000 })
   if (await page.locator('.chat-status-detail').getByText('Compaction du contexte').count()) throw new Error('Compaction : la ligne de travail doit s’effacer quand le texte reprend.')
-  await page.locator('.composer-send[aria-label="Envoyer"]').waitFor({ state: 'attached', timeout: 5_000 })
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
+  if (await page.locator('.composer-send[aria-label="Envoyer"]').count()) throw new Error('Champ vide : le bouton Envoyer doit rester caché.')
   await delay(500)
   await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
 

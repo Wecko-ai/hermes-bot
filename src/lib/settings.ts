@@ -103,14 +103,41 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     voiceHandsFree: flag(value.voiceHandsFree, true),
     compactionMode: value.compactionMode === 'manual' ? 'manual' : 'auto',
     compactionGauge: typeof value.compactionGauge === 'number' && Number.isFinite(value.compactionGauge) ? Math.round(Math.min(1, Math.max(0.1, value.compactionGauge)) * 100) / 100 : 1,
-    useAutoModel: flag(value.useAutoModel, false),
+    // Absent key: Auto is the default. An explicit false is kept (see load() for the 0.2.9 migration).
+    useAutoModel: flag(value.useAutoModel, true),
     useAutoFreeModel: flag(value.useAutoFreeModel, false),
   }
 }
 
+const AUTO_DEFAULT_APPLIED = 'autoDefaultApplied'
+
+function persist(settings: AppSettings, extra: Record<string, unknown> = {}) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...settings, ...extra })) } catch { /* storage unavailable */ }
+}
+
+/** Older full saves wrote useAutoModel: false even when the user never turned Auto off. Run once. */
+export function withAutoDefaultMigration(settings: AppSettings, saved: string | null): AppSettings {
+  let raw: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(saved || '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+  } catch { /* unreadable: treat as empty */ }
+  if (raw[AUTO_DEFAULT_APPLIED] === true) return settings
+  if (settings.useAutoFreeModel) return settings
+  return { ...settings, useAutoModel: true }
+}
+
 function load(): AppSettings {
   try {
-    return parseSettings(localStorage.getItem(STORAGE_KEY), (key) => localStorage.getItem(key))
+    const saved = localStorage.getItem(STORAGE_KEY)
+    const settings = withAutoDefaultMigration(parseSettings(saved, (key) => localStorage.getItem(key)), saved)
+    let rawApplied = false
+    try {
+      const parsed: unknown = JSON.parse(saved || '{}')
+      rawApplied = Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed as Record<string, unknown>)[AUTO_DEFAULT_APPLIED] === true)
+    } catch { /* ignore */ }
+    if (!rawApplied) persist(settings, { [AUTO_DEFAULT_APPLIED]: true })
+    return settings
   } catch {
     return parseSettings(null)
   }
@@ -123,7 +150,7 @@ export const getSettings = () => current
 
 export function updateSettings(changes: Partial<AppSettings>) {
   current = { ...current, ...changes }
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(current)) } catch { /* storage unavailable */ }
+  persist(current, { [AUTO_DEFAULT_APPLIED]: true })
   listeners.forEach((listener) => listener())
 }
 

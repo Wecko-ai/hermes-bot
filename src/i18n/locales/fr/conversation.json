@@ -151,12 +151,27 @@
   },
   "progress": {
     "toggle_one": "Afficher {{count}} étape",
-    "toggle_other": "Afficher {{count}} étapes"
+    "toggle_other": "Afficher {{count}} étapes",
+    "ranShell": "Commande lancée : {{what}}",
+    "ranShellBare": "Commande lancée",
+    "readFile": "Lecture de {{name}}",
+    "readFileBare": "Lecture d’un fichier",
+    "wroteFile": "Écriture de {{name}}",
+    "wroteFileBare": "Écriture d’un fichier",
+    "searched": "Recherche : {{what}}",
+    "searchedBare": "Recherche"
   },
   "media": {
     "externalLink": "Lien externe",
     "openBeside": "Ouvrir à côté",
     "previewUnavailable": "Aperçu indisponible",
+    "play": "Lire {{name}}",
+    "notFound": "Introuvable",
+    "notAllowed": "Non autorisé",
+    "locating": "Recherche du fichier…",
+    "copyPath": "Copier le chemin",
+    "copiedPath": "Copié",
+    "open": "Ouvrir",
     "localFile": "Fichier local",
     "relativePath": "Chemin relatif",
     "enlarge": "Agrandir {{name}}",

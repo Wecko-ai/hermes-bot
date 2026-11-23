@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bot, ChatMessage } from '../types'
 import { resetChatStore, resetRosterStore, useChatStore, useRosterStore } from '../store'
 import { BOT_KICKOFF_TEXT } from './bot-kickoff'
-import { introduceDemoBot, kickOffNewBot, type FreshBot } from './bot-onboarding'
+import { introduceDemoBot, kickOffNewBot, type FreshBot, type KickoffTurnSubmit } from './bot-onboarding'
 import type { ActiveChat } from './hermes'
 
 const chat: ActiveChat = { profile: 'lea-martin', sessionId: 'chat-lea-martin', revision: 1, executionGeneration: 1, running: false, socketGeneration: 1 }
@@ -58,6 +58,39 @@ describe('premier tour d’un bot créé ici', () => {
     const request = vi.fn(async (method: string) => { if (method === 'session.title') throw new Error('unknown method'); return {} })
     expect(await kickOffNewBot({ request }, { chat, messages: [] }, fresh, 'en', vi.fn())).toBe(true)
     expect(request.mock.calls.at(-1)?.[0]).toBe('prompt.submit')
+  })
+
+  it('passe par l’envoi routé quand on lui en donne un, et garde la phrase technique', async () => {
+    const request = vi.fn().mockResolvedValue({})
+    const submit = vi.fn<KickoffTurnSubmit>(async ({ message }) => {
+      message.autoRoute = { category: 'writing', chosen: 'anthropic/claude-sonnet-5-5', reason: 'writing' }
+      return { ...chat, model: 'claude-sonnet-5-5', revision: 2 }
+    })
+    expect(await kickOffNewBot({ request }, { chat, messages: [] }, fresh, 'fr', vi.fn(), submit)).toBe(true)
+    expect(request.mock.calls.map(([method]) => method)).toEqual(['session.title'])
+    expect(submit).toHaveBeenCalledTimes(1)
+    const [input] = submit.mock.calls[0]
+    expect(input.text).toBe(BOT_KICKOFF_TEXT)
+    expect(input.apiText).toContain('Your name is "Léa Martin"')
+    expect(input.apiText).toContain('in French')
+    expect(input.apiText).not.toContain('caveman')
+    expect(input.apiText).not.toContain('HermesBot mode')
+    expect(input.message).toMatchObject({ role: 'user', content: BOT_KICKOFF_TEXT, technical: true })
+    expect(useChatStore.getState().messages[0]).toMatchObject({ technical: true, autoRoute: { chosen: 'anthropic/claude-sonnet-5-5' } })
+    expect(useChatStore.getState().activeChat).toMatchObject({ model: 'claude-sonnet-5-5', revision: 2, running: true })
+    expect(useChatStore.getState().running).toBe(true)
+    expect(useRosterStore.getState().bots[0].status).toBe('working')
+    expect(useRosterStore.getState().bots[0].preview).toBe('')
+  })
+
+  it('rend la main quand l’envoi routé échoue, sans laisser le bot au travail', async () => {
+    const refused = new Error('auto_route_failed')
+    const submit = vi.fn(async () => { throw refused })
+    const onFailed = vi.fn()
+    expect(await kickOffNewBot({ request: vi.fn().mockResolvedValue({}) }, { chat, messages: [] }, fresh, 'en', onFailed, submit)).toBe(false)
+    expect(onFailed).toHaveBeenCalledWith(expect.objectContaining({ content: BOT_KICKOFF_TEXT, technical: true }), refused)
+    expect(useChatStore.getState().running).toBe(false)
+    expect(useRosterStore.getState().bots[0].status).toBe('idle')
   })
 })
 

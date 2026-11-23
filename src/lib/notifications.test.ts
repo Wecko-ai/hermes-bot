@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, notificationExcerpt, notificationForRequest, notificationForStatus, notificationForWaiting, resetTurns, sendTestNotification, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden } from './notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnSilence, cleanNotificationText, notificationBody, notificationExcerpt, notificationForRequest, notificationForStatus, notificationForWaiting, resetTurns, sendTestNotification, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden } from './notifications'
 
 describe('notifications', () => {
   it('ne notifie pas un tour entre bots ni un tour fini en silence', () => {
@@ -120,6 +120,13 @@ describe('notifications', () => {
     expect(notificationExcerpt('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`)
     expect(notificationExcerpt(undefined)).toBe('')
   })
+
+  it('retire le markdown, le code et les appels d’outils du texte notifié', () => {
+    expect(cleanNotificationText('**C’est en place** : les replies sont prêts.')).toBe('C’est en place : les replies sont prêts.')
+    expect(cleanNotificationText("[Tool call] Shell command: python3 <<'PY' im\nLe rendu est prêt.")).toBe('Le rendu est prêt.')
+    expect(cleanNotificationText('Voici le plan.\n```json\n{"a":1}\n```')).toBe('Voici le plan.')
+    expect(notificationExcerpt("[Tool call] Shell command: python3 <<'PY' import os")).toBe('')
+  })
 })
 
 describe('message d’une fin de tour', () => {
@@ -139,6 +146,47 @@ describe('message d’une fin de tour', () => {
 
   it('se tait sur un tour silencieux', () => {
     expect(turnReply([{ role: 'assistant', content: 'Avant.', createdAt: at(5) }, { role: 'system', content: '[NO_REPLY]', createdAt: at(1), technical: true }], now)).toBeUndefined()
+  })
+
+  it('ignore une étape d’outil et reprend la vraie réponse', () => {
+    expect(turnReply([
+      { role: 'assistant', content: 'Le rendu est lancé.', createdAt: at(8) },
+      { role: 'assistant', content: "[Tool call] Shell command: python3 <<'PY' import os", createdAt: at(1), progress: true },
+    ], now)).toBe('Le rendu est lancé.')
+  })
+})
+
+describe('corps de notification', () => {
+  const now = Date.parse('2026-11-13T10:00:00Z')
+  const at = (seconds: number) => new Date(now - seconds * 1000).toISOString()
+
+  it('prend le texte final, sans markdown', () => {
+    expect(notificationBody({
+      recorded: '**C’est en place** : les replies sont prêts.',
+      messages: [],
+      fallback: 'A terminé sa tâche',
+    })).toBe('C’est en place : les replies sont prêts.')
+  })
+
+  it('ignore un appel d’outil et reprend la dernière phrase utile', () => {
+    expect(notificationBody({
+      recorded: "[Tool call] Shell command: python3 <<'PY' import os",
+      messages: [
+        { role: 'assistant', content: 'Le premier exemple est prêt.', createdAt: at(3) },
+        { role: 'assistant', content: "[Tool call] Shell command: python3 <<'PY' import os", createdAt: at(1), progress: true },
+      ],
+      fallback: 'A terminé sa tâche',
+      now,
+    })).toBe('Le premier exemple est prêt.')
+  })
+
+  it('utilise le résumé si aucune phrase n’est disponible', () => {
+    expect(notificationBody({
+      recorded: "[Tool call] Shell command: python3 <<'PY' import os",
+      messages: [{ role: 'assistant', content: '[Tool call] Shell command: ls', createdAt: at(1), progress: true }],
+      fallback: 'A terminé sa tâche',
+      now,
+    })).toBe('A terminé sa tâche')
   })
 })
 

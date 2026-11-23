@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../types'
 import { isSilentMessage } from './hermes'
 import { cleanPreview } from './time'
+import { expandToolMessage } from './tool-transcript'
 import { stepIds } from './turns'
 
 const MAX_PROGRESS = 220
@@ -49,7 +50,8 @@ function stepLines(bucket: ChatMessage[], answer?: ChatMessage): ChatMessage[] {
  * reply exists; while the turn runs it stays a single live line. The reply is never one of the steps.
  */
 export function threadItems(messages: ChatMessage[], running: boolean, profile: string, progressEnabled: boolean): ThreadItem[] {
-  const hiddenSteps = stepIds(messages, running, profile)
+  const expanded = messages.flatMap(expandToolMessage)
+  const hiddenSteps = stepIds(expanded, running, profile)
   const items: ThreadItem[] = []
   let bucket: ChatMessage[] = []
 
@@ -63,14 +65,15 @@ export function threadItems(messages: ChatMessage[], running: boolean, profile: 
     if (answer) items.push({ kind: 'message', message: answer })
   }
 
-  for (const message of messages) {
+  for (const message of expanded) {
     if (!isVisible(message)) continue
     if (hiddenSteps.has(message.id)) {
       if (progressEnabled) bucket.push(message)
       continue
     }
-    if (progressEnabled && isProgress(message)) {
-      bucket.push(message)
+    // A step is never its own bubble, including when the thread hides the progress list.
+    if (isProgress(message)) {
+      if (progressEnabled) bucket.push(message)
       continue
     }
     if (progressEnabled && message.role === 'assistant' && !message.agent && !message.streaming) {

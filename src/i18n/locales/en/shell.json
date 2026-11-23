@@ -348,7 +348,7 @@
     }
   },
   "notifications": {
-    "done": "Is done",
+    "done": "Has finished their task",
     "question": "Has a question for you",
     "approval": "Waits for your approval",
     "draft": "Draft waiting for approval",

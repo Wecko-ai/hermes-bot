@@ -69,6 +69,20 @@ export function sanitizeLogEntry(body) {
     : []
   const mode = body.mode === 'auto-free' ? 'auto-free' : 'auto'
   const ts = typeof body.ts === 'string' ? body.ts : new Date().toISOString()
+  const triageSource = ['rules', 'local', 'local-shadow', 'local-timeout', 'local-error'].includes(body.triageSource)
+    ? body.triageSource
+    : (body.triage && typeof body.triage === 'object' && ['rules', 'local', 'local-shadow', 'local-timeout', 'local-error'].includes(body.triage.source)
+      ? body.triage.source
+      : null)
+  const triage = body.triage && typeof body.triage === 'object' ? body.triage : {}
+  const rulesCategory = typeof body.rulesCategory === 'string' ? body.rulesCategory
+    : (typeof triage.rulesCategory === 'string' ? triage.rulesCategory : null)
+  const difficulty = ['easy', 'medium', 'hard'].includes(body.difficulty) ? body.difficulty
+    : (['easy', 'medium', 'hard'].includes(triage.difficulty) ? triage.difficulty : null)
+  const triageLatencyMs = typeof body.triageLatencyMs === 'number' && Number.isFinite(body.triageLatencyMs) ? body.triageLatencyMs
+    : (typeof triage.latencyMs === 'number' && Number.isFinite(triage.latencyMs) ? triage.latencyMs : null)
+  const confidence = typeof body.confidence === 'number' && Number.isFinite(body.confidence) ? body.confidence
+    : (typeof triage.confidence === 'number' && Number.isFinite(triage.confidence) ? triage.confidence : null)
   return {
     ts,
     mode,
@@ -84,6 +98,11 @@ export function sanitizeLogEntry(body) {
     costUsd: typeof body.costUsd === 'number' ? body.costUsd : null,
     latencyMs: typeof body.latencyMs === 'number' ? body.latencyMs : null,
     outcome: ['ok', 'error', 'cancelled'].includes(body.outcome) ? body.outcome : null,
+    triageSource,
+    triageLatencyMs,
+    rulesCategory,
+    difficulty,
+    confidence,
   }
 }
 

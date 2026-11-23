@@ -1,5 +1,6 @@
 import path from 'node:path'
-import { classifyPrompt, estimateTokens } from './classifier.mjs'
+import { estimateTokens } from './classifier.mjs'
+import { loadTriageConfig, publicTriage, resolveCategory, weightsForDifficulty } from './triage.mjs'
 import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
 import { createProviderQuotaStore, isQuotaSignal } from './provider-quota.mjs'
@@ -67,8 +68,19 @@ export function createAutoRouter(deps) {
     const imageCount = Number(body.imageCount) || 0
     const contextUsed = Number(body.contextUsed) || 0
     const contextMax = Number(body.contextMax) || 0
-    const category = classifyPrompt({ text, imageCount, contextUsed, contextMax })
+    const triageConfig = deps.triageConfig || loadTriageConfig()
+    const triage = await resolveCategory({
+      text,
+      summary: typeof body.summary === 'string' ? body.summary : '',
+      imageCount,
+      contextUsed,
+      contextMax,
+      bot: typeof body.bot === 'string' ? body.bot : '',
+      forceLocal: body.forceLocal === true,
+    }, triageConfig, deps.triageDeps || {})
+    const category = triage.category
     const tokens = estimateTokens(text, contextUsed)
+    const triagePublic = publicTriage(triage)
 
     const rawCandidates = Array.isArray(body.models) ? body.models : []
     const policy = spendPolicy(body, deps.subscriptions || [])
@@ -78,13 +90,13 @@ export function createAutoRouter(deps) {
     const eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
       .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row, table) : allowedForSpend(row, policy)))
     if (!eligible.length) {
-      return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens }
+      return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
 
     const usage = await quotaStore.snapshot()
     const candidates = eligible.filter((row) => !quotaStore.blocked(usage, table, row, tokens))
     if (!candidates.length) {
-      return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens }
+      return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
 
     // Never route to a model the conversation does not fit in (window minus headroom for the reply and tools).
@@ -101,6 +113,7 @@ export function createAutoRouter(deps) {
       candidates: sizing.candidates,
       latencyMs,
       quotaPercents,
+      ...(triage.source === 'local' ? { weights: weightsForDifficulty(triage.difficulty) } : {}),
     })
     const quotaOf = (row) => resolveDailyQuota(table, row)
     const ranked = mode === 'auto-free' ? rankFreeCandidates(scored, quotaOf) : scored
@@ -132,13 +145,14 @@ export function createAutoRouter(deps) {
       blocked.add(picked.chosen)
       picked = null
     }
-    if (!picked) return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens }
+    if (!picked) return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
 
     const chosenWindow = sizing.candidates.find((row) => row.fullModel === picked.chosen)?.contextWindow || 0
     return {
       ok: true,
       mode,
       category,
+      triage: triagePublic,
       tokenEstimate: tokens,
       contextWindow: chosenWindow,
       // Nothing can hold the conversation with room to work: compact before the turn.

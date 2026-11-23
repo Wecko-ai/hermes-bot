@@ -148,4 +148,52 @@ describe('auto-router decide', () => {
     expect(tooBig.chosen).toBe('kimi-coding/k3.1-pro')
     expect(tooBig.needsCompaction).toBe(true)
   })
+  it('uses local triage for an enabled bot and falls back on timeout', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'demo/writer': { quality: { writing: 0.95, other: 0.2, coding: 0.2 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 800 },
+        'demo/other': { quality: { writing: 0.2, other: 0.9, coding: 0.2 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 800 },
+      },
+    }))
+    const models = [
+      { provider: 'demo', model: 'writer' },
+      { provider: 'demo', model: 'other' },
+    ]
+    const ambiguous = 'The quarterly report attachments are in the shared drive folder marked Q3 — please reconcile the ledger with finance before the board packet ships next month.'
+    const router = createAutoRouter({
+      tablePath,
+      logDir: dir,
+      subscriptions: ['demo'],
+      triageConfig: { mode: 'live', enabledBots: ['orion'], confidenceThreshold: 0.7 },
+      triageDeps: {
+        checkAvailable: async () => ({ ok: true, reason: null, loaded: true }),
+        callLocal: async () => ({ ok: true, category: 'writing', difficulty: 'medium', latencyMs: 80 }),
+      },
+    })
+    const local = await router.decide({ text: ambiguous, bot: 'orion', models })
+    expect(local.ok).toBe(true)
+    expect(local.category).toBe('writing')
+    expect(local.chosen).toBe('demo/writer')
+    expect(local.triage.source).toBe('local')
+    expect(local.triage.rulesCategory).toBe('other')
+    expect(local.triage.latencyMs).toBe(80)
+
+    const fallback = createAutoRouter({
+      tablePath,
+      logDir: dir,
+      subscriptions: ['demo'],
+      triageConfig: { mode: 'live', enabledBots: ['orion'], confidenceThreshold: 0.7 },
+      triageDeps: {
+        checkAvailable: async () => ({ ok: true, reason: null, loaded: true }),
+        callLocal: async () => ({ ok: false, reason: 'timeout', latencyMs: 1500 }),
+      },
+    })
+    const timedOut = await fallback.decide({ text: ambiguous, bot: 'orion', models })
+    expect(timedOut.category).toBe('other')
+    expect(timedOut.chosen).toBe('demo/other')
+    expect(timedOut.triage.source).toBe('local-timeout')
+  })
 })

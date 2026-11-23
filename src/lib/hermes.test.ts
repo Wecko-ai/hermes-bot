@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, completeUsage, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, completeUsage, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
 import { BOT_KICKOFF_TEXT } from './bot-kickoff'
 
 const chat: ActiveChat = {
@@ -516,5 +516,22 @@ describe('server requests are not answered for other clients', () => {
     expect(socket.sent).toHaveLength(before)
     expect(seen).toEqual(['approval'])
     expect(socket.sent.some((frame) => JSON.parse(frame).error || JSON.parse(frame).id === 'sudo-1' || JSON.parse(frame).id === 'win-1')).toBe(false)
+  })
+})
+
+describe('prompt.submit', () => {
+  it('reuses the send id on a retry and mints one when the caller has none', async () => {
+    const request = vi.fn().mockResolvedValue({ status: 'streaming' })
+    const client = { request } as unknown as HermesClient
+    await submitPrompt(client, chat, 'hello', [], { submissionId: 'send-1' })
+    await submitPrompt(client, chat, 'hello', [], { submissionId: 'send-1' })
+    await submitPrompt(client, chat, 'again')
+    await submitPrompt(client, chat, 'again')
+    const ids = request.mock.calls.map((call) => (call[1] as { submission_id: string }).submission_id)
+    expect(request.mock.calls.every((call) => call[0] === 'prompt.submit')).toBe(true)
+    expect(ids.slice(0, 2)).toEqual(['send-1', 'send-1'])
+    expect(ids[2]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(ids[3]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(ids[2]).not.toBe(ids[3])
   })
 })

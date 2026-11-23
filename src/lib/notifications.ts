@@ -179,17 +179,60 @@ const REPLY_FRESH_MS = 2 * 60_000
  * A turn seen only through the status polling has no reply in the cache: an older one would read as new,
  * so the notification gives the state instead. Same for a silent turn, cached as a technical message.
  */
-export function turnReply(messages: Pick<ChatMessage, 'role' | 'content' | 'createdAt' | 'technical'>[], now = Date.now()) {
-  const last = messages[messages.length - 1]
-  if (!last || last.role !== 'assistant' || last.technical) return undefined
-  const at = Date.parse(last.createdAt ?? '')
-  return Number.isFinite(at) && now - at <= REPLY_FRESH_MS ? last.content : undefined
+type ReplyMessage = Pick<ChatMessage, 'role' | 'content' | 'createdAt' | 'technical' | 'progress' | 'agent'>
+
+/** Last finished assistant sentence of this turn, skipping trailing progress and tool rows. */
+export function turnReply(messages: ReplyMessage[], now = Date.now()) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const last = messages[index]
+    if (!last) continue
+    // A step or tool row may sit after the reply; it is not the answer, nor the end of the search.
+    if (last.progress || last.role === 'tool') continue
+    if (last.role !== 'assistant' || last.technical || last.agent) return undefined
+    const at = Date.parse(last.createdAt ?? '')
+    if (!Number.isFinite(at) || now - at > REPLY_FRESH_MS) return undefined
+    return last.content
+  }
+  return undefined
+}
+
+/** Drop markdown, code, and tool-call markers so a notification shows the spoken sentence. */
+export function cleanNotificationText(text: string | undefined) {
+  if (!text) return ''
+  let value = text
+  value = value.replace(/```[\s\S]*?```/g, ' ')
+  value = value.replace(/`([^`]+)`/g, '$1')
+  value = value.replace(/\[Tool calls?:[\s\S]*?\]/gi, ' ')
+  value = value.replace(/^\s*\[Tool call\][^\n]*/gim, ' ')
+  value = value.replace(/^\s*Shell command:[^\n]*/gim, ' ')
+  value = value.replace(/\*\*([^*]+)\*\*/g, '$1')
+  value = value.replace(/__([^_]+)__/g, '$1')
+  value = value.replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, '$1$2')
+  value = value.replace(/^#{1,6}\s+/gm, '')
+  return value.replace(/\s+/g, ' ').trim()
 }
 
 /** One line of the message, at most `max` characters. */
 export function notificationExcerpt(text: string | undefined, max = 120) {
-  const line = (text || '').replace(/\s+/g, ' ').trim()
+  const line = cleanNotificationText(text)
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+/**
+ * Body of a finished-turn notification: the recorded final text, else the last
+ * non-tool assistant sentence, else a short fallback (never raw tool-call text).
+ */
+export function notificationBody(options: {
+  recorded?: string
+  messages?: ReplyMessage[]
+  fallback: string
+  now?: number
+  max?: number
+}) {
+  const excerpt = notificationExcerpt(options.recorded, options.max)
+  if (excerpt) return excerpt
+  const reply = turnReply(options.messages || [], options.now ?? Date.now())
+  return notificationExcerpt(reply, options.max) || options.fallback
 }
 
 /**

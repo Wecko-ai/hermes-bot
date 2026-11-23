@@ -192,7 +192,9 @@
     "modeFree": "Auto free",
     "tablePath": "Scoring table",
     "fallbackBlockedTools": "Auto routing could not retry: tools already ran on this turn.",
-    "fallbackExhausted": "Auto routing could not recover from the provider error."
+    "fallbackExhausted": "Auto routing could not recover from the provider error.",
+    "stayed": "Auto could not choose a model. This turn stays on {{model}}.",
+    "currentModel": "the current model"
   },
   "vaultWallet": {
     "note": "Cards and addresses are stored in the bots machine’s keychain. Card numbers never return to the chat—only the last four digits.",
@@ -310,7 +312,7 @@
     "showUsage": "Show context and speed",
     "showUsageHint": "Below the composer",
     "autoModel": "Auto model mode",
-    "autoModelHint": "Pick a model automatically on each send (same as the Auto entry in the model picker).",
+    "autoModelHint": "Default for every bot and new chat: pick a model automatically on each send. A model chosen in the picker stays on that chat only.",
     "caveman": "Caveman mode",
     "cavemanHint": "Bots answer you in 1 to 3 lines: the result, then what you need to decide. For the messages you send from here; what they write elsewhere stays normal.",
     "approvalsMode": {

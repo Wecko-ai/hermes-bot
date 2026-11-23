@@ -30,7 +30,7 @@ export interface MediaTag {
 
 /** `MEDIA_DELIVERY_EXTS` de Hermes (`gateway/platforms/base.py`). */
 const DELIVERY_EXTENSIONS = [
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'svg', 'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', '3gp',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'tiff', 'svg', 'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', '3gp',
   'mp3', 'm2a', 'wav', 'ogg', 'opus', 'm4a', 'flac', 'pdf', 'docx', 'doc', 'odt', 'rtf', 'txt', 'md',
   'epub', 'xlsx', 'xls', 'ods', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'kmz', 'kml', 'geojson', 'gpx',
   'pptx', 'ppt', 'odp', 'key', 'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'apk', 'ipa', 'html', 'htm',
@@ -41,7 +41,7 @@ const DELIVERY_EXTENSIONS = [
  * No SVG (scripts possible), nor formats Chromium cannot play (tiff, avi, mkv, 3gp).
  */
 const PLAYABLE: Record<string, MediaKind> = {
-  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image', heic: 'image', heif: 'image',
   mp4: 'video', m4v: 'video', mov: 'video', webm: 'video',
   mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', opus: 'audio', flac: 'audio',
   // Opened in a tab beside the chat, through `/api/document`. Must stay identical to the server’s DOCUMENT_TYPES.
@@ -119,6 +119,74 @@ export function mediaRef(rawPath: string): MediaRef {
   return { path, name, kind: PLAYABLE[extension] || 'file' }
 }
 
+/** Absolute paths of the same turn: the reply, and the tool results around it. */
+export interface CitedContext {
+  paths?: readonly string[]
+  /** Session or profile workspace. Used only when exactly one is known. */
+  workspaces?: readonly string[]
+}
+
+const basenameOf = (file: string) => file.split(/[\\/]/).filter(Boolean).at(-1) || file
+
+/** Every absolute image, video, sound or PDF path written in `text`, code blocks included. */
+export function absoluteCitedPaths(text: string): string[] {
+  if (!text) return []
+  const found: string[] = []
+  const pattern = new RegExp(`(?:~/|/)[^\\s\`"'<>|]+?\\.(?:${CITED_EXTENSIONS})(?=[\\s\`"'<>)|,;:!?]|$)`, 'g')
+  for (const match of text.matchAll(pattern)) {
+    const file = match[0]
+    if (file.split('/').some((part) => part === '.' || part === '..')) continue
+    if (!found.includes(file)) found.push(file)
+  }
+  return found
+}
+
+/**
+ * For each message, the absolute media paths of its turn (from a user message up to the next).
+ * Tool rows count: a reply often names a file the tool result already wrote in full.
+ */
+export function citedPathsByMessage<T extends { role: string; content: string }>(messages: readonly T[]): string[][] {
+  const own = messages.map((message) => absoluteCitedPaths(message.content || ''))
+  const result = messages.map(() => [] as string[])
+  let start = 0
+  const fill = (end: number) => {
+    const paths: string[] = []
+    for (let index = start; index < end; index += 1) {
+      for (const file of own[index]) if (!paths.includes(file)) paths.push(file)
+    }
+    for (let index = start; index < end; index += 1) result[index] = paths
+  }
+  messages.forEach((message, index) => {
+    if (message.role === 'user' && index !== start) {
+      fill(index)
+      start = index
+    }
+  })
+  fill(messages.length)
+  return result
+}
+
+function hintedPath(token: string, paths: readonly string[]) {
+  const name = basenameOf(token)
+  const relative = token.includes('/') || token.includes('\\')
+  const matches: string[] = []
+  for (const file of paths) {
+    if (!(file.startsWith('/') || file.startsWith('~/'))) continue
+    const hit = relative ? file.endsWith(`/${token}`) || file.endsWith(`\\${token}`) : basenameOf(file) === name
+    if (hit && !matches.includes(file)) matches.push(file)
+  }
+  return matches.length === 1 ? matches[0] : ''
+}
+
+function workspacePath(token: string, workspaces: readonly string[]) {
+  if (workspaces.length !== 1) return ''
+  if (token.split(/[\\/]/).some((part) => part === '.' || part === '..')) return ''
+  if (!CITED_NAME.test(basenameOf(token))) return ''
+  const root = workspaces[0].replace(/[\\/]+$/, '')
+  if (!(root.startsWith('/') || root.startsWith('~/'))) return ''
+  return `${root}/${token.replace(/^\.\//, '')}`
+}
+
 /** All the `MEDIA:` tags of a plain text, in order. */
 export function findMediaTags(text: string): MediaTag[] {
   if (!text.includes('MEDIA:')) return []
@@ -148,6 +216,18 @@ export function videoUrl(profile: string, path: string, version?: string) {
   return `/api/video?${new URLSearchParams({ profile, path, ...(version ? { v: version } : {}) })}`
 }
 
+/** JPEG frame of a video that is on this machine. A 404 means the player shows its own first frame. */
+export function videoPosterUrl(profile: string, path: string, version?: string) {
+  return `/api/video/poster?${new URLSearchParams({ profile, path, ...(version ? { v: version } : {}) })}`
+}
+
+/** Ask the server to match a bare or relative name against turn paths and the profile workspace. */
+export function mediaLocateUrl(profile: string, name: string, hints: readonly string[] = []) {
+  const query = new URLSearchParams({ profile, name })
+  for (const hint of hints.slice(0, 32)) query.append('hint', hint)
+  return `/api/media/locate?${query}`
+}
+
 export function mediaIndex(href: string | undefined) {
   const match = /^#media:(\d+)$/.exec(href || '')
   return match ? Number(match[1]) : -1
@@ -160,11 +240,13 @@ export function mediaIndex(href: string | undefined) {
 export function conversationMedia(messages: { id: string; role: string; content: string; agent?: unknown }[]) {
   const seen = new Set<string>()
   const items: { ref: MediaRef; version: string }[] = []
+  const hints = citedPathsByMessage(messages)
+  const byIndex = new Map(messages.map((message, index) => [message, hints[index] ?? []]))
   for (const message of [...messages].reverse()) {
     if (message.role !== 'assistant' && !message.agent) continue
     const prose = withoutFences(message.content)
     const tagged = findMediaTags(prose).map((tag) => tag.ref)
-    for (const ref of [...tagged, ...referencedFiles(message.content)].reverse()) {
+    for (const ref of [...tagged, ...referencedFiles(message.content, { paths: byIndex.get(message) })].reverse()) {
       if (ref.kind === 'link' || ref.kind === 'file' || !isServablePath(ref.path) || seen.has(ref.path)) continue
       seen.add(ref.path)
       items.push({ ref, version: message.id })
@@ -234,9 +316,13 @@ function blockDirectories(tokens: string[]) {
  * `/…/final-v2.mp4`”). A bare name (`cover.jpg`) takes the directory cited in the same list item;
  * otherwise that of the preceding paragraph (“in the same folder”); otherwise the message’s only directory.
  * An ambiguous directory yields nothing. Never inside a code block.
+ * A bare name (`1112.mov`) prefers the one absolute path of that name in `context`
+ * (the same turn, tool results included) over the folder mentioned beside it.
  */
-export function referencedFiles(text: string): MediaRef[] {
+export function referencedFiles(text: string, context: CitedContext = {}): MediaRef[] {
   const prose = withoutFences(text)
+  const hintPaths = context.paths ?? []
+  const workspaces = context.workspaces ?? []
   const tagged = new Set(findMediaTags(prose).map((tag) => tag.ref.path))
   const blocks = textBlocks(prose).map((block) => ({ ...block, tokens: blockTokens(block.text) }))
   const allDirectories = new Set(blocks.flatMap((block) => block.tokens.filter((token) => CITED_DIRECTORY.test(token))))
@@ -248,12 +334,21 @@ export function referencedFiles(text: string): MediaRef[] {
     const directory = directories.length === 1 ? directories[0]
       : directories.length === 0 && introDirectory ? introDirectory
         : directories.length === 0 && allDirectories.size === 1 ? [...allDirectories][0] : ''
+    const ambiguous = directories.length > 1 || (directories.length === 0 && !directory && allDirectories.size > 1)
     let previous = ''
     for (const token of block.tokens) {
       let file = ''
       if (CITED_ABSOLUTE.test(token)) file = token
       else if (directory && CITED_NAME.test(token)) file = `${directory}${token}`
       else if (previous.lastIndexOf('-') > previous.lastIndexOf('/') && CITED_SUFFIX.test(token)) file = `${previous.slice(0, previous.lastIndexOf('-'))}${token}`
+      if (!CITED_ABSOLUTE.test(token) && !CITED_DIRECTORY.test(token) && CITED_NAME.test(basenameOf(token))) {
+        const hinted = hintedPath(token, hintPaths)
+        if (hinted) file = hinted
+        else if (!file) {
+          const rooted = ambiguous ? '' : workspacePath(token, workspaces)
+          if (rooted || !token.split(/[\\/]/).some((part) => part === '.' || part === '..')) file = rooted || token
+        }
+      }
       if (!file || file.split('/').some((part) => part === '.' || part === '..')) continue
       previous = file
       add(file)

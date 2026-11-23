@@ -24,8 +24,10 @@ describe('modèles et usage', () => {
     expect(chipModelLabel('openrouter/anthropic/claude-sonnet-5.5')).toBe('Sonnet 5.5')
   })
 
-  it('affiche le contexte et le débit, ou des tirets sans donnée', () => {
-    expect(formatUsage(null)).toBe('Contexte — · — tok/s')
+  it('affiche le contexte et le débit, et omet le débit quand il est inconnu', () => {
+    expect(formatUsage(null)).toBe('Contexte —')
+    expect(formatUsage({ contextUsed: 41_000, contextMax: 1_000_000, contextPercent: 4.1, averageTps: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 }))
+      .toBe('Contexte 4 % (41k/1M)')
     expect(formatUsage({ contextUsed: 41_000, contextMax: 1_000_000, contextPercent: 4.1, averageTps: 62.6, inputTokens: 0, outputTokens: 0, totalTokens: 0 }))
       .toBe('Contexte 4 % (41k/1M) · 63 tok/s')
   })

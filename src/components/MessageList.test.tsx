@@ -1,4 +1,5 @@
 import './test-dom'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
@@ -292,6 +293,27 @@ describe('progress steps', () => {
     expect(container.querySelector('.progress-toggle')?.getAttribute('aria-expanded')).toBe('true')
     await act(async () => { container.querySelector('.progress-toggle')?.click() })
     expect(container.querySelector('.progress-line')).toBeNull()
+    await act(async () => { root.unmount() })
+  })
+
+  it('replays a raw tool transcript as one collapsed step and never the script', async () => {
+    const rush = readFileSync(new URL('../../tests/fixtures/tool-transcript-rush.txt', import.meta.url), 'utf8')
+    const { container } = installTestDom()
+    const root = createRoot(container as unknown as Element)
+    const view = (running: boolean, messages: ChatMessage[], streaming = '') => list({
+      running, messages, streaming, progressInThread: true,
+    })
+    await act(async () => { root.render(view(true, [user], rush)) })
+    expect(container.textContent).not.toMatch(/\[Tool|python3|sha256|block_until/)
+    expect(container.querySelector('.progress-live')?.textContent).toContain('Find 25–31 min vlog masters')
+
+    await act(async () => { root.render(view(false, [user, message({ id: 'a', role: 'assistant', content: rush })])) })
+    expect(container.textContent).toContain('joueurs en rond')
+    expect(container.textContent).not.toMatch(/\[Tool|python3|sha256|block_until/)
+    const toggle = container.querySelector('.progress-toggle')
+    expect(toggle?.textContent).toContain('Afficher 1 étape')
+    await act(async () => { toggle?.click() })
+    expect(container.textContent).toContain('Commande lancée : Find 25–31 min vlog masters')
     await act(async () => { root.unmount() })
   })
 })

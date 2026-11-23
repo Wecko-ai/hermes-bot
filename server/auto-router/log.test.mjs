@@ -69,4 +69,23 @@ describe('auto-router log', () => {
     expect(sanitizeLogEntry({ bot: 'demo', chosen: 'a/b', mode: 'auto-free' }).mode).toBe('auto-free')
     expect(sanitizeLogEntry({ bot: 'demo', chosen: 'a/b', mode: 'weird' }).mode).toBe('auto')
   })
+
+  it('keeps triage metadata and still drops prompt text', () => {
+    const entry = sanitizeLogEntry({
+      bot: 'orion',
+      sessionId: 's1',
+      category: 'research',
+      rulesCategory: 'other',
+      chosen: 'example/research-strong',
+      reason: 'local triage',
+      prompt: 'secret prompt',
+      triage: { source: 'local', latencyMs: 180, difficulty: 'hard', confidence: 0.3, rulesCategory: 'other' },
+    })
+    expect(entry).not.toHaveProperty('prompt')
+    expect(entry.triageSource).toBe('local')
+    expect(entry.triageLatencyMs).toBe(180)
+    expect(entry.rulesCategory).toBe('other')
+    expect(entry.difficulty).toBe('hard')
+    expect(entry.confidence).toBe(0.3)
+  })
 })

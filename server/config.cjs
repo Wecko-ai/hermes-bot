@@ -47,6 +47,8 @@ function videoRoots(value, env, home) {
     if (cleaned.length >= 32) break
   }
   if (cleaned.length) return cleaned
+  // Keep in step with defaultVideoRoots in server/video-stream.mjs. External volumes go in config `videoRoots`.
+  // A config `videoRoots` or HERMESBOT_VIDEO_ROOTS replaces this whole list.
   return [
     path.join(home, 'projects'),
     path.join(home, 'Movies'),

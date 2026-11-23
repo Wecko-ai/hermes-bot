@@ -151,12 +151,27 @@
   },
   "progress": {
     "toggle_one": "Show {{count}} progress step",
-    "toggle_other": "Show {{count}} progress steps"
+    "toggle_other": "Show {{count}} progress steps",
+    "ranShell": "Ran shell command: {{what}}",
+    "ranShellBare": "Ran shell command",
+    "readFile": "Read file {{name}}",
+    "readFileBare": "Read file",
+    "wroteFile": "Wrote {{name}}",
+    "wroteFileBare": "Wrote a file",
+    "searched": "Searched {{what}}",
+    "searchedBare": "Searched"
   },
   "media": {
     "externalLink": "External link",
     "openBeside": "Open beside",
     "previewUnavailable": "Preview unavailable",
+    "play": "Play {{name}}",
+    "notFound": "Not found",
+    "notAllowed": "Not allowed",
+    "locating": "Looking up the file…",
+    "copyPath": "Copy path",
+    "copiedPath": "Copied",
+    "open": "Open",
     "localFile": "Local file",
     "relativePath": "Relative path",
     "enlarge": "Enlarge {{name}}",

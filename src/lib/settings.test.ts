@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dictationLanguageCode, hiddenModelKey, parseSettings, selectableModels, withModelsVisible, withPinned } from './settings'
+import { dictationLanguageCode, hiddenModelKey, parseSettings, withAutoDefaultMigration, selectableModels, withModelsVisible, withPinned } from './settings'
 import type { ModelOption } from '../types'
 
 const option = (model: string, provider = 'anthropic'): ModelOption => ({ model, provider, providerName: provider })
@@ -12,7 +12,7 @@ describe('réglages', () => {
   })
 
   it('suit le système et garde Entrée par défaut', () => {
-    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, backgroundTask: true, toneCharter: false, progressInThread: true, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], freeMode: false, localModel: '', notifications: true, voiceFr: '', voiceEn: '', voiceRate: 1, voiceSteps: true, voiceHandsFree: true, compactionMode: 'auto', compactionGauge: 1, useAutoModel: false, useAutoFreeModel: false })
+    expect(parseSettings(null)).toEqual({ language: 'system', theme: 'system', textSize: 'normal', reduceMotion: false, showUsage: false, sendKey: 'enter', dictationLanguage: 'interface', caveman: false, backgroundTask: true, toneCharter: false, progressInThread: true, activitySort: false, showHidden: false, pinnedBots: [], hiddenModels: [], freeMode: false, localModel: '', notifications: true, voiceFr: '', voiceEn: '', voiceRate: 1, voiceSteps: true, voiceHandsFree: true, compactionMode: 'auto', compactionGauge: 1, useAutoModel: true, useAutoFreeModel: false })
     expect(parseSettings('{"voiceRate":7,"voiceEn":"com.apple.voice.premium.en-GB.Daniel"}')).toMatchObject({ voiceRate: 2, voiceEn: 'com.apple.voice.premium.en-GB.Daniel' })
     expect(parseSettings('{"voiceRate":"fast"}').voiceRate).toBe(1)
   })
@@ -85,5 +85,29 @@ describe('modèles proposés', () => {
     const hidden = withModelsVisible(['autre:x', 'anthropic:claude-opus-5-5'], [options[0], options[3]], false)
     expect(hidden).toEqual(['autre:x', 'anthropic:claude-opus-5-5', 'anthropic:claude-haiku-5-5'])
     expect(withModelsVisible(hidden, [options[0], options[3]], true)).toEqual(['autre:x'])
+  })
+})
+
+describe('Auto default migration', () => {
+  it('defaults Auto on when nothing is saved', () => {
+    expect(parseSettings(null).useAutoModel).toBe(true)
+  })
+
+  it('keeps an explicit off after the migration flag', () => {
+    const saved = JSON.stringify({ useAutoModel: false, autoDefaultApplied: true })
+    expect(parseSettings(saved).useAutoModel).toBe(false)
+    expect(withAutoDefaultMigration(parseSettings(saved), saved).useAutoModel).toBe(false)
+  })
+
+  it('turns Auto on for older full saves that wrote false by default', () => {
+    const saved = JSON.stringify({ useAutoModel: false, theme: 'dark' })
+    expect(parseSettings(saved).useAutoModel).toBe(false)
+    expect(withAutoDefaultMigration(parseSettings(saved), saved).useAutoModel).toBe(true)
+  })
+
+  it('leaves Auto gratuit alone', () => {
+    const saved = JSON.stringify({ useAutoFreeModel: true, useAutoModel: false })
+    expect(withAutoDefaultMigration(parseSettings(saved), saved).useAutoModel).toBe(false)
+    expect(withAutoDefaultMigration(parseSettings(saved), saved).useAutoFreeModel).toBe(true)
   })
 })

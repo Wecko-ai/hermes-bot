@@ -25,7 +25,7 @@ import { ApprovalsSetting } from './ApprovalsSetting'
 import { UsageGlobalSection } from './UsageGlobalSection'
 import { ViewEmpty } from './ViewEmpty'
 import { AutoRoutingSection } from './AutoRoutingSection'
-import { AUTO_FREE_MODEL_SENTINEL, AUTO_MODEL_SENTINEL } from '../lib/auto-router'
+import { AUTO_FREE_MODEL_SENTINEL, AUTO_MODEL_SENTINEL, isAutoModel } from '../lib/auto-router'
 import { useChatStore } from '../store/chat'
 
 import { ChannelsWizard } from './ChannelsWizard'
@@ -201,7 +201,9 @@ function ChatTab({ localModels, bots, demo, compactionContext, client, connected
           checked={settings.useAutoModel || useChatStore.getState().chatModel === AUTO_MODEL_SENTINEL}
           onChange={(useAutoModel) => {
             updateSettings(useAutoModel ? { useAutoModel, useAutoFreeModel: false } : { useAutoModel })
-            if (useAutoModel) useChatStore.getState().setChatModel(AUTO_MODEL_SENTINEL)
+            const store = useChatStore.getState()
+            if (useAutoModel) store.setChatModel(AUTO_MODEL_SENTINEL)
+            else if (isAutoModel(store.chatModel)) store.setChatModel(store.activeChat?.model || '')
           }}
         />
       )}
@@ -212,7 +214,9 @@ function ChatTab({ localModels, bots, demo, compactionContext, client, connected
           checked={settings.useAutoFreeModel || useChatStore.getState().chatModel === AUTO_FREE_MODEL_SENTINEL}
           onChange={(useAutoFreeModel) => {
             updateSettings(useAutoFreeModel ? { useAutoFreeModel, useAutoModel: false } : { useAutoFreeModel })
-            if (useAutoFreeModel) useChatStore.getState().setChatModel(AUTO_FREE_MODEL_SENTINEL)
+            const store = useChatStore.getState()
+            if (useAutoFreeModel) store.setChatModel(AUTO_FREE_MODEL_SENTINEL)
+            else if (store.chatModel === AUTO_FREE_MODEL_SENTINEL) store.setChatModel(store.activeChat?.model || '')
           }}
         />
       )}

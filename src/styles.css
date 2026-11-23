@@ -508,7 +508,7 @@ a { color: inherit; }
 .media-group.is-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
 .media-group.is-grid .media-thumb { aspect-ratio: 4 / 5; }
 .media-group.is-grid .media-image { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
-.media-group.is-grid .media-video-frame, .media-group.is-grid .media-audio-frame, .media-group.is-grid .media-card { grid-column: 1 / -1; }
+.media-group.is-grid .media-video-frame, .media-group.is-grid .media-video-card, .media-group.is-grid .media-audio-frame, .media-group.is-grid .media-card { grid-column: 1 / -1; }
 .media-item { display: block; position: relative; max-width: 100%; }
 .message-content p:not(.media-group) .media-item, .message-content p:not(.media-group) .media-card { margin: 6px 0; }
 .message-content p.media-group { margin: 6px 0 11px; }
@@ -517,7 +517,12 @@ a { color: inherit; }
 .media-thumb:hover { transform: translateY(-1px); box-shadow: inset 0 0 0 .5px var(--border-strong), var(--shadow); }
 .media-image { display: block; max-width: 100%; min-height: 72px; border-radius: inherit; background: var(--surface-soft); }
 .media-group.is-single .media-image, .message-content p .media-image { max-height: 420px; width: auto; }
-.media-video { display: block; max-width: 100%; max-height: 480px; border-radius: 12px; background: #000; box-shadow: inset 0 0 0 .5px var(--border); }
+.media-video { display: block; width: 100%; max-width: 100%; max-height: 480px; border-radius: 12px; background: #111; box-shadow: inset 0 0 0 .5px var(--border); object-fit: contain; }
+.media-video-card { display: block; position: relative; width: 100%; max-width: 100%; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: var(--surface-raised); box-shadow: inset 0 0 0 .5px var(--border); color: inherit; text-align: left; cursor: pointer; }
+.media-video-poster, .media-video-still { display: block; width: 100%; max-height: 360px; object-fit: contain; background: #111; pointer-events: none; }
+.media-video-fallback { display: flex; align-items: center; gap: 10px; min-height: 72px; padding: 12px 14px; }
+.media-video-play { position: absolute; left: 50%; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 999px; color: #fff; background: rgb(0 0 0 / 55%); transform: translate(-50%, -50%); }
+.media-video-duration { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; border-radius: 6px; background: rgb(0 0 0 / 62%); color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; }
 .media-audio-frame { display: flex; flex-direction: column; gap: 5px; }
 .media-audio-name { color: var(--text-secondary); font-size: 12px; }
 .media-audio { width: 100%; height: 36px; }
@@ -526,6 +531,9 @@ a { color: inherit; }
 .media-card-text { display: flex; flex-direction: column; min-width: 0; }
 .media-card-text strong { overflow: hidden; color: var(--text); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .media-card-text small { color: var(--text-tertiary); font-size: 12px; }
+.media-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.media-card-actions button { padding: 0; border: 0; background: none; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.media-card-finder { color: var(--text-tertiary); font-size: 12px; }
 .message-user .media-card { color: inherit; }
 /* Files cited by path, without MEDIA:: readable under the text so they can be checked without leaving the chat. */
 .cited-files { margin-top: 10px; padding-top: 9px; border-top: .5px solid var(--border); }
@@ -535,7 +543,7 @@ a { color: inherit; }
 .cited-files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
 .cited-files-grid .media-thumb { width: 100%; aspect-ratio: 4 / 5; }
 .cited-files-grid .media-image { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
-.cited-files-grid .media-video-frame, .cited-files-grid .media-audio-frame, .cited-files-grid .media-card { grid-column: 1 / -1; }
+.cited-files-grid .media-video-frame, .cited-files-grid .media-video-card, .cited-files-grid .media-audio-frame, .cited-files-grid .media-card { grid-column: 1 / -1; }
 
 .media-viewer { position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center; padding: 56px 76px; background: rgb(8 8 10 / 74%); backdrop-filter: blur(20px) saturate(140%); -webkit-backdrop-filter: blur(20px) saturate(140%); animation: viewer-in 180ms ease-out; }
 .media-viewer-figure { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 100%; max-height: 100%; margin: 0; }

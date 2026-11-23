@@ -16,7 +16,10 @@ export const VIDEO_CONTENT_TYPES = {
 
 const RANGE = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i
 
-/** Folders a bot actually writes renders and media into. Override with config `videoRoots` or `HERMESBOT_VIDEO_ROOTS`. */
+/**
+ * Folders a bot actually writes renders and media into. External volumes (render disks) are
+ * machine-specific: add them with config `videoRoots` or `HERMESBOT_VIDEO_ROOTS`, which replace this list.
+ */
 export function defaultVideoRoots(home) {
   return [
     path.join(home, 'projects'),
@@ -97,7 +100,7 @@ function rejectPath(raw) {
  * The file to stream, or a refusal. `status === 404` means it is not on this machine (relay it).
  * An existing file outside the allowlist, or a symlink whose target leaves the allowlist, is 403.
  */
-export async function resolveVideoFile(rawPath, roots, { home = os.homedir(), fsStat = stat, fsRealpath = realpath } = {}) {
+export async function resolveVideoFile(rawPath, roots, { home = os.homedir(), fsStat = stat, fsRealpath = realpath, types = VIDEO_CONTENT_TYPES } = {}) {
   const invalid = rejectPath(rawPath)
   if (invalid) return { ok: false, status: 400, error: invalid }
   const expanded = path.resolve(expandHome(rawPath.trim(), home))
@@ -134,9 +137,9 @@ export async function resolveVideoFile(rawPath, roots, { home = os.homedir(), fs
     return { ok: false, status: 403, error: 'media_forbidden' }
   }
   if (!realInfo.isFile()) return { ok: false, status: 403, error: 'media_forbidden' }
-  const contentType = VIDEO_CONTENT_TYPES[path.extname(real).slice(1).toLowerCase()]
+  const contentType = types[path.extname(real).slice(1).toLowerCase()]
   if (!contentType) return { ok: false, status: 415, error: 'unsupported_media' }
-  return { ok: true, file: real, size: realInfo.size, contentType }
+  return { ok: true, file: real, size: realInfo.size, mtimeMs: realInfo.mtimeMs, contentType }
 }
 
 /** What `/api/video` does once the path has been resolved. A missing file is relayed; anything refused is not. */

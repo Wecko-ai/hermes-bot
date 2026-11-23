@@ -3,7 +3,7 @@ import fixture from '../../tests/fixtures/fallback-turn.json'
 import { completeUsage, parseUsage } from './hermes'
 import { formatUsage } from './model'
 import {
-  answeredLabel, answeredStorageIds, composerReadout, reduceFallbackTurn, rememberAnswered, withRememberedAnswers,
+  answeredLabel, answeredStorageIds, composerChipText, composerReadout, reduceFallbackTurn, rememberAnswered, withRememberedAnswers,
   type FallbackTurnState, type KeyValueStore,
 } from './turn-model'
 import type { ChatMessage, SessionUsage } from '../types'
@@ -45,6 +45,16 @@ describe('fallback turn', () => {
     expect(readout[3]).toContain('34')
     expect(readout[3]).toContain('76')
     expect(state.storedIds).toEqual(expect.arrayContaining(['11944', '11945']))
+    expect(composerChipText({
+      answered: state.answered,
+      chatModel: selected,
+      fallbackMark: '(secours)',
+    })).toBe('Composer 2.5 · Cursor (secours)')
+    expect(composerChipText({
+      answered: null,
+      chatModel: 'cursor/gpt-5.6-sol',
+      fallbackMark: '(secours)',
+    })).toBe('GPT 5.6 Sol · Cursor')
   })
 
   it('keeps the fallback on the reloaded rows', () => {

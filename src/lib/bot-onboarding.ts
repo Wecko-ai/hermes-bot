@@ -4,6 +4,14 @@ import { submitPrompt, type ActiveChat, type HermesClient } from './hermes'
 import { BOT_KICKOFF_TEXT, kickoffApiText } from './bot-kickoff'
 import { demoIntroduction, type DemoLanguage } from './demo'
 
+/** Sends the kickoff turn. The app passes the same routed submit a composer send uses. */
+export type KickoffTurnSubmit = (input: {
+  chat: ActiveChat
+  text: string
+  apiText: string
+  message: ChatMessage
+}) => Promise<ActiveChat>
+
 /** A bot just created here, until its chat opens. `kickoff`: it then introduces itself, once. */
 export interface FreshBot {
   slug: string
@@ -20,7 +28,8 @@ export const chatHasStarted = (chat: ActiveChat, history: ChatMessage[]) =>
 /**
  * The first turn of a bot created here, as soon as its chat opens: it introduces itself and asks for its role.
  * The kickoff sentence stays out of the thread (Activity only) and the model reads the instruction in `api_text`;
- * no work mode and no caveman note. Resolves false when nothing was sent; `onFailed` gets a refused send.
+ * no work mode and no caveman note. `submit`, when given, sends that turn (Auto routing included).
+ * Without it, the prompt goes straight to Hermes. Resolves false when nothing was sent; `onFailed` gets a refused send.
  */
 export async function kickOffNewBot(
   client: { request: (method: string, params?: Record<string, unknown>) => Promise<any> },
@@ -28,6 +37,7 @@ export async function kickOffNewBot(
   fresh: FreshBot,
   language: DemoLanguage,
   onFailed: (message: ChatMessage, error: unknown) => void,
+  submit?: KickoffTurnSubmit,
 ): Promise<boolean> {
   const { chat } = opened
   if (!fresh.kickoff || chatHasStarted(chat, opened.messages)) return false
@@ -47,9 +57,16 @@ export async function kickOffNewBot(
   try {
     // As Hermes Desktop: the Bot Chat holds its title before its first turn, so no later open makes a second one.
     await client.request('session.title', { profile: chat.profile, session_id: chat.sessionId, title: 'Bot Chat' }).catch(() => undefined)
-    // `submitPrompt` only needs the client's `request`.
-    await submitPrompt(client as HermesClient, chat, BOT_KICKOFF_TEXT, [], { apiText: kickoffApiText({ title: fresh.title, slug: fresh.slug, language }) })
-    if (shown()) chatStore.setActiveChat({ ...chat, running: true })
+    const apiText = kickoffApiText({ title: fresh.title, slug: fresh.slug, language })
+    // `submit` is the composer's routed send. Without it, `submitPrompt` only needs the client's `request`.
+    const active = submit
+      ? await submit({ chat, text: BOT_KICKOFF_TEXT, apiText, message })
+      : await submitPrompt(client as HermesClient, chat, BOT_KICKOFF_TEXT, [], { apiText }).then(() => chat)
+    if (shown()) {
+      const open = useChatStore.getState().activeChat
+      chatStore.setActiveChat(open?.sessionId === active.sessionId ? { ...open, ...active, running: true } : { ...active, running: true })
+    }
+    chatStore.updateCachedChat(chat.profile, { ...active, running: true })
     return true
   } catch (error) {
     if (shown()) {

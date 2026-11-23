@@ -1,0 +1,11 @@
+Piste `1112.mov` (~28 min) et je vérifie si l’intro a les joueurs en rond.
+[Tool call] Shell
+  command: python3 <<'PY'
+import subprocess
+print('duration-scan')
+PY
+cat "/tmp/example/sha256.txt"
+  description: Find 25–31 min vlog masters
+  block_until_ms: 120000
+
+[Tool result] Shell

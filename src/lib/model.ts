@@ -25,5 +25,7 @@ export function formatUsage(usage: SessionUsage | null) {
   const context = usage?.contextMax
     ? i18n.t('models.contextPercent', { percent: Math.round(usage.contextPercent), used: compactNumber(usage.contextUsed), max: compactNumber(usage.contextMax) })
     : i18n.t('models.contextNone')
-  return `${context} · ${usage?.averageTps ? Math.round(usage.averageTps) : '—'} tok/s`
+  const tps = usage?.averageTps ?? 0
+  if (!(tps > 0)) return context
+  return `${context} · ${Math.round(tps)} tok/s`
 }

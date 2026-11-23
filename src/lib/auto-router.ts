@@ -14,11 +14,28 @@ export function isAutoModel(model: string | undefined) {
   return model === AUTO_MODEL_SENTINEL || model === AUTO_FREE_MODEL_SENTINEL
 }
 
-/** Picker label when reopening a chat: Auto sticks across routed gateway models. */
-export function pickerModelForSession(pickerModel: string | undefined, sessionModel: string | undefined) {
+/** The picker value when Auto is the default and this chat has no explicit model. */
+export function defaultAutoPicker(
+  settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean } = getSettings(),
+  enabled = autoRouterEnabled(),
+) {
+  if (!enabled) return ''
+  if (settings.useAutoFreeModel) return AUTO_FREE_MODEL_SENTINEL
+  if (settings.useAutoModel) return AUTO_MODEL_SENTINEL
+  return ''
+}
+
+/** Picker label when reopening a chat: Auto sticks across routed gateway models.
+ *  With no remembered picker and Auto as the default, the session's gateway model is not shown. */
+export function pickerModelForSession(
+  pickerModel: string | undefined,
+  sessionModel: string | undefined,
+  settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean } = getSettings(),
+  enabled = autoRouterEnabled(),
+) {
   if (isAutoModel(pickerModel)) return pickerModel
   if (pickerModel) return pickerModel
-  return sessionModel || ''
+  return defaultAutoPicker(settings, enabled) || sessionModel || ''
 }
 
 /** After auto routing switches the gateway session, keep the Auto picker's sentinel. */
@@ -26,10 +43,11 @@ export function pickerModelAfterRoute(currentPicker: string, routedModel: string
   return isAutoModel(currentPicker) ? currentPicker : (routedModel || currentPicker)
 }
 
-/** The Auto mode of a send: the picker's choice first, then the Settings switches. */
+/** The Auto mode of a send: the picker's choice first (an explicit model wins), then the Settings default. */
 export function autoModeFor(model: string | undefined, settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean }): AutoMode | null {
   if (model === AUTO_FREE_MODEL_SENTINEL) return 'auto-free'
   if (model === AUTO_MODEL_SENTINEL) return 'auto'
+  if (model) return null
   if (settings.useAutoFreeModel) return 'auto-free'
   if (settings.useAutoModel) return 'auto'
   return null
@@ -58,6 +76,18 @@ export interface AutoRouteDecision {
   /** No model holds the conversation with room to work: compact before the turn. */
   needsCompaction?: boolean
   excludedForContext?: string[]
+  triage?: AutoTriageMeta
+}
+
+export interface AutoTriageMeta {
+  source: 'rules' | 'local' | 'local-shadow' | 'local-timeout' | 'local-error'
+  category: string
+  rulesCategory?: string | null
+  localCategory?: string | null
+  confidence?: number | null
+  difficulty?: 'easy' | 'medium' | 'hard' | null
+  latencyMs?: number | null
+  skipReason?: string | null
 }
 
 export interface AutoRouteLogEntry {
@@ -74,6 +104,12 @@ export interface AutoRouteLogEntry {
   costUsd?: number | null
   latencyMs?: number | null
   outcome: 'ok' | 'error' | 'cancelled'
+  triage?: AutoTriageMeta
+  triageSource?: AutoTriageMeta['source']
+  triageLatencyMs?: number | null
+  rulesCategory?: string | null
+  difficulty?: AutoTriageMeta['difficulty']
+  confidence?: number | null
   /** Provider that actually failed. Not written to the routing log. */
   quotaErrors?: QuotaErrorHint[]
 }
@@ -99,6 +135,8 @@ export interface AutoRouteBadge {
   chosen: string
   label?: string
   reason: string
+  /** Auto could not choose; the turn stayed on the session's current model. */
+  fellBack?: boolean
 }
 
 export const AUTO_PICKER_OPTION: ModelOption = {

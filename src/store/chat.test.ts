@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
 import { AUTO_FREE_MODEL_SENTINEL, AUTO_MODEL_SENTINEL } from '../lib/auto-router'
+import { clearPickerMemory, writePickerForSession } from '../lib/picker-memory'
 import { CHAT_CACHE_LIMIT, freshNotes, latestMessageTime, markMessageFailed, resetChatStore, resolveSyncedMessages, trimCachedMessages, useChatStore, type ChatCacheEntry } from './chat'
 
 const message = (id: string, createdAt: string | null = null, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id, role: 'assistant', content: id, createdAt, ...extra })
@@ -14,7 +15,10 @@ const T1 = '2026-11-10T10:00:00.000Z'
 const T2 = '2026-11-10T10:05:00.000Z'
 
 describe('fusion du cache de chat', () => {
-  beforeEach(resetChatStore)
+  beforeEach(() => {
+    resetChatStore()
+    clearPickerMemory()
+  })
 
   it('lit la date du message le plus récent, 0 sans date', () => {
     expect(latestMessageTime([])).toBe(0)
@@ -212,6 +216,14 @@ describe('store de conversation', () => {
     s.setCached('a', { ...entry('a', [message('m1')], { model: 'kimi-for-coding' }), pickerModel: AUTO_FREE_MODEL_SENTINEL })
     s.enterProfile('a')
     expect(useChatStore.getState().chatModel).toBe(AUTO_FREE_MODEL_SENTINEL)
+  })
+
+  it('applySyncedChat restaure Auto depuis la mémoire du sélecteur après une coupure', () => {
+    writePickerForSession('a-s', AUTO_MODEL_SENTINEL)
+    const s = useChatStore.getState()
+    s.applySyncedChat('a', { chat: chat('a', { model: 'kimi-for-coding' }), messages: [message('m')], routines: [] }, { preserveLive: false, resumed: true })
+    expect(useChatStore.getState().chatModel).toBe(AUTO_MODEL_SENTINEL)
+    expect(s.getCached('a')?.pickerModel).toBe(AUTO_MODEL_SENTINEL)
   })
 
   it('applySyncedChat après une coupure vide le streaming d’un tour fini', () => {

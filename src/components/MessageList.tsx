@@ -21,13 +21,14 @@ import { VaultFormBlock } from './SecureVaultFormCard'
 import { VAULT_FORM_FENCE } from '../lib/vault-form'
 import { findQuestions, parseAnswersPrompt } from '../lib/questions'
 import { findTweets, type TweetMatch } from '../lib/tweets'
-import { isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
+import { citedPathsByMessage, isServablePath, mediaIndex, mediaRef, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaRef, type MediaSink } from '../lib/media'
 import { normalizeHref } from '../lib/links'
 import { completedMessageStamp, findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
 import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
 import { approvedDraftIds, DRAFT_APPROVED_FENCE, DRAFT_FENCE, withoutDraftInstruction } from '../lib/draft'
 import { threadItems } from '../lib/progress'
+import { parseToolTranscript, transcriptStepLabel } from '../lib/tool-transcript'
 import { getSettings } from '../lib/settings'
 import { PLACES_FENCE } from '../lib/places'
 import { replyAnnouncement } from '../lib/local-chat-turn'
@@ -173,6 +174,8 @@ interface MarkdownProps {
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
   onVaultFormDone?: (message: string) => void
+  /** Absolute paths from the same turn, tool results included. */
+  citedPaths?: readonly string[]
 }
 
 interface CitedFilesProps {
@@ -183,26 +186,27 @@ interface CitedFilesProps {
   sent?: boolean
   onOpenImages: OpenImages
   onOpenDocument?: (media: MediaRef) => void
+  hints?: readonly string[]
 }
 
 /** What the bot produced, readable without leaving the chat: thumbnails, players, PDFs beside. */
-function CitedFiles({ files, profile, version, sent = false, onOpenImages, onOpenDocument }: CitedFilesProps) {
+function CitedFiles({ files, profile, version, sent = false, hints = [], onOpenImages, onOpenDocument }: CitedFilesProps) {
   const { t } = useTranslation()
   const openImage = (item: MediaRef) => {
-    const images = files.filter((entry) => entry === item || (entry.kind === 'image' && !mediaFailed(profile, entry)))
-    onOpenImages(images, Math.max(0, images.indexOf(item)), version)
+    const images = files.filter((entry) => entry.kind === 'image' && !mediaFailed(profile, entry)).map((entry) => entry.name === item.name ? item : entry)
+    onOpenImages(images, Math.max(0, images.findIndex((entry) => entry.path === item.path)), version)
   }
   return (
     <div className={sent ? 'cited-files is-sent' : 'cited-files'}>
       {!sent && <div className="cited-files-label">{t('messages.citedFile', { count: files.length })}</div>}
       <div className="cited-files-grid">
-        {files.map((file) => <MediaEmbed key={file.path} media={file} profile={profile} version={version} onOpenImage={openImage} onOpenDocument={onOpenDocument} />)}
+        {files.map((file) => <MediaEmbed key={file.path} media={file} profile={profile} version={version} hints={hints} onOpenImage={openImage} onOpenDocument={onOpenDocument} />)}
       </div>
     </div>
   )
 }
 
-export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, onOpenImages, onOpenDocument, onVaultFormDone }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, citedPaths = [], onOpenImages, onOpenDocument, onVaultFormDone }: MarkdownProps) {
   const cards = botCards ?? localMedia
   const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
   const tweets = useMemo(() => cards && !streaming ? findTweets(source) : [], [source, streaming, cards])
@@ -230,13 +234,13 @@ export const Markdown = memo(function Markdown({ content, profile, version, stre
     onVaultFormDone,
   }), [sink, profile, version, streaming, cards, role, onOpenImages, onOpenDocument, onVaultFormDone])
   // While streaming, a path can be cut off: the files show once the message is complete.
-  const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source) : []), [citedFiles, streaming, source])
+  const files = useMemo(() => (citedFiles && !streaming ? referencedFiles(source, { paths: citedPaths }) : []), [citedFiles, streaming, source, citedPaths])
   return (
     <MediaContext.Provider value={context}>
       <TweetContext.Provider value={tweets}>
         <ReactMarkdown remarkPlugins={plugins} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown>
       </TweetContext.Provider>
-      {files.length > 0 && <CitedFiles files={files} profile={profile} version={version} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
+      {files.length > 0 && <CitedFiles files={files} profile={profile} version={version} hints={citedPaths} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />}
     </MediaContext.Provider>
   )
 })
@@ -253,6 +257,7 @@ interface MessageProps {
   autoRoute?: ChatMessage['autoRoute']
   /** Hermes left the selected model: the model that actually answered. */
   answeredBy?: AnsweredBy
+  citedPaths?: readonly string[]
 }
 
 // A message the user just sent fades in; a loaded or cached thread shows as is.
@@ -281,7 +286,7 @@ function mentionedSlugOf(name: string, index?: Map<string, string | null>) {
 const AGENT_VERB_KEYS: Record<AgentMessage['kind'], string> = { message: 'agentNotes.message', reply: 'agentNotes.reply', 'no-reply': 'agentNotes.noReply' }
 
 /** “Orion messaged Iris”: the verb opens the message, each name opens its bot. */
-export function AgentNote({ message, profile, onOpenImages, onOpenDocument, initiallyOpen = false }: MessageProps & { initiallyOpen?: boolean }) {
+export function AgentNote({ message, profile, onOpenImages, onOpenDocument, initiallyOpen = false, citedPaths = [] }: MessageProps & { initiallyOpen?: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(initiallyOpen)
   const agent = message.agent as AgentMessage
@@ -298,7 +303,7 @@ export function AgentNote({ message, profile, onOpenImages, onOpenDocument, init
       {open && (
         <div className="agent-note-body message-content">
           {agent.text
-            ? <Markdown content={agent.text} profile={profile} version={message.id} citedFiles botCards={false} role="assistant" onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
+            ? <Markdown content={agent.text} profile={profile} version={message.id} citedFiles citedPaths={citedPaths} botCards={false} role="assistant" onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
             : <p className="agent-note-empty">{t('agentNotes.empty')}</p>}
         </div>
       )}
@@ -360,14 +365,15 @@ function AnsweredLabel({ answered, className }: { answered: AnsweredBy; classNam
 function AutoRouteLabel({ route, className }: { route: AutoRoute; className: string }) {
   const { t } = useTranslation()
   const mode = route.mode === 'auto-free' ? t('autoRouter.modeFree') : t('autoRouter.mode')
+  const label = t('autoRouter.label', { mode, model: autoRouteModel(route) })
   return (
     <span className={className} title={autoRouteTitle(route)}>
-      {t('autoRouter.label', { mode, model: autoRouteModel(route) })}
+      {route.fellBack ? `${label} ${t('models.fallbackMark')}` : label}
     </span>
   )
 }
 
-const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, onVaultFormDone, askable = false, autoRoute, answeredBy }: MessageProps) {
+const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, onVaultFormDone, askable = false, autoRoute, answeredBy, citedPaths = [] }: MessageProps) {
   const { t, i18n } = useTranslation()
   const replyListen = useAppConfig().ui.replyListenButton
   const [copied, setCopied] = useState(false)
@@ -388,7 +394,7 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
       language: language === 'fr' ? 'fr-FR' : 'en-US',
     })
   }
-  if (message.agent) return <AgentNote message={message} profile={profile} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
+  if (message.agent) return <AgentNote message={message} profile={profile} citedPaths={citedPaths} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} />
   if (message.role === 'system' || message.role === 'tool') {
     return <div className="system-message">{message.content}</div>
   }
@@ -412,13 +418,13 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
             </dl>
           : questions
           ? <>
-              {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
+              {questions.before && <Markdown content={questions.before} profile={profile} version={message.id} citedFiles citedPaths={citedPaths} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
               <QuestionsCard id={message.id} block={questions} />
-              {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
+              {questions.after && <Markdown content={questions.after} profile={profile} version={message.id} citedFiles citedPaths={citedPaths} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
             </>
           : message.streaming
           ? <div className="stream-plain" style={{ whiteSpace: 'pre-wrap' }} aria-hidden="true">{message.content}</div>
-          : <Markdown content={shown} profile={profile} version={message.id} role={message.role} citedFiles={message.role === 'assistant'} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
+          : <Markdown content={shown} profile={profile} version={message.id} role={message.role} citedFiles={message.role === 'assistant'} citedPaths={citedPaths} onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} onVaultFormDone={onVaultFormDone} />}
         {message.images?.length ? <CitedFiles files={message.images.map(mediaRef)} profile={profile} version={message.id} sent onOpenImages={onOpenImages} onOpenDocument={onOpenDocument} /> : null}
         {message.streaming && <span className="stream-caret" />}
       </div>
@@ -492,11 +498,31 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const [viewer, setViewer] = useState<ViewerState | null>(null)
   // One message per turn: the bot's steps (text written before a tool call) fold into the working line,
   // and its reply is not streamed, it appears whole when the turn ends.
-  const thread = useMemo(() => threadItems(messages, running, bot.slug, progressInThread), [messages, running, bot.slug, progressInThread])
+  const streamed = useMemo(() => parseToolTranscript(streaming), [streaming])
+  const threadMessages = useMemo(() => {
+    if (!progressInThread || streamed.steps.length === 0) return messages
+    const liveSteps: ChatMessage[] = streamed.steps.map((step, index) => ({
+      id: `stream-tool-${index}`,
+      role: 'assistant',
+      content: transcriptStepLabel(step),
+      createdAt: null,
+      progress: true,
+    }))
+    return [...messages, ...liveSteps]
+  }, [messages, streamed, progressInThread])
+  const thread = useMemo(() => threadItems(threadMessages, running, bot.slug, progressInThread), [threadMessages, running, bot.slug, progressInThread])
+  const citedById = useMemo(() => {
+    const paths = citedPathsByMessage(messages)
+    const map = new Map<string, readonly string[]>()
+    messages.forEach((message, index) => map.set(message.id, paths[index] ?? []))
+    return map
+  }, [messages])
   // A `NOREPLY` being written never shows: the bot at work is shown instead.
-  const liveReply = streamReply && Boolean(streaming) && !mayBecomeSilent(streaming)
+  // Tool markers in the buffer are steps, never part of the bubble.
+  const liveText = streamed.visible
+  const liveReply = streamReply && Boolean(liveText) && !mayBecomeSilent(liveText)
   const items = liveReply
-    ? [...thread, { kind: 'message' as const, message: { id: streamKey || 'live-stream', role: 'assistant', content: streaming, createdAt: null, streaming: true } satisfies ChatMessage }]
+    ? [...thread, { kind: 'message' as const, message: { id: streamKey || 'live-stream', role: 'assistant', content: liveText, createdAt: null, streaming: true } satisfies ChatMessage }]
     : thread
   const working = (running || Boolean(streaming)) && !liveReply
   const autoRoutes = useMemo(() => autoRoutesByMessage(messages), [messages])
@@ -693,7 +719,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           const currentDay = rowStamp(row)
           const previousDay = index > 0 ? rowStamp(items[index - 1]) : ''
           const renderMessage = (message: ChatMessage, askable: boolean) => (
-            <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} onVaultFormDone={onVaultFormDone} askable={askable} autoRoute={answeredFor(message) ? undefined : routeFor(message)} answeredBy={answeredFor(message)} />
+            <Message message={message} profile={profile} citedPaths={citedById.get(message.id) ?? []} onOpenImages={openImages} onOpenDocument={openDocument} onVaultFormDone={onVaultFormDone} askable={askable} autoRoute={answeredFor(message) ? undefined : routeFor(message)} answeredBy={answeredFor(message)} />
           )
           if (row.kind === 'turn') {
             const lastAssistant = !working && index === items.length - 1

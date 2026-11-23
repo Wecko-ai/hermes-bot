@@ -69,14 +69,30 @@ describe('fichiers cités sans MEDIA:', () => {
   })
 
   it('ne devine pas un dossier ambigu, et laisse MEDIA:, le code et les notes de côté', () => {
-    expect(referencedFiles('Deux dossiers `/a/un/` et `/a/deux/`.\n\nLa cover : `cover.jpg`.')).toEqual([])
+    expect(referencedFiles('Deux dossiers `/a/un/` et `/a/deux/`.\n\nLa cover : `cover.jpg`.').map((file) => file.path)).toEqual(['cover.jpg'])
     expect(referencedFiles('Un seul dossier `/a/un/`.\n\nLa cover : `cover.jpg`.').map((file) => file.path)).toEqual(['/a/un/cover.jpg'])
-    expect(referencedFiles('MEDIA:/a/b.png\n\nMis à jour `/a/SOUL.md` et `/a/page.html`, `/a/../x.png`, `relatif/x.png`.')).toEqual([])
+    expect(referencedFiles('MEDIA:/a/b.png\n\nMis à jour `/a/SOUL.md` et `/a/page.html`, `/a/../x.png`, `relatif/x.png`.').map((file) => file.path)).toEqual(['relatif/x.png'])
     expect(referencedFiles('Rapport : `/a/b c/rapport final.PDF`').map((file) => [file.path, file.kind])).toEqual([['/a/b c/rapport final.PDF', 'document']])
     expect(referencedFiles('Rien ici : https://exemple.com/a.png et ~/b.png').map((file) => file.path)).toEqual(['~/b.png'])
     expect(referencedFiles('MEDIA:/a/Mon Projet/dossier /thumbs/G1.jpg\n\n`MEDIA:/a/b.png`')).toEqual([])
     const sameFolder = '`/a/masters/film_v3b.mp4`\n\n- **À côté :** dans le même dossier, la v2 (`film_v2.mp4` et `…_v1.mp4`).\n\nLe reste est dans `/a/livrables/`.'
     expect(referencedFiles(sameFolder).map((file) => file.path)).toEqual(['/a/masters/film_v3b.mp4', '/a/masters/film_v2.mp4'])
+  })
+
+  it('prend le chemin absolu du même tour plutôt que le dossier cité à côté du nom', () => {
+    const text = 'Piste `1112.mov` (~28 min).\n\nls "/Volumes/Renders/scratch/projet/livrables/"'
+    const paths = ['/Volumes/Renders/video/capcut/1112.mov']
+    expect(referencedFiles(text).map((file) => file.path)).toEqual(['/Volumes/Renders/scratch/projet/livrables/1112.mov'])
+    expect(referencedFiles(text, { paths }).map((file) => file.path)).toEqual(['/Volumes/Renders/video/capcut/1112.mov'])
+  })
+
+  it('laisse un nom seul pour une recherche, et un dossier ambigu sans carte', () => {
+    expect(referencedFiles('Le fichier `1112.mov` est prêt.').map((file) => [file.path, file.kind])).toEqual([['1112.mov', 'video']])
+    expect(referencedFiles('Rush `video/capcut/1112.mov`.').map((file) => file.path)).toEqual(['video/capcut/1112.mov'])
+    expect(referencedFiles('`../1112.mov`').map((file) => file.path)).toEqual([])
+    expect(mediaRef('/a/photo.HEIC').kind).toBe('image')
+    expect(referencedFiles('Dans `/work/`.', { workspaces: ['/work'] }).map((file) => file.path)).toEqual([])
+    expect(referencedFiles('`clip.mp4`', { workspaces: ['/work'] }).map((file) => file.path)).toEqual(['/work/clip.mp4'])
   })
 
   it('les ajoute aux médias de la conversation, messages entre bots compris', () => {

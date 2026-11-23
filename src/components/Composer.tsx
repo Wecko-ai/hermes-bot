@@ -33,8 +33,11 @@ interface ComposerProps {
   running: boolean
   disabled: boolean
   focusSignal: number
-  /** `false`: nothing was sent, the draft and its files come back into the composer. `delivery`: only during a turn. */
-  onSend: (text: string, attachments: PendingAttachment[], mode: ChatMode, delivery?: DeliveryMode) => Promise<boolean> | boolean | void
+  /**
+   * `false`: nothing was sent, the draft and its files come back into the composer. `delivery`: only during a turn.
+   * `submissionId`: one id for this send, reused if that same text is retried.
+   */
+  onSend: (text: string, attachments: PendingAttachment[], mode: ChatMode, delivery?: DeliveryMode, submissionId?: string) => Promise<boolean> | boolean | void
   onStop: () => void
   onNotice: (text: string) => void
   modelLabel: string
@@ -110,6 +113,12 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
   // The field as it is now: the dictation reads it when it starts and writes the transcript into it.
   const textRef = useRef(text)
   textRef.current = text
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
+  // One send at a time per bot, and a second tap in the next few hundred milliseconds is the same tap.
+  const flightsRef = useRef(new Map<string, { flying: boolean; until: number }>())
+  // The id of a send that has not landed yet, so a retry of that exact text uses the same one.
+  const attemptsRef = useRef(new Map<string, { text: string; id: string }>())
   const noticeRef = useRef(onNotice)
   noticeRef.current = onNotice
   const sendingDictatedRef = useRef(false)
@@ -281,16 +290,37 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
       setNudge((value) => value + 1)
       return
     }
-    const draft: Draft = { text, attachments }
+    const now = Date.now()
+    const draft: Draft = { text, attachments: attachmentsRef.current }
     const target = bot.slug
     const sentDelivery = busy ? delivery : undefined
+    const payload = text.trim() || defaultPrompt(draft.attachments)
+    const flight = flightsRef.current.get(target)
+    const previous = attemptsRef.current.get(target)
+    // The lock covers the submit itself. The 400 ms only repeats of this same text, so a new
+    // message (a queue or a priority) can still go out in that window.
+    if (flight?.flying) return
+    if (flight && now < flight.until && previous?.text === payload) return
+    flightsRef.current.set(target, { flying: true, until: now + 400 })
+    const submissionId = previous?.text === payload ? previous.id : crypto.randomUUID()
+    attemptsRef.current.set(target, { text: payload, id: submissionId })
+    // Empty the field before any await, so the arrow is gone before the network starts.
+    textRef.current = ''
+    attachmentsRef.current = []
     setText('')
     setAttachments([])
     setMention(null)
     setDelivery('wait')
     requestAnimationFrame(() => textareaRef.current?.focus())
-    const sent = await onSend(text.trim() || defaultPrompt(attachments), attachments, mode, sentDelivery)
+    let sent: boolean | void = false
+    try {
+      sent = await onSend(payload, draft.attachments, mode, sentDelivery, submissionId)
+    } finally {
+      const current = flightsRef.current.get(target)
+      if (current) current.flying = false
+    }
     if (sent !== false) {
+      attemptsRef.current.delete(target)
       releasePreviews(draft.attachments)
       return
     }
@@ -299,8 +329,17 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
       saveDraft(target, draft.text)
       return
     }
-    setText((current) => current || draft.text)
-    setAttachments((current) => [...draft.attachments, ...current])
+    // Keep whatever the user typed while this send was in flight.
+    setText((current) => {
+      if (current.trim()) return current
+      textRef.current = draft.text
+      return draft.text
+    })
+    setAttachments((current) => {
+      const next = [...draft.attachments, ...current]
+      attachmentsRef.current = next
+      return next
+    })
   }
 
   const refreshMention = (element: HTMLTextAreaElement) => {
@@ -436,7 +475,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
         )}
         {dictation && dictating && <DictationPill controller={dictation} onStop={stopDictation} />}
         {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Pause size={14} fill="currentColor" /></button>}
-        {(!running || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing' || (!text.trim() && attachments.length === 0)} onClick={() => void submit()}><ArrowUp size={18} /></button>}
+        {((!running && (text.trim() || attachments.length > 0)) || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing'} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
       <div className="composer-hint">
         {!minimal && (

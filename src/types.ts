@@ -128,7 +128,7 @@ export interface ChatMessage {
   /** Short milestone the bot wrote before the final reply (`message.interim`). */
   progress?: boolean
   /** Auto routing badge for this user turn (no prompt text). */
-  autoRoute?: { mode?: 'auto' | 'auto-free'; category: string; chosen: string; label?: string; reason: string }
+  autoRoute?: { mode?: 'auto' | 'auto-free'; category: string; chosen: string; label?: string; reason: string; fellBack?: boolean }
   /** Model that actually produced this turn, when Hermes left the selected one. */
   answeredBy?: AnsweredBy
 }

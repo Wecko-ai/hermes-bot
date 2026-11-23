@@ -10,6 +10,7 @@ import { isKickoffMessage, isKickoffPreview } from './bot-kickoff'
 import { UNASSIGNED_SECTION_ID, UNASSIGNED_SECTION_NAME } from './roster-groups'
 import { i18n } from '../i18n'
 import { readModelMemory, withRememberedModels, writeModelMemory } from './model-memory'
+import { expandToolMessage } from './tool-transcript'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -193,15 +194,18 @@ function mapMessages(value: unknown, index: number, profile: string): ChatMessag
   const fromGateway = role === 'user' && isGatewayMessage(content, asString(message.display_kind))
   // The first turn of a bot created here: Activity only, never a bubble of the user.
   const kickoff = role === 'user' && isKickoffMessage(content)
-  // Raw history: the assistant’s text, then its `message_agent` calls.
-  return [{
+  const technical = silent || fromGateway || kickoff || role === 'system' || role === 'tool'
+  const row: ChatMessage = {
     id,
     role,
     content,
     createdAt,
-    technical: silent || fromGateway || kickoff || role === 'system' || role === 'tool',
+    technical,
     ...(sent.images.length ? { images: sent.images } : {}),
-  }, ...agents]
+  }
+  // A reloaded transcript can carry tool calls as plain text inside the assistant row.
+  // Raw history: the assistant’s text, then its `message_agent` calls.
+  return [...(role === 'assistant' && !technical ? expandToolMessage(row) : [row]), ...agents]
 }
 
 /** Same window as `workerActiveAt` in Hermes Desktop’s Bot Mode. */
@@ -645,12 +649,17 @@ export async function openChat(client: HermesClient, profile: string, sessionIdH
   }
 }
 
-/** `apiText`: what the model reads for this turn only; the history keeps `text`. */
-export async function submitPrompt(client: HermesClient, chat: ActiveChat, text: string, attachments: { path: string; mime: string }[] = [], options: { queued?: boolean; apiText?: string } = {}) {
+/**
+ * `apiText`: what the model reads for this turn only; the history keeps `text`.
+ * `submissionId`: the gateway's idempotency key (`submission_id`). The same session and the same id
+ * replay the admission that is already in; they do not start a second turn. A retry of one send
+ * passes the id minted for that send. Omitted: a fresh id, for a send that is not a retry.
+ */
+export async function submitPrompt(client: HermesClient, chat: ActiveChat, text: string, attachments: { path: string; mime: string }[] = [], options: { queued?: boolean; apiText?: string; submissionId?: string } = {}) {
   return client.request('prompt.submit', {
     profile: chat.profile,
     session_id: chat.sessionId,
-    submission_id: crypto.randomUUID(),
+    submission_id: options.submissionId || crypto.randomUUID(),
     text,
     queued: options.queued ?? false,
     ...(options.apiText ? { api_text: options.apiText } : {}),

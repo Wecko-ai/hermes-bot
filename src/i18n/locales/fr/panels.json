@@ -192,7 +192,9 @@
     "modeFree": "Auto gratuit",
     "tablePath": "Table de scoring",
     "fallbackBlockedTools": "Le routage Auto n’a pas pu réessayer : des outils ont déjà tourné sur ce tour.",
-    "fallbackExhausted": "Le routage Auto n’a pas pu récupérer après l’erreur du fournisseur."
+    "fallbackExhausted": "Le routage Auto n’a pas pu récupérer après l’erreur du fournisseur.",
+    "stayed": "Auto n’a pas pu choisir de modèle. Ce tour reste sur {{model}}.",
+    "currentModel": "le modèle en cours"
   },
   "vaultWallet": {
     "note": "Cartes et adresses dans le Trousseau de la machine des bots. Les numéros de carte ne reviennent jamais dans le chat — seulement les 4 derniers chiffres.",
@@ -310,7 +312,7 @@
     "showUsage": "Afficher le contexte et le débit",
     "showUsageHint": "Sous la zone de saisie",
     "autoModel": "Mode Auto",
-    "autoModelHint": "Choisir un modèle automatiquement à chaque envoi (comme l’entrée Auto du sélecteur).",
+    "autoModelHint": "Par défaut pour tous les bots et les nouveaux chats : un modèle est choisi à chaque envoi. Un modèle choisi dans le sélecteur ne vaut que pour ce chat.",
     "caveman": "Mode caveman",
     "cavemanHint": "Les bots te répondent en 1 à 3 lignes : le résultat, puis ce que tu dois décider. Pour les messages envoyés d’ici ; ce qu’ils écrivent ailleurs reste normal.",
     "approvalsMode": {

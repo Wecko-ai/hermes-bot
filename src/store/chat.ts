@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { ChatMessage, Routine, SessionUsage } from '../types'
 import type { ActiveChat } from '../lib/hermes'
 import { pickerModelForSession } from '../lib/auto-router'
+import { pickerForSession, writePickerForSession } from '../lib/picker-memory'
 import { resolveUpdater, type Updater } from './updater'
 
 /** What is kept of a Bot Chat to reopen it instantly, before the server re-read. */
@@ -195,10 +196,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   setChatModel: (value) => {
     const chatModel = resolveUpdater(value, get().chatModel)
     const profile = get().activeChat?.profile
+    const sessionId = get().activeChat?.sessionId
     if (profile) {
       const cached = get().cache.get(profile)
       if (cached) get().cache.set(profile, { ...cached, pickerModel: chatModel })
     }
+    writePickerForSession(sessionId, chatModel)
     set({ chatModel })
   },
   // The open thread keeps its whole history (the user scrolls it); only stored cache entries are capped.
@@ -269,7 +272,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (cached) {
       set({
         activeChat: cached.chat,
-        chatModel: pickerModelForSession(cached.pickerModel, cached.chat.model),
+        chatModel: pickerModelForSession(cached.pickerModel || pickerForSession(cached.chat.sessionId), cached.chat.model),
         messages: cached.messages,
         routines: cached.routines,
         running: cached.chat.running,
@@ -292,7 +295,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const messages = trimCachedMessages(synced.messages)
     const stored = messages === synced.messages ? synced : { ...synced, messages }
     const prev = get().cache.get(profile)
-    const pickerModel = prev?.pickerModel
+    const pickerModel = prev?.pickerModel || pickerForSession(synced.chat.sessionId)
     get().cache.set(profile, { ...stored, ...(pickerModel ? { pickerModel } : {}) })
     set({
       activeChat: synced.chat,

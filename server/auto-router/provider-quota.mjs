@@ -20,6 +20,10 @@ import { chargeFor, quotaSource, utcDay } from './quota.mjs'
 export const PROVIDER_QUOTA_FILE = 'provider-quota.json'
 export const PROVIDER_QUOTA_PRO_FILE = 'provider-quota-pro.json'
 export const RECENT_PICKS_MAX = 50
+/** Gateway `cli-quota.mjs` prefers a store that exports this. */
+export const QUOTA_GATEWAY_CONTRACT = 1
+/** A completion this soon after an Auto reserve is the same request. */
+const RESERVE_MATCH_MS = 15000
 
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const LOCAL = new Set([
@@ -242,10 +246,22 @@ export function isQuotaSignal(status, message) {
   return /429|402|quota|rate limit|too many requests|usage limit|weekly|\b7[- ]day\b/i.test(String(message || ''))
 }
 
+/** A duration written in the error ("5-hour usage limit"), not a window name like "7-day". */
+function durationInText(text, now) {
+  const hour = String(text || '').match(/\b(\d+)\s*-?\s*hours?\b/i)
+  if (!hour) return null
+  const n = Number(hour[1])
+  if (!Number.isFinite(n) || n <= 0 || n > 24 * 14) return null
+  return new Date(now.getTime() + n * 3600 * 1000)
+}
+
 function defaultUntil(spec, status, message, now) {
   const text = String(message || '')
   const weekly = spec?.window === 'week' || /weekly|\b7[- ]day\b/i.test(text)
-  if (weekly && !/retry-after/i.test(text)) return new Date(now.getTime() + 24 * 3600 * 1000)
+  if (weekly && !/retry-after/i.test(text)) {
+    const reset = windowBounds('week', now).reset
+    if (reset) return reset
+  }
   if (spec?.window === 'minute' || /per minute|\brpm\b/i.test(text)) return new Date(now.getTime() + 60 * 1000)
   if (spec?.window === 'day-utc' || spec?.dayLimit != null || /daily|per day/i.test(text) || Number(status) === 402 || /quota/i.test(text)) {
     return windowBounds('day-utc', now).reset
@@ -260,7 +276,7 @@ function defaultUntil(spec, status, message, now) {
 export function exhaustionFromSignal({ status, message, headers, spec, now }) {
   if (!isQuotaSignal(status, message)) return null
   const code = Number(status) === 402 || /\b402\b/.test(String(message || '')) ? 402 : 429
-  const until = headerReset(headers, now) || isoInText(message) || defaultUntil(spec, code, message, now)
+  const until = headerReset(headers, now) || isoInText(message) || durationInText(message, now) || defaultUntil(spec, code, message, now)
   const text = publicError(message) || (code === 402 ? '402' : '429')
   return { status: code, error: text, exhaustedUntil: until.toISOString() }
 }
@@ -468,8 +484,31 @@ function applyError(state, spec, signal, now) {
   record.exhaustedUntil = laterIso(record.exhaustedUntil, signal.exhaustedUntil)
   record.lastStatus = signal.status
   record.lastError = signal.error
+  record.lastUsedAt = now.toISOString()
   state.providers[spec.id] = record
   return state
+}
+
+function samePickModel(pickModel, full, model) {
+  if (!pickModel) return false
+  if (pickModel === full || pickModel === model) return true
+  return Boolean(model && pickModel.endsWith(`/${model}`))
+}
+
+/** True when Auto already reserved this provider/model a moment before the call started. */
+function reservedRecently(state, spec, opts) {
+  const started = Date.parse(opts?.startedAt || '')
+  if (!Number.isFinite(started)) return false
+  const full = clip(opts.fullId || `${opts.provider}/${opts.model}`, 200)
+  const model = clip(opts.model, 200)
+  for (const pick of state?.recentPicks || []) {
+    if (!pick || pick.provider !== spec.id || !samePickModel(pick.model, full, model)) continue
+    const at = Date.parse(pick.at || '')
+    if (!Number.isFinite(at)) continue
+    const delta = started - at
+    if (delta >= -2000 && delta <= RESERVE_MATCH_MS) return true
+  }
+  return false
 }
 
 function pickFrom(opts, spec, now) {
@@ -653,9 +692,13 @@ export function createProviderQuotaStore(dir, { now = () => new Date(), host = '
         const base = await loadMerged()
         const spec = specOf(opts.table, opts)
         if (!spec.id) return false
+        if (reservedRecently(base, spec, opts)) {
+          memory = base
+          return 'reserved'
+        }
         const delta = usageDelta(spec, opts.model, opts.tokensIn, opts.tokensOut ?? null)
         const draft = structuredClone(base)
-        applyUse(draft, spec, delta, clock, pickFrom(opts, spec, clock))
+        applyUse(draft, spec, delta, clock, opts.pick === false ? null : pickFrom(opts, spec, clock))
         const merged = await persist(draft)
         merged.version = 1
         merged.updatedAt = clock.toISOString()

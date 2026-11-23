@@ -44,6 +44,7 @@ import { withMentionNote } from './lib/mentions'
 import { agentChatMessages, agentMessagesFromEvent } from './lib/inter-agent'
 import { cavemanApiText, loadModes, modeApiText, voiceApiText, type ChatMode } from './lib/modes'
 import { progressBubbleText, shouldRecordProgress } from './lib/progress'
+import { expandToolMessage, parseToolTranscript, transcriptStepLabel } from './lib/tool-transcript'
 import { serverApprovalPrompt } from './lib/approval'
 import { turnStyleNotes } from './lib/turn-style'
 import { VoiceOverlay } from './components/VoiceOverlay'
@@ -56,7 +57,7 @@ import { probeModel } from './lib/model-probe'
 import { pullSharedSettingsSoon, syncSharedSettings } from './lib/shared-settings'
 import { botActionError, runBotAction, type BotAction } from './lib/bot-actions'
 import { createBot, createdBotEntry, loadProfileNames, withCreatedBot, type BotDraft } from './lib/bot-create'
-import { introduceDemoBot, kickOffNewBot, type FreshBot } from './lib/bot-onboarding'
+import { introduceDemoBot, kickOffNewBot, type FreshBot, type KickoffTurnSubmit } from './lib/bot-onboarding'
 import { NewBotDialog, NewBotRetry } from './components/NewBotDialog'
 import type { MediaRef } from './lib/media'
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog'
@@ -66,14 +67,14 @@ import { loadMemorySummary, sharedMemoryApiText } from './lib/shared-memory'
 import { i18n, resolveLanguage } from './i18n'
 import { dictationLanguageCode, getSettings, selectableModels, updateSettings, useSettings, type ThemeChoice } from './lib/settings'
 import { createReconnector, HEARTBEAT_MS, HEARTBEAT_TIMEOUT_MS } from './lib/reconnect'
-import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationExcerpt, notificationForRequest, notificationForStatus, notificationForWaiting, shouldNotify, turnEndsFromRows, turnForUser, turnReply, watchWhileHidden, type NotificationKind } from './lib/notifications'
+import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilence, recordedReply, notificationBody, notificationForRequest, notificationForStatus, notificationForWaiting, shouldNotify, turnEndsFromRows, turnForUser, watchWhileHidden, type NotificationKind } from './lib/notifications'
 import { enqueuePushRelay } from './lib/push-relay'
 import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
-import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
+import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, defaultAutoPicker, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
 import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
-import { answeredFromEvent, answeredFromUsage, answeredLabel, answeredStorageIds, composerReadout, lastTurnUserId, preferAnswered, rememberAnswered, stampAnswered, usageNamesAnswered, withRememberedAnswers } from './lib/turn-model'
-import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, providerErrorText, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
+import { answeredFromEvent, answeredFromUsage, answeredStorageIds, composerChipText, composerReadout, lastTurnUserId, preferAnswered, rememberAnswered, stampAnswered, usageNamesAnswered, withRememberedAnswers } from './lib/turn-model'
+import { applyRoutedModel, beginAutoRoutedTurn, isRetryableTurnComplete, providerErrorText, submitAutoTurn, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
 
@@ -201,7 +202,10 @@ export default function App() {
   /** Latest model-list request. A late answer for another bot is dropped. */
   const modelRequestRef = useRef(0)
   const syncChatRef = useRef<(profile: string, resumed?: boolean) => Promise<void> | void>(() => undefined)
-  const submitPromptResumingRef = useRef<((target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string }) => Promise<ActiveChat>) | null>(null)
+  const submitPromptResumingRef = useRef<((target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string; submissionId?: string }) => Promise<ActiveChat>) | null>(null)
+  /** Kickoff uses the same Auto submit as the composer. Assigned once those helpers exist. */
+  const routeKickoffRef = useRef<KickoffTurnSubmit | null>(null)
+  const modelOptionsRef = useRef<ModelOption[]>([])
   /** One in-flight audience read per bot, so a late history result cannot classify the next turn. */
   const turnAudience = useRef(new Map<string, number>())
   const memorySummaryRef = useRef('')
@@ -307,6 +311,7 @@ export default function App() {
   const [notice, setNotice] = useState('')
   const [modelQuery, setModelQuery] = useState<string | null>(null)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  modelOptionsRef.current = modelOptions
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState('')
   // Providers that cannot serve the open bot (gateway readiness check), kept with the bot they were checked for.
@@ -471,12 +476,16 @@ export default function App() {
         const finalText = completedText(payload.text, takeSessionStream(backgroundStreams.current, event.session_id))
         const visibleText = withoutSilentMarkers(finalText)
         if (owner && owner.slug !== useRosterStore.getState().selected) {
-          const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
+          const backgroundRows = !visibleText.trim() || isSilentMessage(visibleText) ? [] : expandToolMessage({
+            id: `background-${Date.now()}`, role: 'assistant', content: visibleText, createdAt: new Date().toISOString(),
+          })
+          const backgroundAnswer = [...backgroundRows].reverse().find((row) => !row.progress)?.content
+            ?? backgroundRows.at(-1)?.content
+            ?? ''
+          const meaningful = backgroundRows.length > 0
           const status = typeof payload.status === 'string' ? payload.status : ''
           if (meaningful) {
-            appendCachedMessage(owner.slug, {
-              id: `background-${Date.now()}`, role: 'assistant', content: visibleText, createdAt: new Date().toISOString(),
-            })
+            for (const row of backgroundRows) appendCachedMessage(owner.slug, row)
           } else if (finalText.trim()) {
             appendCachedMessage(owner.slug, {
               id: `background-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true,
@@ -488,14 +497,14 @@ export default function App() {
           }
           updateCachedChat(owner.slug, { running: false })
           noteTurnSilence(owner.slug, finalText)
-          noteTurnReply(owner.slug, finalText)
+          noteTurnReply(owner.slug, backgroundAnswer)
           markDone(owner.slug)
           const finishedAt = new Date().toISOString()
           // While a worker is running, the unread mark waits for the re-read that sees the bot stopped.
           if (meaningful) setBots((items) => items.map((bot) => bot.slug === owner.slug ? {
             ...bot,
             unread: bot.unread + (owner.workerActive ? 0 : 1),
-            preview: visibleText,
+            preview: backgroundAnswer,
             timestamp: finishedAt,
             seenAt: owner.workerActive ? bot.seenAt : finishedAt,
             status: owner.workerActive ? 'working' : 'done',
@@ -611,19 +620,29 @@ export default function App() {
       // A step sealed: the next text starts afresh, so the reply's fallback text is only the reply.
       if (event.type === 'message.interim') {
         const step = typeof payload.text === 'string' ? withoutSilentMarkers(payload.text) : ''
-        if (step && !isSilentMessage(step) && voiceRef.current?.profile === current.profile) voiceRef.current.session.turnStep(step)
-        if (getSettings().progressInThread && shouldRecordProgress(step)) {
+        const parsed = step ? parseToolTranscript(step) : null
+        const spoken = parsed?.visible || (parsed?.steps[0] ? transcriptStepLabel(parsed.steps[0]) : step)
+        if (spoken && step && !isSilentMessage(step) && voiceRef.current?.profile === current.profile) voiceRef.current.session.turnStep(spoken)
+        if (getSettings().progressInThread && step && !isSilentMessage(step)) {
           const segment = typeof payload.segment === 'number' ? payload.segment : Date.now()
           const turnId = typeof payload.turn_id === 'string' ? payload.turn_id : 'turn'
-          const progress: ChatMessage = {
-            id: `progress-${turnId}-${segment}`,
-            role: 'assistant',
-            content: progressBubbleText(step),
-            createdAt: new Date().toISOString(),
-            progress: true,
-          }
-          setMessages((items) => (items.some((item) => item.id === progress.id) ? items : [...items, progress]))
-          appendCachedMessage(current.profile, progress)
+          const lines = parsed && parsed.steps.length
+            ? [
+                ...(parsed.visible && shouldRecordProgress(parsed.visible) ? [progressBubbleText(parsed.visible)] : []),
+                ...parsed.steps.map((item) => transcriptStepLabel(item)),
+              ]
+            : (shouldRecordProgress(step) ? [progressBubbleText(step)] : [])
+          lines.forEach((content, index) => {
+            const progress: ChatMessage = {
+              id: `progress-${turnId}-${segment}-${index}`,
+              role: 'assistant',
+              content,
+              createdAt: new Date().toISOString(),
+              progress: true,
+            }
+            setMessages((items) => (items.some((item) => item.id === progress.id || (item.progress && item.content === content)) ? items : [...items, progress]))
+            appendCachedMessage(current.profile, progress)
+          })
         }
         setStreaming('')
         if (current.sessionId) backgroundStreams.current.set(current.sessionId, '')
@@ -656,6 +675,7 @@ export default function App() {
               costUsd: null,
               latencyMs: Date.now() - autoTrack.startedAt,
               outcome,
+              triage: autoTrack.plan.decision.triage,
               quotaErrors: autoTrack.quotaErrors ?? [],
             })
             autoTurnRef.current.delete(current.profile)
@@ -717,29 +737,33 @@ export default function App() {
         const buffered = current.sessionId ? takeSessionStream(backgroundStreams.current, current.sessionId) : ''
         const finalText = completedText(payload.text, useChatStore.getState().streaming || buffered)
         const visibleText = withoutSilentMarkers(finalText)
-        const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
-        if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: visibleText, meaningful })
         const answeredNow = liveAnsweredRef.current.get(current.profile) ?? usageAnchorRef.current.get(current.profile)
+        const finishedRows = !visibleText.trim() || isSilentMessage(visibleText) ? [] : expandToolMessage({
+          id: useChatStore.getState().streamKey || `live-${Date.now()}`,
+          role: 'assistant',
+          content: visibleText,
+          createdAt: new Date().toISOString(),
+          failed: status === 'error',
+          ...(answeredNow ? { answeredBy: answeredNow } : {}),
+        })
+        const answerText = [...finishedRows].reverse().find((row) => !row.progress)?.content
+          ?? finishedRows.at(-1)?.content
+          ?? ''
+        const meaningful = finishedRows.length > 0
+        if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: answerText || visibleText, meaningful })
         if (answeredNow && current.sessionId) {
           const userId = autoTurnRef.current.get(current.profile)?.userMessageId ?? lastTurnUserId(useChatStore.getState().messages)
           rememberAnswered(current.sessionId, answeredStorageIds(payload, userId), answeredNow)
         }
         if (meaningful) {
-          const message: ChatMessage = {
-            id: useChatStore.getState().streamKey || `live-${Date.now()}`,
-            role: 'assistant',
-            content: visibleText,
-            createdAt: new Date().toISOString(),
-            failed: status === 'error',
-            ...(answeredNow ? { answeredBy: answeredNow } : {}),
-          }
-          if (answeredNow && current.sessionId) rememberAnswered(current.sessionId, [message.id], answeredNow)
-          setMessages((items) => [...items, message])
-          appendCachedMessage(current.profile, message)
+          const answer = [...finishedRows].reverse().find((row) => !row.progress)
+          if (answeredNow && current.sessionId && answer) rememberAnswered(current.sessionId, [answer.id], answeredNow)
+          setMessages((items) => [...items, ...finishedRows])
+          for (const row of finishedRows) appendCachedMessage(current.profile, row)
           updateCachedChat(current.profile, { running: false })
           // No status here: markDone below sets it. An “idle” in between would hide the end of the turn
           // from the notifications, which only see a working bot become “done”.
-          updateBot(current.profile, { preview: visibleText, timestamp: message.createdAt })
+          updateBot(current.profile, { preview: answerText, timestamp: finishedRows[0].createdAt })
         }
         if (finalText.trim() && !meaningful) {
           const message: ChatMessage = { id: `silent-${Date.now()}`, role: 'system', content: finalText, createdAt: new Date().toISOString(), technical: true }
@@ -751,11 +775,9 @@ export default function App() {
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)
         }
-        liveAnsweredRef.current.delete(current.profile)
         if (usageOk) usageHeldRef.current.delete(current.profile)
         else usageHeldRef.current.add(current.profile)
         if (useChatStore.getState().activeChat?.profile === current.profile) {
-          setLiveAnswered(null)
           setUsageHeld(usageHeldRef.current.has(current.profile))
         }
         setStreaming('')
@@ -765,7 +787,7 @@ export default function App() {
         setActivity('')
         setCompactionLabel('')
         noteTurnSilence(current.profile, finalText)
-        noteTurnReply(current.profile, finalText)
+        noteTurnReply(current.profile, answerText)
         markDone(current.profile)
         if (event.execution_generation) setActiveChat({ ...current, executionGeneration: event.execution_generation, running: false })
       }
@@ -873,10 +895,13 @@ export default function App() {
         if (draftKind) alertKind = draftKind
       }
       // The reply recorded when the turn ended first: the cache can still hold the previous turn's message.
-      const last = kind === 'done' ? recordedReply(slug) ?? turnReply(getCached(slug)?.messages || []) : undefined
-      const excerpt = notificationExcerpt(last)
-      // A finished turn shows the bot's message alone, under its name in the title; the state only when there is no message.
-      const body = excerpt || i18n.t(`notifications.${alertKind}`)
+      const body = kind === 'done'
+        ? notificationBody({
+          recorded: recordedReply(slug),
+          messages: getCached(slug)?.messages || [],
+          fallback: i18n.t('notifications.done'),
+        })
+        : i18n.t(`notifications.${alertKind}`)
       const enabled = getSettings().notifications
       if (shouldNotify({ enabled, focused: false, viewing })) {
         void enqueuePushRelay({ slug, title: bot.name, body, kind: alertKind })
@@ -930,7 +955,11 @@ export default function App() {
       void readTurnEnds(slug).then((ends) => {
         if (turnAudience.current.get(slug) !== ticket) return
         if (!ends) noteTurnInput(slug, null, null)
-        else noteTurnInput(slug, ends.input, ends.reply)
+        else {
+          noteTurnInput(slug, ends.input, ends.reply)
+          // Status-only path: the live completion may not have recorded the reply.
+          if (ends.reply) noteTurnReply(slug, ends.reply)
+        }
         show(slug, 'done')
       })
     }
@@ -1645,7 +1674,8 @@ export default function App() {
         if (fresh) {
           freshBotsRef.current.delete(profile)
           setNewBotRetry(null)
-          void kickOffNewBot(client, chatResult.value, fresh, demoLanguage(), (message, error) => markSendFailed(profile, message, error))
+          const routeKickoff = routeKickoffRef.current
+          void kickOffNewBot(client, chatResult.value, fresh, demoLanguage(), (message, error) => markSendFailed(profile, message, error), routeKickoff ?? undefined)
         }
       } else if (!cached && freshBotsRef.current.has(profile)) {
         // A profile Hermes has just created may not be served at once: a few tries, then a way to try again.
@@ -1823,8 +1853,23 @@ export default function App() {
     sharedMemoryApiText(styledApiText(prompt, mode, style), memorySummaryRef.current), [])
   // Without an explicit mode (email card, suggestions), the turn is a normal turn with nothing added,
   // not even the caveman note: an approved email must go out as it was approved.
+  /** Fills the picker catalog. Shared by every Auto send, including the new-bot welcome turn. */
+  const loadModelsFor = async (profile: string, sessionId: string, shown: () => boolean) => {
+    const loaded = await loadModelOptions(client, profile, sessionId)
+    modelOptionsRef.current = loaded.options
+    if (shown()) setModelOptions(loaded.options)
+    return loaded.options
+  }
+  const noticeAutoStayed = (plan: RoutedTurnPlan, chat: ActiveChat) => {
+    const model = chat.model || plan.option.model
+    setNotice(i18n.t('autoRouter.stayed', { model: model || i18n.t('autoRouter.currentModel') }))
+  }
+
   /** `voice`: spoken in the voice mode (the voice note replaces caveman). */
-  const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode, voice?: { cutShort: boolean }): Promise<boolean> => {
+  const send = async (text: string, attachments: PendingAttachment[], sentMode?: ChatMode, delivery?: DeliveryMode, voiceOrId?: { cutShort: boolean } | string): Promise<boolean> => {
+    // The composer passes its send id as a string. Voice mode passes `{ cutShort }`.
+    const voice = typeof voiceOrId === 'object' ? voiceOrId : undefined
+    const submissionId = typeof voiceOrId === 'string' ? voiceOrId : undefined
     const mode = sentMode ?? 'exec'
     const prefs = getSettings()
     const caveman = sentMode !== undefined && !voice && prefs.caveman
@@ -1885,103 +1930,80 @@ export default function App() {
       if (runningNow) {
         if (onScreen()) setMessages((items) => [...items, userMessage])
         appendCachedMessage(profile, userMessage)
-        return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority')
+        return await queueTurn(chat, text, attachments, userMessage, mode, style, delivery === 'priority', submissionId)
       }
       updateCachedChat(profile, { running: true })
       updateBot(profile, { preview: text, timestamp: now, status: 'working' })
+      // The user row has to be in the thread before the first await. Auto routing yields, and a
+      // render with `running` but no new user message folds the previous answer into a step.
+      // That remounts its card (questions, mail) and the "sent" mark lands on the dead instance.
       if (onScreen()) {
         setRunning(true)
         setActivity('')
+        setMessages((items) => [...items, userMessage])
+      }
+      appendCachedMessage(profile, userMessage)
+      const stampAutoBadge = (badge: ChatMessage['autoRoute']) => {
+        if (!badge) return
+        userMessage.autoRoute = badge
+        useChatStore.getState().patchCachedMessage(profile, userMessage.id, { autoRoute: badge })
+        if (onScreen()) setMessages((items) => items.map((item) => (item.id === userMessage.id ? { ...item, autoRoute: badge } : item)))
       }
       try {
         let workingChat = chat
         let routedPlan: RoutedTurnPlan | null = null
         const imageCount = attachments.filter((item) => item.kind === 'image').length
-        if (autoActive) {
-          routedPlan = await planAutoRoutedTurn(client, {
+        // A conversation left on Auto stays on Auto: only the routed turn uses the concrete model.
+        const onModelApplied = (next: ActiveChat) => {
+          workingChat = next
+          updateCachedChat(profile, { model: next.model, revision: next.revision, executionGeneration: next.executionGeneration })
+          if (onScreen()) {
+            setActiveChat(next)
+            setChatModel((value) => pickerModelAfterRoute(value, next.model || ''))
+            refreshChatUsage(next)
+          }
+        }
+        if (autoActive && autoMode) {
+          const begun = await beginAutoRoutedTurn({
+            client,
             chat: workingChat,
             text,
             imageCount,
             usage,
-            modelOptions,
+            modelOptions: modelOptionsRef.current,
+            loadModels: () => loadModelsFor(profile, workingChat.sessionId, onScreen),
             analyticsProfiles: useRosterStore.getState().bots.map((bot) => bot.slug),
-            mode: autoMode ?? 'auto',
+            mode: autoMode,
+            onPlanned: (plan) => stampAutoBadge(plan.badge),
+            onModelApplied,
+            // Even the largest window cannot hold the conversation with room to work: compact first.
+            compactIfNeeded: compactForAuto,
           })
-          userMessage.autoRoute = routedPlan.badge
-          const applied = await applyRoutedModel(client, workingChat, routedPlan.option)
-          workingChat = applied.chat
-          updateCachedChat(profile, { model: applied.chat.model, revision: applied.chat.revision, executionGeneration: applied.chat.executionGeneration })
-          if (onScreen()) {
-            setActiveChat(workingChat)
-            // A conversation left on Auto stays on Auto: only the routed turn uses the concrete model.
-            setChatModel((value) => pickerModelAfterRoute(value, applied.chat.model || workingChat.model || ''))
-            refreshChatUsage(workingChat)
-          }
-          userMessage.autoRoute = routedPlan.badge
-          // Even the largest window cannot hold the conversation with room to work: compact first.
-          if (routedPlan.decision.needsCompaction) await compactForAuto(workingChat)
+          routedPlan = begun.plan
+          workingChat = begun.chat
+          stampAutoBadge(routedPlan.badge)
+          if (begun.plan.fellBack && onScreen()) noticeAutoStayed(begun.plan, begun.chat)
         }
-        if (onScreen()) setMessages((items) => [...items, userMessage])
-        appendCachedMessage(profile, userMessage)
         const { images, fileRefs } = await uploadAttachments(workingChat, attachments, userMessage, text)
         if (onScreen()) setActivity('')
         const prompt = withMentionNote([text, ...fileRefs].join('\n\n'), useRosterStore.getState().bots, profile)
         const apiText = turnApiText(prompt, mode, style)
-        const fallbackQueue = [...(routedPlan?.fallbackQueue ?? [])]
-        const turnFallbacks: { model: string; error: string }[] = []
-        if (autoActive && routedPlan) {
-          autoTurnRef.current.set(profile, {
-            plan: routedPlan,
-            startedAt: Date.now(),
-            userMessageId: userMessage.id,
-            fallbacks: turnFallbacks,
-            fallbackQueue,
-            prompt,
-            images,
-            apiText,
-            chat: workingChat,
-            toolsRan: false,
-            resubmitting: false,
-            quotaErrors: [],
-          })
-        }
-        let submitted = workingChat
-        for (let attempt = 0; attempt <= 2; attempt += 1) {
-          try {
-            submitted = await submitPromptResuming(workingChat, prompt, images, { apiText })
-            break
-          } catch (error) {
-            const err = error instanceof Error ? error.message : 'error'
-            const track = autoTurnRef.current.get(profile)
-            if (track) track.quotaErrors = [...(track.quotaErrors ?? []), quotaErrorHint(track.plan.badge.chosen, err)]
-            if (attempt >= 2 || !isRetryableProviderError(error) || fallbackQueue.length === 0) throw error
-            const next = fallbackQueue.shift()!
-            turnFallbacks.push({ model: `${next.provider}/${next.model}`, error: err.includes('429') ? '429' : `error:${err.slice(0, 48)}` })
-            const applied = await applyRoutedModel(client, workingChat, next)
-            workingChat = applied.chat
-            updateCachedChat(profile, { model: applied.chat.model, revision: applied.chat.revision, executionGeneration: applied.chat.executionGeneration })
-            if (track) {
-              track.plan.badge.chosen = `${next.provider}/${next.model}`
-              track.plan.badge.label = fallbackLabel(track.plan.decision, next)
-              track.chat = workingChat
-              useChatStore.getState().patchCachedMessage(profile, userMessage.id, { autoRoute: track.plan.badge })
-              if (onScreen()) {
-                setMessages((items) => items.map((item) => (item.id === userMessage.id ? { ...item, autoRoute: track.plan.badge } : item)))
-              }
-            }
-            if (onScreen()) {
-              setActiveChat(workingChat)
-              setChatModel((value) => pickerModelAfterRoute(value, applied.chat.model || workingChat.model || ''))
-              refreshChatUsage(workingChat)
-            }
-          }
-        }
-        const track = autoTurnRef.current.get(profile)
-        if (track) {
-          track.fallbacks = turnFallbacks
-          track.chat = submitted
-          track.fallbackQueue = fallbackQueue
-        }
+        const submitted = await submitAutoTurn({
+          client,
+          chat: workingChat,
+          plan: routedPlan,
+          prompt,
+          apiText,
+          images,
+          userMessageId: userMessage.id,
+          submit: (target, promptText, promptImages, options) => submitPromptResuming(target, promptText, promptImages, { ...options, submissionId }),
+          onModelApplied,
+          onBadge: (badge) => {
+            useChatStore.getState().patchCachedMessage(profile, userMessage.id, { autoRoute: badge })
+            if (onScreen()) setMessages((items) => items.map((item) => (item.id === userMessage.id ? { ...item, autoRoute: badge } : item)))
+          },
+          remember: (track) => { autoTurnRef.current.set(profile, track) },
+        })
         updateCachedChat(profile, { ...submitted, running: true })
         if (onScreen()) {
           const open = useChatStore.getState().activeChat
@@ -2005,7 +2027,7 @@ export default function App() {
   }
 
   /** One resume and one retry when the socket is no longer subscribed to this session. */
-  const submitPromptResuming = async (target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string }) => {
+  const submitPromptResuming = async (target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string; submissionId?: string }) => {
     const onScreen = () => stillOnProfile(useRosterStore.getState().selected, target.profile)
     try {
       await submitPrompt(client, target, prompt, images, options)
@@ -2057,7 +2079,7 @@ export default function App() {
    * Message sent during a turn: queued, Hermes starts it when the turn ends. Priority, it goes into
    * the same queue with a resume instruction, then the current turn is interrupted: so it runs right after.
    */
-  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, style: TurnStyle, priority: boolean) => {
+  const queueTurn = async (chat: ActiveChat, text: string, attachments: PendingAttachment[], userMessage: ChatMessage, mode: ChatMode, style: TurnStyle, priority: boolean, submissionId?: string) => {
     const onScreen = () => stillOnProfile(useRosterStore.getState().selected, chat.profile)
     // Copied before submit: a turn that ends during the await must not be interrupted as if it were this message.
     const generation = chat.executionGeneration
@@ -2069,7 +2091,7 @@ export default function App() {
       const queuedApiText = priority
         ? priorityApiText(prompt, modeText)
         : (mode !== 'exec' || style.caveman || style.voice || memorySummaryRef.current ? modeText : undefined)
-      await submitPromptResuming(chat, prompt, images, { queued: true, apiText: queuedApiText })
+      await submitPromptResuming(chat, prompt, images, { queued: true, apiText: queuedApiText, submissionId })
       if (priority) {
         const open = useChatStore.getState().activeChat
         const after = open?.sessionId === chat.sessionId ? open.executionGeneration : chat.executionGeneration
@@ -2183,6 +2205,68 @@ export default function App() {
       compactingRef.current = false
       setCompacting(false)
       if (onChat()) setActivity('')
+    }
+  }
+
+  // The new bot's first turn uses the same Auto plan, switch, track and fallback queue as a composer send.
+  // Auto off: one plain submit, the kickoff text stays technical either way.
+  routeKickoffRef.current = async ({ chat: target, text, apiText, message }) => {
+    const profile = target.profile
+    const autoMode = autoRouterEnabled() ? autoModeFor(useChatStore.getState().chatModel, getSettings()) : null
+    if (!autoMode) {
+      await submitPrompt(client, target, text, [], { apiText })
+      return target
+    }
+    const shown = () => stillOnProfile(useRosterStore.getState().selected, profile)
+    const onModelApplied = (next: ActiveChat) => {
+      const live = { ...next, running: true }
+      updateCachedChat(profile, { model: live.model, revision: live.revision, executionGeneration: live.executionGeneration, running: true })
+      if (shown()) {
+        setActiveChat(live)
+        setChatModel((value) => pickerModelAfterRoute(value, live.model || ''))
+        refreshChatUsage(live)
+      }
+    }
+    const stamp = (badge: NonNullable<ChatMessage['autoRoute']>) => {
+      message.autoRoute = badge
+      useChatStore.getState().patchCachedMessage(profile, message.id, { autoRoute: badge })
+      if (shown()) setMessages((items) => items.map((item) => item.id === message.id ? { ...item, autoRoute: badge } : item))
+    }
+    try {
+      const begun = await beginAutoRoutedTurn({
+        client,
+        chat: target,
+        text,
+        imageCount: 0,
+        usage: useChatStore.getState().usage,
+        modelOptions: modelOptionsRef.current,
+        loadModels: () => loadModelsFor(profile, target.sessionId, shown),
+        analyticsProfiles: useRosterStore.getState().bots.map((bot) => bot.slug),
+        mode: autoMode,
+        onPlanned: (plan) => stamp(plan.badge),
+        onModelApplied,
+        compactIfNeeded: compactForAuto,
+      })
+      if (begun.plan.fellBack && shown()) noticeAutoStayed(begun.plan, begun.chat)
+      const resume = submitPromptResumingRef.current
+      return await submitAutoTurn({
+        client,
+        chat: begun.chat,
+        plan: begun.plan,
+        prompt: text,
+        apiText,
+        images: [],
+        userMessageId: message.id,
+        submit: (next, prompt, images, options) => resume
+          ? resume(next, prompt, images, options)
+          : submitPrompt(client, next, prompt, images, options).then(() => next),
+        onModelApplied,
+        onBadge: stamp,
+        remember: (track) => { autoTurnRef.current.set(profile, track) },
+      })
+    } catch (error) {
+      autoTurnRef.current.delete(profile)
+      throw error
     }
   }
 
@@ -2375,7 +2459,7 @@ export default function App() {
     loadModelOptions(client, profile, useChatStore.getState().activeChat?.sessionId).then((result) => {
       if (!applies()) return
       setModelOptions(result.options)
-      if (result.current) setChatModel((value) => value || result.current)
+      if (result.current) setChatModel((value) => value || defaultAutoPicker() || result.current)
       // The rows appear at once; the routes without a usable key are marked when the checks answer.
       void checkModelRoutes(client, profile, result.options.map((option) => option.provider))
         .then((issues) => { if (applies()) setRouteIssues({ profile, issues }) })
@@ -2390,6 +2474,8 @@ export default function App() {
     if (isAutoModel(option.model)) {
       setChatModel(option.model)
       setModelQuery(null)
+      liveAnsweredRef.current.delete(chat.profile)
+      setLiveAnswered(null)
       return
     }
     try {
@@ -2427,6 +2513,8 @@ export default function App() {
         setActiveChat(synced)
         setChatModel(option.model)
         setModelQuery(null)
+        liveAnsweredRef.current.delete(chat.profile)
+        setLiveAnswered(null)
         refreshChatUsage(synced)
         if (result?.deferred) setNotice(i18n.t('app.modelDeferred', { model: modelLabel(option.model) }))
       }
@@ -2760,9 +2848,16 @@ export default function App() {
         onOpenDocument={openDocument}
         onVaultFormDone={onVaultFormDone}
         onOpenBot={openBot}
-        modelLabel={running && liveAnswered
-          ? answeredLabel(liveAnswered, t('models.fallbackMark'))
-          : isAutoModel(chatModel) ? t(chatModel === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : chipModelLabel(chatModel || selectedBot.model)}
+        modelLabel={(() => {
+          const shown = chatModel || defaultAutoPicker() || ''
+          return composerChipText({
+            answered: liveAnswered,
+            chatModel: shown,
+            botModel: selectedBot.model,
+            fallbackMark: t('models.fallbackMark'),
+            autoLabel: isAutoModel(shown) ? t(shown === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : null,
+          })
+        })()}
         onOpenModels={openModels}
         usage={composerReadout(usage, { running, fresh: !usageHeld, answered: usageAnchor })}
         showUsage={showUsage}
@@ -2784,10 +2879,10 @@ export default function App() {
         }}
         modelPicker={modelQuery !== null ? (
           <ModelPicker
-            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
+            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || defaultAutoPicker() || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
             autoEnabled={appConfig.autoRouter?.enabled === true}
             freeMode={settings.freeMode}
-            current={chatModel || selectedBot.model}
+            current={chatModel || defaultAutoPicker() || selectedBot.model}
             profileModel={selectedBot.model}
             loading={modelsLoading}
             error={modelsError}
@@ -2886,7 +2981,7 @@ export default function App() {
           demo={DEMO}
           models={modelOptions}
           bots={bots}
-          compactionContext={usage?.contextMax ? { contextMax: usage.contextMax, modelName: chipModelLabel(chatModel || selectedBot.model) } : null}
+          compactionContext={usage?.contextMax ? { contextMax: usage.contextMax, modelName: chipModelLabel(chatModel || defaultAutoPicker() || selectedBot.model) } : null}
           modelsLoading={modelsLoading}
           modelsError={modelsError}
           onLoadModels={refreshModels}

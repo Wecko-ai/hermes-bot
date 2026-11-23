@@ -146,14 +146,25 @@ describe('provider quota contract', () => {
       limit: null,
       used: 0,
       lastStatus: 429,
-      exhaustedUntil: '2026-11-24T12:00:00.000Z',
+      exhaustedUntil: '2026-11-30T00:00:00.000Z',
+      resetAt: '2026-11-30T00:00:00.000Z',
     })
     expect(kimi.lastError).toContain('weekly (7-day) usage limit')
     expect(kimi.lastError).not.toContain('sk-')
     const view = await store.snapshot()
     expect(store.blocked(view, {}, { provider: 'kimi-coding', model: 'k3.1-pro' }, 0)).toBe(true)
     now = new Date('2026-11-24T12:00:01.000Z')
+    expect(store.blocked(await store.snapshot(), {}, { provider: 'kimi-coding', model: 'k3.1-pro' }, 0)).toBe(true)
+    now = new Date('2026-11-30T00:00:01.000Z')
     expect(store.blocked(await store.snapshot(), {}, { provider: 'kimi-coding', model: 'k3.1-pro' }, 0)).toBe(false)
+    now = new Date('2026-11-23T12:00:00.000Z')
+    const fiveHour = exhaustionFromSignal({
+      status: 429,
+      message: "You've reached your 5-hour usage limit",
+      spec: limitSpec({}, { provider: 'kimi-coding', model: 'kimi-for-coding' }),
+      now,
+    })
+    expect(fiveHour.exhaustedUntil).toBe('2026-11-23T17:00:00.000Z')
 
     const resetAt = new Date('2026-11-23T18:00:00.000Z')
     const signal = exhaustionFromSignal({
@@ -173,6 +184,7 @@ describe('provider quota contract', () => {
     })
     expect(fromHeader.exhaustedUntil).toBe(resetAt.toISOString())
 
+    now = new Date('2026-11-24T12:00:01.000Z')
     await store.noteErrors({
       table: {},
       errors: [{ provider: 'openrouter', model: 'nvidia/nemotron:free', status: 402, message: 'quota exceeded' }],
@@ -245,6 +257,28 @@ describe('provider quota contract', () => {
     expect(nvidia.used).toBe(4)
     expect(nvidia.dayUsed).toBe(2)
     expect(nvidia.dayLimit).toBe(10000)
+  })
+
+  it('does not count a completion that Auto already reserved, and can skip the pick log', async () => {
+    const dir = await temp()
+    const now = new Date('2026-11-23T12:00:00.000Z')
+    const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+    expect(await store.reserve(pick('kimi-coding', 'kimi-for-coding'))).toBe(true)
+    const startedAt = new Date(now.getTime() + 500).toISOString()
+    expect(await store.recordUse({
+      ...pick('kimi-coding', 'kimi-for-coding'),
+      startedAt,
+      pick: false,
+    })).toBe('reserved')
+    const kimi = JSON.parse(await fs.readFile(store.file, 'utf8')).providers.kimi
+    expect(kimi.used).toBe(1)
+    expect(kimi.requestsTotal).toBe(1)
+
+    const other = createProviderQuotaStore(await temp(), { now: () => now, host: 'host-a' })
+    expect(await other.recordUse({ ...pick('cursor', 'gpt'), pick: false, tokensIn: 12, tokensOut: 3 })).toBe(true)
+    const file = JSON.parse(await fs.readFile(other.file, 'utf8'))
+    expect(file.providers.cursor.used).toBe(1)
+    expect(file.recentPicks).toEqual([])
   })
 
   it('uses 50 OpenRouter free requests when the table says there are no credits', () => {

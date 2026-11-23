@@ -348,7 +348,7 @@
     }
   },
   "notifications": {
-    "done": "A terminé",
+    "done": "A terminé sa tâche",
     "question": "Te pose une question",
     "approval": "Attend ton approbation",
     "draft": "Brouillon à valider",

@@ -1,6 +1,7 @@
 import type { AnsweredBy, ChatMessage, SessionUsage } from '../types'
 import { fallbackRouteId, parseModelFallback } from './auto-context'
 import { autoRouteDisplay } from './auto-route-label'
+import { chipModelLabel } from './model'
 
 const STORAGE_KEY = 'hermesbot.answered-by'
 const MAX_SESSIONS = 30
@@ -15,6 +16,23 @@ export interface KeyValueStore {
 export function answeredLabel(answered: AnsweredBy, mark: string) {
   const name = autoRouteDisplay(answered.chosen)
   return mark ? `${name} ${mark}` : name
+}
+
+/**
+ * Composer chip. After a fallback it names the model that answered,
+ * from the usage or fallback frame, including once the turn is over.
+ * [autoLabel] is set when the picker is on Auto.
+ */
+export function composerChipText(input: {
+  answered: AnsweredBy | null
+  chatModel: string
+  botModel?: string
+  fallbackMark: string
+  autoLabel?: string | null
+}) {
+  if (input.answered) return answeredLabel(input.answered, input.fallbackMark)
+  if (input.autoLabel) return input.autoLabel
+  return chipModelLabel(input.chatModel || input.botModel || '')
 }
 
 /** Tooltip: the switch itself, never the prompt. */

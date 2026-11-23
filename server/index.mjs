@@ -52,9 +52,13 @@ import { createAutoRouter, resolveAutoRouterPaths } from './auto-router/decide.m
 import { publishAutoRouterFiles, publicAutoRouter, publishedTableReady } from './auto-router/publish.mjs'
 import { appendRoutingLog, readRoutingLog, sanitizeLogEntry, summarizeRoutingLog } from './auto-router/log.mjs'
 import { estimateTokenCost, loadScoringTable } from './auto-router/scorer.mjs'
+import { isLocateName, locateCandidates, locateFromStatus, locateStep, mediaExtension } from './media-locate.mjs'
+import { resolveCitedFile, workspacesForProfile } from './cite-resolve.mjs'
+import { ensurePreviewImage, ensureVideoPoster } from './video-poster.mjs'
 import { resolveVideoFile, serveVideoFile, videoRouteDecision } from './video-stream.mjs'
 
 const CONFIG = configModule.loadConfig()
+const THUMB_DIR = path.join(CONFIG.dataDir, 'thumbs')
 const SHARED_MEMORY_DIR = memoryDir(CONFIG.sharedMemory.dir, CONFIG.dataDir)
 void ensureStore(SHARED_MEMORY_DIR).catch(() => {})
 const pagesLibrary = new PagesLibrary(CONFIG.pagesLibraryDir)
@@ -921,7 +925,7 @@ async function mintSocketTicket(request, profile) {
 // Hermes session kept here. Must stay identical to PLAYABLE in src/lib/media.ts.
 const MEDIA_TYPES = {
   png: ['image', 'image/png'], jpg: ['image', 'image/jpeg'], jpeg: ['image', 'image/jpeg'],
-  gif: ['image', 'image/gif'], webp: ['image', 'image/webp'], bmp: ['image', 'image/bmp'],
+  gif: ['image', 'image/gif'], webp: ['image', 'image/webp'], bmp: ['image', 'image/bmp'], heic: ['image', 'image/heic'], heif: ['image', 'image/heif'],
   mp4: ['video', 'video/mp4'], m4v: ['video', 'video/x-m4v'], mov: ['video', 'video/quicktime'], webm: ['video', 'video/webm'],
   mp3: ['audio', 'audio/mpeg'], m4a: ['audio', 'audio/mp4'], wav: ['audio', 'audio/wav'],
   ogg: ['audio', 'audio/ogg'], opus: ['audio', 'audio/ogg'], flac: ['audio', 'audio/flac'],
@@ -934,19 +938,39 @@ const MEDIA_ERRORS = {
   413: [415, 'unsupported_media'], 415: [415, 'unsupported_media'],
 }
 
-function fileRequest(url) {
+function fileRequest(url, { allowRelative = false } = {}) {
   const profile = url.searchParams.get('profile') || ''
   const file = url.searchParams.get('path') || ''
   if (!MEDIA_PROFILE.test(profile)) return { status: 400, error: 'invalid_profile' }
   if (!file || file.length > 4096 || /[\u0000-\u001f\u007f]/.test(file)) return { status: 400, error: 'invalid_path' }
-  // Absolute file path: no folder (`x.png/`), no host (`//host/x.png`), no `.` or `..`.
-  if (!(file.startsWith('/') || file.startsWith('~/')) || file.startsWith('//') || file.endsWith('/')) return { status: 400, error: 'invalid_path' }
+  // No folder (`x.png/`), no host (`//host/x.png`), no `.` or `..`. A relative path is only
+  // accepted for media, and only so the server can resolve it inside the allowlist.
+  if (file.startsWith('//') || file.endsWith('/') || file.includes('\\')) return { status: 400, error: 'invalid_path' }
   if (file.split('/').some((part) => part === '.' || part === '..')) return { status: 400, error: 'invalid_path' }
+  const absolute = file.startsWith('/') || file.startsWith('~/')
+  if (!absolute && !allowRelative) return { status: 400, error: 'invalid_path' }
   return { profile, file, extension: path.extname(file).slice(1).toLowerCase() }
 }
 
+function contentTypes(kind) {
+  return Object.fromEntries(Object.entries(MEDIA_TYPES).filter(([, value]) => value[0] === kind).map(([ext, value]) => [ext, value[1]]))
+}
+
+function locateTypes() {
+  return { ...contentTypes('image'), ...contentTypes('video'), ...contentTypes('audio'), pdf: 'application/pdf' }
+}
+
+function openCited(file, profile, kind) {
+  return resolveCitedFile(file, {
+    roots: CONFIG.videoRoots,
+    home: os.homedir(),
+    workspaces: workspacesForProfile(profile, { hermesHome: CONFIG.hermesHome, home: os.homedir() }),
+    types: contentTypes(kind),
+  })
+}
+
 function mediaRequest(url) {
-  const target = fileRequest(url)
+  const target = fileRequest(url, { allowRelative: true })
   if (target.error) return target
   const type = MEDIA_TYPES[target.extension]
   if (!type) return { status: 415, error: 'unsupported_media' }
@@ -985,7 +1009,16 @@ async function handleMedia(request, response, url) {
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   // Video is read here when the file is on this machine. Another Mac relays it; it never opens a local path.
   if (target.kind === 'video') return serveOrRelayVideo(request, response, target)
-  // Images: the gateway's download route, capped. Audio: its streaming route, with Range, uncapped.
+  if (target.kind === 'image') {
+    const opened = await openCited(target.file, target.profile, 'image')
+    if (opened.ok) {
+      const preview = await ensurePreviewImage(opened.file, opened, { cacheDir: THUMB_DIR, contentType: opened.contentType })
+      if (preview.ok) return serveVideoFile(request, response, { file: preview.file, size: preview.size, contentType: preview.contentType })
+    } else if (opened.status === 400 || opened.status === 415) {
+      return json(response, opened.status, { error: opened.error })
+    }
+  }
+  // Images the disk does not have: the gateway's download route, capped. Audio: its streaming route, with Range.
   const ranged = target.kind === 'audio'
   return relayFile(request, response, target, target.kind === 'image' ? '/api/fs/download' : '/api/files/stream', {
     // The URL carries the message id (`v`): a file rewritten under the same name comes back with a fresh URL.
@@ -1003,8 +1036,98 @@ async function handleVideo(request, response, url) {
   return serveOrRelayVideo(request, response, target)
 }
 
+const STREAMED_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mp3', 'm4a', 'wav', 'ogg', 'opus', 'flac'])
+const LOCAL_VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm'])
+
+async function gatewayHead(request, route, profile, file) {
+  const upstream = await hermesFetch(request, `${route}?${new URLSearchParams({ path: file, profile })}`, { method: 'HEAD' })
+  upstream.body?.cancel().catch(() => {})
+  return upstream.status
+}
+
+/** One JPEG of a video that is on this machine. A file that is not here is 404: the player uses its own frame. */
+async function handleVideoPoster(request, response, url) {
+  const target = mediaRequest(url)
+  if (target.error) return json(response, target.status, { error: target.error })
+  if (target.kind !== 'video') return json(response, 415, { error: 'unsupported_media' })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const opened = await openCited(target.file, target.profile, 'video')
+  if (!opened.ok) return json(response, opened.status === 404 ? 404 : opened.status, { error: opened.status === 404 ? 'poster_unavailable' : opened.error })
+  const poster = await ensureVideoPoster(opened.file, opened, { cacheDir: THUMB_DIR })
+  if (!poster.ok) return json(response, 404, { error: 'poster_unavailable' })
+  const body = await readFile(poster.file)
+  const headers = {
+    'Content-Type': 'image/jpeg',
+    'Content-Length': String(body.length),
+    'Cache-Control': 'private, max-age=86400',
+    'X-Content-Type-Options': 'nosniff',
+  }
+  if (poster.duration) headers['X-Video-Duration'] = String(poster.duration)
+  response.writeHead(200, headers)
+  if (request.method === 'HEAD') return response.end()
+  response.end(body)
+}
+
+/**
+ * Resolves a bare or relative citation. Turn paths win, then the profile workspace
+ * (`/api/fs/default-cwd`). A local video outside the allowlist is not allowed; a missing
+ * local file is checked with a gateway HEAD, never downloaded.
+ */
+async function handleMediaLocate(request, response, url) {
+  const profile = url.searchParams.get('profile') || ''
+  const name = url.searchParams.get('name') || ''
+  if (!MEDIA_PROFILE.test(profile)) return json(response, 400, { error: 'invalid_profile' })
+  if (!isLocateName(name)) return json(response, 400, { error: 'invalid_path' })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  const hints = url.searchParams.getAll('hint').filter((hint) => hint.length <= 4096).slice(0, 32)
+  let workspace = ''
+  try {
+    const upstream = await hermesFetch(request, `/api/fs/default-cwd?${new URLSearchParams({ profile })}`)
+    if (upstream.ok) {
+      const body = await upstream.json()
+      if (typeof body?.cwd === 'string') workspace = body.cwd
+    } else upstream.body?.cancel().catch(() => {})
+  } catch {
+    // No workspace: the turn paths are the only candidates.
+  }
+  const extension = mediaExtension(name)
+  const candidates = locateCandidates(name, hints, workspace)
+  for (const candidate of candidates) {
+    if (LOCAL_VIDEO_EXTENSIONS.has(extension)) {
+      const opened = await resolveVideoFile(candidate, CONFIG.videoRoots)
+      const step = locateStep(opened)
+      if (step.action === 'use') return json(response, 200, { path: candidate, state: 'ok' })
+      if (step.action === 'stop') return json(response, 200, { path: candidate, state: step.state })
+    }
+    const route = STREAMED_EXTENSIONS.has(extension) ? '/api/files/stream' : '/api/fs/download'
+    let status = 502
+    try {
+      status = await gatewayHead(request, route, profile, candidate)
+    } catch {
+      status = 502
+    }
+    const step = locateFromStatus(status)
+    if (step.action === 'use') return json(response, 200, { path: candidate, state: 'ok' })
+    if (step.action === 'stop') return json(response, 200, { path: candidate, state: step.state })
+  }
+  // Nothing in the turn or the workspace: one unique file of this name inside the allowlist.
+  const workspaces = []
+  if (workspace.startsWith('/') || workspace.startsWith('~/')) workspaces.push(workspace)
+  for (const dir of workspacesForProfile(profile, { hermesHome: CONFIG.hermesHome, home: os.homedir() })) {
+    if (!workspaces.includes(dir)) workspaces.push(dir)
+  }
+  const opened = await resolveCitedFile(name, {
+    roots: CONFIG.videoRoots,
+    home: os.homedir(),
+    workspaces,
+    types: locateTypes(),
+  })
+  if (opened.ok) return json(response, 200, { path: opened.file, state: 'ok' })
+  return json(response, 200, { path: '', state: 'not_found' })
+}
+
 async function serveOrRelayVideo(request, response, target) {
-  const opened = await resolveVideoFile(target.file, CONFIG.videoRoots)
+  const opened = await openCited(target.file, target.profile, 'video')
   const decision = videoRouteDecision({ authed: true, opened })
   if (decision.action === 'serve') return serveVideoFile(request, response, opened)
   if (decision.action === 'relay') {
@@ -1886,6 +2009,12 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/video' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleVideo(request, response, url)
+    }
+    if (url.pathname === '/api/video/poster' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return await handleVideoPoster(request, response, url)
+    }
+    if (url.pathname === '/api/media/locate' && request.method === 'GET') {
+      return await handleMediaLocate(request, response, url)
     }
     if (url.pathname === '/api/document' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleDocument(request, response, url)
