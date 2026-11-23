@@ -27,4 +27,28 @@ describe('progress bubbles', () => {
       expect(items[1].collapsed).toBe(true)
     }
   })
+
+  it('keeps a running turn as one live group and folds history steps that have no progress flag', () => {
+    const tool = (id: string): ChatMessage => ({ id, role: 'tool', content: 'terminal', createdAt: null, technical: true })
+    const running = [user('u1'), say('s1', 'Je regarde le code.'), tool('t1'), say('s2', 'Encore un peu.')]
+    const live = threadItems(running, true, 'orion', true)
+    const liveTurn = live.at(-1)
+    expect(liveTurn).toMatchObject({ kind: 'turn', collapsed: false })
+    if (liveTurn?.kind === 'turn') expect(liveTurn.progress.map((item) => item.id)).toEqual(['s1', 's2'])
+
+    const done = threadItems(running, false, 'orion', true)
+    const doneTurn = done.at(-1)
+    expect(doneTurn?.kind).toBe('turn')
+    if (doneTurn?.kind === 'turn') {
+      expect(doneTurn.progress.map((item) => item.content)).toEqual(['Je regarde le code.'])
+      expect(doneTurn.answer?.id).toBe('s2')
+      expect(doneTurn.collapsed).toBe(true)
+    }
+  })
+
+  it('does not repeat the final answer inside the steps', () => {
+    const messages = [user('u1'), say('p1', 'Terminé.', true), say('a1', 'Terminé.')]
+    const items = threadItems(messages, false, 'orion', true)
+    expect(items[1]).toEqual({ kind: 'message', message: messages[2] })
+  })
 })

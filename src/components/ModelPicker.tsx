@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } from 'lucide-react'
 import type { ModelOption } from '../types'
-import { modelLabel } from '../lib/model'
+import { chipModelLabel, modelLabel } from '../lib/model'
 import { providerBrand } from '../lib/providers'
 import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
@@ -254,7 +254,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                   <ChevronRight className="model-group-chevron" size={14} />
                   <ProviderTile group={group} />
                   <span className="model-group-name">{group.name}</span>
-                  {!open && group.slug === currentSlug && <span className="model-group-current">{modelLabel(current)}</span>}
+                  {!open && group.slug === currentSlug && <span className="model-group-current">{chipModelLabel(current)}</span>}
                   <span className="model-group-count">{group.models.length}</span>
                 </button>
                 <div className="model-group-body" id={bodyId} inert={!open}>
@@ -274,7 +274,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           onMouseMove={() => setActiveKey(key)}
                           onClick={() => choose(option)}
                         >
-                          <span className="model-option-name">{modelLabel(option.model)}</span>
+                          <span className="model-option-name">{chipModelLabel(option.model)}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
                           {freeMode && modelCost(option, ui.subscriptionProviders) === 'paid' && <span className="model-option-tag is-paid">{t('models.paid')}</span>}

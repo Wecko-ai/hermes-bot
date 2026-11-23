@@ -2,6 +2,8 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 import { useTranslation } from 'react-i18next'
 import { Check, Copy, ArrowDown, ChevronDown, Volume2 } from 'lucide-react'
 import { autoRouteDisplay } from '../lib/auto-route-label'
+import { answeredByMessage, answeredLabel, answeredTitle, currentAnswered } from '../lib/turn-model'
+import type { AnsweredBy } from '../types'
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AgentMessage, Bot, ChatMessage } from '../types'
@@ -249,6 +251,8 @@ interface MessageProps {
   askable?: boolean
   /** Auto mode: the model the router picked for this turn, shown as a small label in the meta. */
   autoRoute?: ChatMessage['autoRoute']
+  /** Hermes left the selected model: the model that actually answered. */
+  answeredBy?: AnsweredBy
 }
 
 // A message the user just sent fades in; a loaded or cached thread shows as is.
@@ -344,6 +348,15 @@ export function currentAutoRoute(messages: ChatMessage[]) {
   return undefined
 }
 
+function AnsweredLabel({ answered, className }: { answered: AnsweredBy; className: string }) {
+  const { t } = useTranslation()
+  return (
+    <span className={className} title={answeredTitle(answered)}>
+      {answeredLabel(answered, t('models.fallbackMark'))}
+    </span>
+  )
+}
+
 function AutoRouteLabel({ route, className }: { route: AutoRoute; className: string }) {
   const { t } = useTranslation()
   const mode = route.mode === 'auto-free' ? t('autoRouter.modeFree') : t('autoRouter.mode')
@@ -354,7 +367,7 @@ function AutoRouteLabel({ route, className }: { route: AutoRoute; className: str
   )
 }
 
-const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, onVaultFormDone, askable = false, autoRoute }: MessageProps) {
+const Message = memo(function Message({ message, profile, onOpenImages, onOpenDocument, onVaultFormDone, askable = false, autoRoute, answeredBy }: MessageProps) {
   const { t, i18n } = useTranslation()
   const replyListen = useAppConfig().ui.replyListenButton
   const [copied, setCopied] = useState(false)
@@ -413,7 +426,9 @@ const Message = memo(function Message({ message, profile, onOpenImages, onOpenDo
         <div className="message-meta">
           <span>{message.pending ? t('messages.sending') : message.failed ? t('messages.sendFailed') : shortTime(message.createdAt)}</span>
           {message.delivery && !message.failed && <span className={`message-delivery is-${message.delivery}`}>{message.delivery === 'priority' ? t('messages.priority') : t('messages.queued')}</span>}
-          {autoRoute && <AutoRouteLabel route={autoRoute} className="message-auto-route" />}
+          {answeredBy
+            ? <AnsweredLabel answered={answeredBy} className="message-auto-route" />
+            : autoRoute && <AutoRouteLabel route={autoRoute} className="message-auto-route" />}
           {message.role === 'assistant' && (
             <>
               <button type="button" className="message-copy" aria-label={t('messages.copyReply')} onClick={copy}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>
@@ -485,12 +500,17 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     : thread
   const working = (running || Boolean(streaming)) && !liveReply
   const autoRoutes = useMemo(() => autoRoutesByMessage(messages), [messages])
+  const answeredTurns = useMemo(() => answeredByMessage(messages), [messages])
   const liveRoute = working ? currentAutoRoute(messages) : undefined
+  const liveAnswered = working ? currentAnswered(messages) : undefined
   const routeFor = (message: ChatMessage) => message.role === 'assistant'
     ? (message.streaming || message.progress ? undefined : autoRoutes.replies.get(message.id))
     : message.role === 'user' && message.autoRoute && !autoRoutes.answered.has(message.id) && !(working && message.autoRoute === liveRoute)
       ? message.autoRoute
       : undefined
+  const answeredFor = (message: ChatMessage) => message.role === 'assistant' && !message.streaming && !message.progress
+    ? message.answeredBy ?? answeredTurns.get(message.id)
+    : undefined
   // A card being written is never shown raw: the line says so until the card arrives.
   const caption = activity || (streaming.includes(MAIL_FENCE) ? t('mail.drafting') : streaming.includes(DRAFT_FENCE) ? t('draft.drafting') : streaming.includes(PLACES_FENCE) ? t('places.drafting') : workText) || t('messages.working', { name: bot.name })
   const count = items.length
@@ -673,7 +693,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           const currentDay = rowStamp(row)
           const previousDay = index > 0 ? rowStamp(items[index - 1]) : ''
           const renderMessage = (message: ChatMessage, askable: boolean) => (
-            <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} onVaultFormDone={onVaultFormDone} askable={askable} autoRoute={routeFor(message)} />
+            <Message message={message} profile={profile} onOpenImages={openImages} onOpenDocument={openDocument} onVaultFormDone={onVaultFormDone} askable={askable} autoRoute={answeredFor(message) ? undefined : routeFor(message)} answeredBy={answeredFor(message)} />
           )
           if (row.kind === 'turn') {
             const lastAssistant = !working && index === items.length - 1
@@ -702,7 +722,9 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             <LiveAvatar bot={{ ...bot, status: bot.status === 'idle' || bot.status === 'done' ? 'working' : bot.status }} size={24} />
             {/* A new caption slides in; the sheen runs over whatever is written. */}
             <span className="working-caption" key={caption} title={caption}>{caption}</span>
-            {liveRoute && <AutoRouteLabel route={liveRoute} className="working-auto-route" />}
+            {liveAnswered
+              ? <AnsweredLabel answered={liveAnswered} className="working-auto-route" />
+              : liveRoute && <AutoRouteLabel route={liveRoute} className="working-auto-route" />}
           </div>
         )}
         <div ref={endRef} className="messages-end" />

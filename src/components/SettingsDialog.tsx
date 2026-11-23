@@ -8,7 +8,7 @@ import { version } from '../../package.json'
 import type { HermesClient } from '../lib/hermes'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
-import { modelLabel } from '../lib/model'
+import { chipModelLabel, modelLabel } from '../lib/model'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { modelCost } from '../lib/free-models'
@@ -462,7 +462,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
               {open && group.models.map((option) => (
                 <label key={hiddenModelKey(option)} className="settings-model" data-model={option.model}>
                   <input type="checkbox" checked={!hidden.has(hiddenModelKey(option))} onChange={(event) => setVisible([option], event.target.checked)} />
-                  <span className="settings-model-label">{modelLabel(option.model)}</span>
+                  <span className="settings-model-label">{chipModelLabel(option.model)}</span>
                   <code>{option.model}</code>
                   <ModelScoreMeta info={scored.get(`${option.provider}:${option.model}`)} />
                   {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}

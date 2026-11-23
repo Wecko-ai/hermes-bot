@@ -16,7 +16,10 @@ describe('modèles et usage', () => {
   it('dit Cursor dans la pastille du champ, pas dans les lignes du sélecteur', () => {
     expect(modelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5')
     expect(chipModelLabel('cursor/claude-sonnet-5-5')).toBe('Sonnet 5.5 · Cursor')
-    expect(chipModelLabel('cursor/gpt-5.6-sol')).toBe('GPT Sol 5.6 · Cursor')
+    expect(chipModelLabel('cursor/gpt-5.6-sol')).toBe('GPT 5.6 Sol · Cursor')
+    expect(chipModelLabel('cursor/gpt-5.6-luna')).toBe('GPT 5.6 Luna · Cursor')
+    expect(modelLabel('gpt-5.6-sol-high')).toBe('GPT 5.6 Sol High')
+    expect(modelLabel('kimi-k2.8')).toBe('Kimi K2.8')
     expect(chipModelLabel('claude-sonnet-5-5')).toBe('Sonnet 5.5')
     expect(chipModelLabel('openrouter/anthropic/claude-sonnet-5.5')).toBe('Sonnet 5.5')
   })

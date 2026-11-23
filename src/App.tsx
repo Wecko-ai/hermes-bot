@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
-import type { Bot, ChatMessage, ModelOption } from './types'
+import type { AnsweredBy, Bot, ChatMessage, ModelOption } from './types'
 import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
 import { enrichRoutines } from './lib/routines'
 import { mergeRoster } from './lib/activity'
@@ -72,6 +72,7 @@ import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
 import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
 import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
+import { answeredFromEvent, answeredFromUsage, answeredLabel, answeredStorageIds, composerReadout, lastTurnUserId, preferAnswered, rememberAnswered, stampAnswered, usageNamesAnswered, withRememberedAnswers } from './lib/turn-model'
 import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, providerErrorText, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
@@ -184,6 +185,15 @@ export default function App() {
   const sendsInFlight = useRef(new Set<string>())
   /** In-flight auto-routed turn metadata for routing log (no prompt stored). */
   const autoTurnRef = useRef(new Map<string, AutoTurnTrack>())
+  /** Model Hermes switched to mid-turn, per bot, while that turn is still running. */
+  const liveAnsweredRef = useRef(new Map<string, AnsweredBy>())
+  /** Same switch, kept after the turn so a late stats read cannot put the selected model's numbers back. */
+  const usageAnchorRef = useRef(new Map<string, AnsweredBy>())
+  /** Bots whose latest turn has not yet reported usage for the model that is answering. */
+  const usageHeldRef = useRef(new Set<string>())
+  const [liveAnswered, setLiveAnswered] = useState<AnsweredBy | null>(null)
+  const [usageAnchor, setUsageAnchor] = useState<AnsweredBy | null>(null)
+  const [usageHeld, setUsageHeld] = useState(false)
   /** The open voice mode, read by the gateway event handler. */
   const voiceRef = useRef<{ session: VoiceSession; profile: string } | null>(null)
   /** Latest Stop per session, so a finished stop does not clear a newer one. */
@@ -272,7 +282,13 @@ export default function App() {
     if (DEMO) return
     void loadUsage(client, chat).then((next) => {
       if (!next || useChatStore.getState().activeChat?.sessionId !== chat.sessionId) return
+      const anchor = usageAnchorRef.current.get(chat.profile)
+      if (anchor && !usageNamesAnswered(next, anchor)) return
       setUsage((value) => mergeUsage(value, next))
+      if (anchor) {
+        usageHeldRef.current.delete(chat.profile)
+        if (useChatStore.getState().activeChat?.profile === chat.profile) setUsageHeld(false)
+      }
     }).catch(() => { /* keep the last counters */ })
   }, [client])
   const [compacting, setCompacting] = useState(false)
@@ -490,11 +506,40 @@ export default function App() {
       if (event.type === 'session.usage') {
         // The cache read only exists in the frame’s counters, not in its `usage` view.
         const next = parseUsage({ ...payload, ...(payload.usage as object | undefined) })
-        if (next) setUsage((value) => mergeUsage(value, next))
+        const selectedModel = useChatStore.getState().chatModel || current.model || ''
+        const announced = answeredFromUsage(payload, selectedModel)
+        if (announced) {
+          const chosen = preferAnswered(usageAnchorRef.current.get(current.profile), announced)
+          liveAnsweredRef.current.set(current.profile, chosen)
+          usageAnchorRef.current.set(current.profile, chosen)
+          if (useChatStore.getState().activeChat?.profile === current.profile) {
+            setLiveAnswered(chosen)
+            setUsageAnchor(chosen)
+          }
+          const userId = autoTurnRef.current.get(current.profile)?.userMessageId ?? lastTurnUserId(useChatStore.getState().messages)
+          if (userId) {
+            setMessages((items) => stampAnswered(items, userId, chosen))
+            useChatStore.getState().patchCachedMessage(current.profile, userId, { answeredBy: chosen })
+          }
+        }
+        const answering = usageAnchorRef.current.get(current.profile)
+        const acceptable = !answering || usageNamesAnswered(next, answering)
+        if (next && acceptable) setUsage((value) => mergeUsage(value, next))
+        if (acceptable) usageHeldRef.current.delete(current.profile)
+        else usageHeldRef.current.add(current.profile)
+        if (useChatStore.getState().activeChat?.profile === current.profile) setUsageHeld(usageHeldRef.current.has(current.profile))
       }
       if (event.type === 'message.start') {
         // `session.steer` and `session.interrupt` target this turn, not the previous one.
         if (event.execution_generation) setActiveChat({ ...current, executionGeneration: event.execution_generation })
+        liveAnsweredRef.current.delete(current.profile)
+        usageAnchorRef.current.delete(current.profile)
+        usageHeldRef.current.add(current.profile)
+        if (useChatStore.getState().activeChat?.profile === current.profile) {
+          setLiveAnswered(null)
+          setUsageAnchor(null)
+          setUsageHeld(true)
+        }
         setStreamKey(`turn-${typeof payload.turn_id === 'string' && payload.turn_id ? payload.turn_id : 'tour'}-${Date.now()}`)
         clearDoneTimer(current.profile)
         setRunning(true)
@@ -507,9 +552,11 @@ export default function App() {
         if (text) setStreaming((value) => value + text)
         setRunning(true)
       }
-      // Hermes switched to its own fallback model (rate limit, outage): the Auto label follows the real model.
+      // Hermes switched to its own fallback model (rate limit, outage): the chip and the answer follow the real model.
       const hermesFallback = event.type === 'status.update' ? parseModelFallback(payload.text) : null
       if (hermesFallback) {
+        const announced = answeredFromEvent('status.update', payload)
+        const chosen = announced ? preferAnswered(usageAnchorRef.current.get(current.profile), announced) : null
         const track = autoTurnRef.current.get(current.profile)
         if (track) {
           track.plan.badge = {
@@ -519,8 +566,24 @@ export default function App() {
             reason: `Hermes fallback${hermesFallback.reason ? ` (${hermesFallback.reason})` : ''} from ${hermesFallback.fromModel}`,
           }
           const badge = track.plan.badge
-          useChatStore.getState().patchCachedMessage(current.profile, track.userMessageId, { autoRoute: badge })
-          setMessages((items) => items.map((item) => (item.id === track.userMessageId ? { ...item, autoRoute: badge } : item)))
+          useChatStore.getState().patchCachedMessage(current.profile, track.userMessageId, { autoRoute: badge, ...(chosen ? { answeredBy: chosen } : {}) })
+          setMessages((items) => items.map((item) => (item.id === track.userMessageId ? { ...item, autoRoute: badge, ...(chosen ? { answeredBy: chosen } : {}) } : item)))
+        } else if (chosen) {
+          const userId = lastTurnUserId(useChatStore.getState().messages)
+          if (userId) {
+            setMessages((items) => stampAnswered(items, userId, chosen))
+            useChatStore.getState().patchCachedMessage(current.profile, userId, { answeredBy: chosen })
+          }
+        }
+        if (chosen) {
+          liveAnsweredRef.current.set(current.profile, chosen)
+          usageAnchorRef.current.set(current.profile, chosen)
+          usageHeldRef.current.add(current.profile)
+          if (useChatStore.getState().activeChat?.profile === current.profile) {
+            setLiveAnswered(chosen)
+            setUsageAnchor(chosen)
+            setUsageHeld(true)
+          }
         }
         refreshChatUsage(current)
       }
@@ -568,7 +631,9 @@ export default function App() {
       if (event.type === 'message.complete' && turnEnded) {
         const status = typeof payload.status === 'string' ? payload.status : 'complete'
         const finalUsage = parseUsage(payload.usage)
-        if (finalUsage) setUsage((value) => mergeUsage(value, finalUsage))
+        const usageAnchorNow = usageAnchorRef.current.get(current.profile)
+        const usageOk = !usageAnchorNow || usageNamesAnswered(finalUsage, usageAnchorNow)
+        if (finalUsage && usageOk) setUsage((value) => mergeUsage(value, finalUsage))
         let deferTurnEnd = false
         const autoTrack = autoTurnRef.current.get(current.profile)
         if (autoTrack && current.sessionId) {
@@ -654,6 +719,11 @@ export default function App() {
         const visibleText = withoutSilentMarkers(finalText)
         const meaningful = Boolean(visibleText) && !isSilentMessage(visibleText)
         if (voiceRef.current?.profile === current.profile) voiceRef.current.session.turnEnded({ text: visibleText, meaningful })
+        const answeredNow = liveAnsweredRef.current.get(current.profile) ?? usageAnchorRef.current.get(current.profile)
+        if (answeredNow && current.sessionId) {
+          const userId = autoTurnRef.current.get(current.profile)?.userMessageId ?? lastTurnUserId(useChatStore.getState().messages)
+          rememberAnswered(current.sessionId, answeredStorageIds(payload, userId), answeredNow)
+        }
         if (meaningful) {
           const message: ChatMessage = {
             id: useChatStore.getState().streamKey || `live-${Date.now()}`,
@@ -661,7 +731,9 @@ export default function App() {
             content: visibleText,
             createdAt: new Date().toISOString(),
             failed: status === 'error',
+            ...(answeredNow ? { answeredBy: answeredNow } : {}),
           }
+          if (answeredNow && current.sessionId) rememberAnswered(current.sessionId, [message.id], answeredNow)
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)
           updateCachedChat(current.profile, { running: false })
@@ -678,6 +750,13 @@ export default function App() {
           const message: ChatMessage = { id: `interrupted-${Date.now()}`, role: 'system', content: i18n.t('app.turnInterrupted'), createdAt: new Date().toISOString() }
           setMessages((items) => [...items, message])
           appendCachedMessage(current.profile, message)
+        }
+        liveAnsweredRef.current.delete(current.profile)
+        if (usageOk) usageHeldRef.current.delete(current.profile)
+        else usageHeldRef.current.add(current.profile)
+        if (useChatStore.getState().activeChat?.profile === current.profile) {
+          setLiveAnswered(null)
+          setUsageHeld(usageHeldRef.current.has(current.profile))
         }
         setStreaming('')
         setStreamKey('')
@@ -1056,6 +1135,11 @@ export default function App() {
   const openSession = activeChat?.sessionId
   const openProfile = activeChat?.profile
   const openSocket = activeChat?.socketGeneration
+  useEffect(() => {
+    setLiveAnswered(openProfile ? liveAnsweredRef.current.get(openProfile) ?? null : null)
+    setUsageAnchor(openProfile ? usageAnchorRef.current.get(openProfile) ?? null : null)
+    setUsageHeld(openProfile ? usageHeldRef.current.has(openProfile) : false)
+  }, [openProfile])
   useEffect(() => {
     if (DEMO || auth !== 'ready' || !openSession || !openProfile) return
     let stopped = false
@@ -1551,7 +1635,7 @@ export default function App() {
       const latest = getCached(profile) || cached
       const preserveLive = !resumed && Boolean(latest && (useChatStore.getState().activeChat?.running || useChatStore.getState().streaming))
       if (chatResult.status === 'fulfilled') {
-        const nextMessages = resolveSyncedMessages(latest, chatResult.value.messages, preserveLive)
+        const nextMessages = withRememberedAnswers(chatResult.value.chat.sessionId, resolveSyncedMessages(latest, chatResult.value.messages, preserveLive))
         const nextRoutines = getCached(profile)?.routines || cached?.routines || []
         applySyncedChat(profile, { chat: chatResult.value.chat, messages: nextMessages, routines: nextRoutines }, { preserveLive, resumed })
         const openPrompts = chatResult.value.prompts
@@ -2676,9 +2760,11 @@ export default function App() {
         onOpenDocument={openDocument}
         onVaultFormDone={onVaultFormDone}
         onOpenBot={openBot}
-        modelLabel={isAutoModel(chatModel) ? t(chatModel === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : chipModelLabel(chatModel || selectedBot.model)}
+        modelLabel={running && liveAnswered
+          ? answeredLabel(liveAnswered, t('models.fallbackMark'))
+          : isAutoModel(chatModel) ? t(chatModel === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : chipModelLabel(chatModel || selectedBot.model)}
         onOpenModels={openModels}
-        usage={usage}
+        usage={composerReadout(usage, { running, fresh: !usageHeld, answered: usageAnchor })}
         showUsage={showUsage}
         onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
         prompts={shownPrompts}

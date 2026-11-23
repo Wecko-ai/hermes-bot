@@ -129,6 +129,20 @@ export interface ChatMessage {
   progress?: boolean
   /** Auto routing badge for this user turn (no prompt text). */
   autoRoute?: { mode?: 'auto' | 'auto-free'; category: string; chosen: string; label?: string; reason: string }
+  /** Model that actually produced this turn, when Hermes left the selected one. */
+  answeredBy?: AnsweredBy
+}
+
+/** The model a turn ran on after Hermes switched mid-turn (`status.update` / `session.usage`). */
+export interface AnsweredBy {
+  /** Route id the label helpers expect (`provider/model`, or the notice's doubled form). */
+  chosen: string
+  provider: string
+  /** Model id the gateway named (`cursor/composer-2.5`). */
+  model: string
+  fallback: true
+  fromModel?: string
+  reason?: string
 }
 
 /** One child asked for by `delegate_task`: its goal and the background the bot gave it. */

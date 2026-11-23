@@ -474,6 +474,7 @@
     "pick": "choose",
     "contextPercent": "Context {{percent}}% ({{used}}/{{max}})",
     "contextNone": "Context —",
+    "fallbackMark": "(fallback)",
     "freeTag": "Free",
     "scoreLabel": "LLM Stats general score: {{score}}",
     "scoresBy": "Data by ",

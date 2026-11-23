@@ -1,6 +1,7 @@
 /**
- * Readable model names. One pattern for every family, the one Anthropic's names already follow:
- * Family, then tier words, then the version ("gemini-3.5-flash" -> "Gemini Flash 3.5").
+ * Readable model names. Words stay in the order the id writes them, so the version is not moved
+ * behind a later codename ("gpt-5.6-sol" -> "GPT 5.6 Sol", "gemini-3.5-flash" -> "Gemini 3.5 Flash",
+ * "claude-sonnet-5.5" -> "Claude Sonnet 5.5", "kimi-k2.8" -> "Kimi K2.8").
  * Pure and offline: no table of models to keep up to date, only a few rules on the shape of an id.
  * Claude ids keep their short form ("Opus 5.5").
  */
@@ -11,6 +12,8 @@ export interface ParsedModel {
   tiers: string[]
   /** Bare numeric version ("3.5"), or an empty string. */
   version: string
+  /** The version is written before the tier words (`gpt-5.6-sol`), not after them (`claude-sonnet-5.5`). */
+  versionBeforeTiers: boolean
   /** Version carrying a letter ("v4", "k3.1", "m2.7"): it stays in place, as in "DeepSeek V4 Flash". */
   prefixedVersion: string
   /** Parameter counts ("27B", "A12B"). */
@@ -100,6 +103,7 @@ export function parseModelId(raw: string): ParsedModel | null {
   let family = ''
   let version = ''
   let prefixedVersion = ''
+  let versionBeforeTiers = false
   const tiers: string[] = []
   const sizes: string[] = []
   const qualifiers: string[] = []
@@ -108,8 +112,10 @@ export function parseModelId(raw: string): ParsedModel | null {
     if (/^\d+(\.\d+)?[bmkt]$/.test(token) || /^a\d+(\.\d+)?b$/.test(token)) sizes.push(token.toUpperCase())
     else if (/^\d+(\.\d+)*$/.test(token)) {
       // The first bare number is the version; a second one (two numbers not merged above) is kept as a word.
-      if (!version) version = token
-      else tiers.push(token)
+      if (!version) {
+        version = token
+        if (tiers.length === 0) versionBeforeTiers = true
+      } else tiers.push(token)
     } else if (/^[a-z]\d+(\.\d+)*$/.test(token)) {
       // OpenAI writes its reasoning line "o3"; the others capitalise ("K3", "V4").
       if (!prefixedVersion) prefixedVersion = token.startsWith('o') ? token : token.toUpperCase()
@@ -120,10 +126,10 @@ export function parseModelId(raw: string): ParsedModel | null {
   }
   if (!family && !prefixedVersion) return null
   // Prefixed version first in the id and no family ("k3.1-pro"): it is the name itself.
-  return { family, tiers, version, prefixedVersion, sizes, qualifiers }
+  return { family, tiers, version, prefixedVersion, sizes, qualifiers, versionBeforeTiers }
 }
 
-/** "gemini-3.5-flash" -> "Gemini Flash 3.5". Unknown shapes keep the raw id rather than a wrong name. */
+/** "gpt-5.6-sol" -> "GPT 5.6 Sol". Unknown shapes keep the raw id rather than a wrong name. */
 export function prettyModelName(id: string, _provider?: string): string {
   const bare = id.replace(/^~/, '').split('/').pop() ?? ''
   const alias = ALIASES[bare.replace(DOTTED_PREFIX, '')]
@@ -133,8 +139,9 @@ export function prettyModelName(id: string, _provider?: string): string {
   const parts: string[] = []
   if (parsed.family) parts.push(titleWord(parsed.family))
   if (parsed.prefixedVersion) parts.push(parsed.prefixedVersion)
+  if (parsed.versionBeforeTiers && parsed.version) parts.push(parsed.version)
   parts.push(...parsed.tiers.map(titleWord))
-  if (parsed.version) parts.push(parsed.version)
+  if (!parsed.versionBeforeTiers && parsed.version) parts.push(parsed.version)
   parts.push(...parsed.sizes)
   parts.push(...parsed.qualifiers.map((qualifier) => QUALIFIERS[qualifier]))
   const name = parts.join(' ').trim()

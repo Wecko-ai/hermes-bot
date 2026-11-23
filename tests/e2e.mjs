@@ -3120,13 +3120,16 @@ try {
   if (await page.locator('.message-assistant').filter({ hasText: 'Et la suite du texte.' }).locator('video.media-video').count() !== 1) throw new Error('La vidéo doit arriver une fois, avec la réponse.')
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
 
-  // The bot's steps fold into the working line: its caption follows them, and only the reply stays in the thread.
+  // While the turn runs, only the latest step shows. After the reply, the steps stay collapsed.
   const stepsBefore = await page.locator('.message-assistant').count()
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test étapes')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
   await page.locator('.working-caption').getByText('Lance une commande').waitFor({ timeout: 3_000 })
   await page.locator('.working-row .live-avatar.is-working').waitFor({ timeout: 2_000 })
-  await page.locator('.progress-bubble').getByText('Je regarde le code.').waitFor({ timeout: 3_000 })
+  const liveTurn = page.locator('.progress-turn.is-live').last()
+  await liveTurn.locator('.progress-live').getByText('Je regarde le code.').waitFor({ timeout: 3_000 })
+  if (await liveTurn.locator('.progress-live').count() !== 1) throw new Error('Pendant le tour, une seule ligne d’étape.')
+  if (await liveTurn.locator('.progress-toggle, .progress-stack, .progress-line, .progress-bubble').count()) throw new Error('Pendant le tour, pas de pile ni de bouton.')
   if (await page.locator('.message-assistant .message-content').getByText('Je regarde le code.').count()) throw new Error('Une étape du bot est restée dans une bulle de réponse.')
   await page.locator('.working-caption').getByText('Je regarde le code.').waitFor({ timeout: 6_000 })
   await page.locator('.working-row').screenshot({ path: `${SCREENSHOTS}working-line.png` })
@@ -3134,7 +3137,16 @@ try {
   await page.locator('.working-row').waitFor({ state: 'detached', timeout: 3_000 })
   if (await page.locator('.message-assistant').count() !== stepsBefore + 1) throw new Error('Un tour avec étapes doit laisser un seul message du bot.')
   if (await page.locator('.message-assistant .message-content').getByText('Je regarde le code.').count()) throw new Error('L’étape est réapparue dans la réponse finale.')
-  if (!(await page.locator('.progress-turn.is-collapsed .progress-bubble').count())) throw new Error('Les étapes doivent être regroupées sous la réponse.')
+  const stepsToggle = page.locator('.progress-turn.is-collapsed').last().locator('.progress-toggle')
+  await stepsToggle.waitFor({ timeout: 3_000 })
+  const stepsLabel = (await stepsToggle.innerText()).replace(/\s+/g, ' ').trim()
+  if (stepsLabel !== 'Afficher 1 étape') throw new Error(`Les étapes finies doivent être repliées : ${stepsLabel}`)
+  if (await page.locator('.progress-line, .progress-live, .progress-bubble').count()) throw new Error('Les étapes doivent rester repliées après la réponse.')
+  await page.locator('.progress-turn.is-collapsed').last().screenshot({ path: `${SCREENSHOTS}steps-collapsed.png` })
+  await stepsToggle.click()
+  await page.locator('.progress-line').getByText('Je regarde le code.').waitFor({ timeout: 2_000 })
+  await stepsToggle.click()
+  if (await page.locator('.progress-line').count()) throw new Error('Un second clic doit replier les étapes.')
   if (await page.locator('.details-panel').isVisible()) {
     await page.locator('.details-panel').getByRole('tab', { name: /Activité/ }).click()
     await page.locator('.details-panel').screenshot({ path: `${SCREENSHOTS}details-activity.png` })
@@ -3570,7 +3582,7 @@ try {
   if (await nameOf('kimi-for-coding') !== 'Kimi K2.8 Preview') throw new Error(`Nom de modèle inattendu : ${await nameOf('kimi-for-coding')}`)
   if (await page.locator('.model-option[data-model="kimi-for-coding"] .model-score').count()) throw new Error('Un modèle inconnu de LLM Stats affiche un score.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).fill('')
-  if (await nameOf('gpt-6.1-sol') !== 'GPT Sol 6.1') throw new Error(`Nom de modèle inattendu : ${await nameOf('gpt-6.1-sol')}`)
+  if (await nameOf('gpt-6.1-sol') !== 'GPT 6.1 Sol') throw new Error(`Nom de modèle inattendu : ${await nameOf('gpt-6.1-sol')}`)
   if (await page.locator('.model-option[data-model="gpt-6.1-sol"]').getAttribute('title') !== 'gpt-6.1-sol') throw new Error('L’identifiant exact doit rester dans l’infobulle.')
   // Scores: badge and at most two chips; a model the list does not know has none.
   const opusRow = page.locator('.model-option[data-model="claude-opus-5-5"]')
@@ -4822,7 +4834,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot repliées dans la ligne de travail (un seul message par tour), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement, cartes d’adresses hermes-places (cartes natives, streaming sans carte partielle, photos locales, liens à pied, blocs invalides inertes).')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot (dernière ligne pendant le tour, puis « Afficher N étapes » replié), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement, cartes d’adresses hermes-places (cartes natives, streaming sans carte partielle, photos locales, liens à pied, blocs invalides inertes).')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

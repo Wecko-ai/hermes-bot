@@ -77,6 +77,15 @@ describe('fusion du cache de chat', () => {
     }
   })
 
+  it('keeps a fallback stamp when the server row replaces the cache body', () => {
+    const answeredBy = { chosen: 'cursor/composer-2.5', provider: 'cursor', model: 'cursor/composer-2.5', fallback: true as const }
+    const cachedRow = message('11945', T1, { content: 'Noté.', answeredBy })
+    const serverRow = message('11945', T1, { content: 'Noté.' })
+    const merged = resolveSyncedMessages(entry('a', [cachedRow]), [serverRow], false)
+    expect(merged[0].answeredBy).toEqual(answeredBy)
+    expect(merged[0].content).toBe('Noté.')
+  })
+
   it('does not replace a cached row with a different body for the same id', () => {
     const cachedRow = message('row-1', PAST, { content: 'kept' })
     const serverRow = message('row-1', FUTURE, { content: 'other' })

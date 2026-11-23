@@ -235,11 +235,63 @@ describe('Auto routing labels', () => {
     expect(html).toMatch(/message-assistant[\s\S]*message-auto-route[\s\S]*Llama 4 · NVIDIA/)
   })
 
+  it('shows the fallback model on the working line and under the finished answer', async () => {
+    const answeredBy = {
+      chosen: 'cursor/composer-2.5', provider: 'cursor', model: 'cursor/composer-2.5', fallback: true as const,
+      fromModel: 'netprojects--Inkling-2-Lite-MLX-4-8bit', reason: 'HTTP 409',
+    }
+    const messages = [
+      message({ id: 'u1', role: 'user', content: 'Hello', answeredBy }),
+      message({ id: 'a1', role: 'assistant', content: 'Hi', answeredBy }),
+    ]
+    const live = await renderLive({ running: true, messages: messages.slice(0, 1) })
+    expect(live).toHaveLength(1)
+    expect(live[0].className).toBe('working-auto-route')
+    expect(live[0].text).toContain('Composer 2.5 · Cursor (secours)')
+    const html = renderToStaticMarkup(list({ running: false, messages }))
+    expect(html.match(/class="message-auto-route"/g)?.length).toBe(1)
+    expect(html).toContain('Composer 2.5 · Cursor (secours)')
+    expect(html).not.toContain('working-auto-route')
+  })
+
   it('shows no label outside Auto mode', async () => {
     const labels = await renderLive({
       running: true,
       messages: [message({ id: 'u1', role: 'user', content: 'Hello' }), message({ id: 'a1', role: 'assistant', content: 'Hi' })],
     })
     expect(labels).toHaveLength(0)
+  })
+})
+
+describe('progress steps', () => {
+  const user = message({ id: 'u', role: 'user', content: 'Go' })
+  const first = message({ id: 'p1', role: 'assistant', content: 'Je regarde.', progress: true })
+  const second = message({ id: 'p2', role: 'assistant', content: 'J’écris.', progress: true })
+  const answer = message({ id: 'a', role: 'assistant', content: 'Terminé.' })
+
+  it('shows only the latest step while the turn runs, then stays collapsed', async () => {
+    const { container } = installTestDom()
+    const root = createRoot(container as unknown as Element)
+    const view = (running: boolean, messages: ChatMessage[]) => list({ running, messages, progressInThread: true })
+    await act(async () => { root.render(view(true, [user, first, second])) })
+    expect(container.querySelector('.progress-live')?.textContent).toBe('J’écris.')
+    expect(container.querySelector('.progress-toggle')).toBeNull()
+    expect(container.querySelector('.progress-stack')).toBeNull()
+    expect(container.textContent).not.toContain('Je regarde.')
+
+    await act(async () => { root.render(view(false, [user, first, second, answer])) })
+    const toggle = container.querySelector('.progress-toggle')
+    expect(toggle?.textContent).toContain('Afficher 2 étapes')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelector('.progress-line, .progress-live, .progress-stack')).toBeNull()
+    expect(container.textContent).toContain('Terminé.')
+    expect(container.textContent).not.toContain('Je regarde.')
+
+    await act(async () => { toggle?.click() })
+    expect(container.querySelectorAll('.progress-line').length).toBe(2)
+    expect(container.querySelector('.progress-toggle')?.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { container.querySelector('.progress-toggle')?.click() })
+    expect(container.querySelector('.progress-line')).toBeNull()
+    await act(async () => { root.unmount() })
   })
 })

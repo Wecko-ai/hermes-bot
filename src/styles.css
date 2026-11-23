@@ -688,14 +688,13 @@ a { color: inherit; }
   box-shadow: none;
 }
 .progress-turn { margin: 6px 0 10px; }
-.progress-stack { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
-.progress-bubble { margin: 0; padding: 6px 10px; border-radius: 10px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; box-shadow: inset 2px 0 0 color-mix(in srgb, var(--standby) 50%, transparent); }
-.progress-turn.is-live .progress-bubble { animation: progress-in 220ms var(--spring) both; }
+.progress-stack { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 8px 18px; }
+.progress-line, .progress-live { margin: 0; color: var(--text-tertiary); font-size: 12.5px; line-height: 18px; overflow-wrap: anywhere; }
+.progress-live { margin-bottom: 6px; }
 .progress-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 6px; padding: 4px 8px; border-radius: 8px; color: var(--text-tertiary); font-size: 12px; }
 .progress-toggle:hover { background: var(--hover); color: var(--text-secondary); }
 .progress-toggle .is-open { transform: rotate(180deg); }
 .progress-answer { margin-top: 2px; }
-@keyframes progress-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .draft-note { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; }
 .draft-note.is-muted { color: var(--text-tertiary); }
 .draft-note button { margin-left: 6px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }

@@ -1,0 +1,71 @@
+{
+  "selected": "netprojects--Inkling-2-Lite-MLX-4-8bit",
+  "events": [
+    { "type": "message.start", "payload": { "turn_id": "turn-inkling" } },
+    {
+      "type": "status.update",
+      "payload": {
+        "kind": "lifecycle",
+        "text": "⚠️ Model fallback: netprojects--Inkling-2-Lite-MLX-4-8bit via custom unavailable (HTTP 409); using cursor/composer-2.5 via cursor. Primary retry eligible in ~12 s; recovery is not guaranteed."
+      }
+    },
+    {
+      "type": "session.usage",
+      "payload": {
+        "model": "netprojects--Inkling-2-Lite-MLX-4-8bit",
+        "provider": "custom",
+        "context_estimated": true,
+        "tokens_per_s": 40,
+        "usage": {
+          "model": "netprojects--Inkling-2-Lite-MLX-4-8bit",
+          "context_used": 12000,
+          "context_max": 32768,
+          "context_percent": 37,
+          "context_estimated": true,
+          "avg_tps": 40
+        }
+      }
+    },
+    {
+      "type": "session.usage",
+      "payload": {
+        "model": "cursor/composer-2.5",
+        "provider": "cursor",
+        "fallback_model": "cursor/composer-2.5",
+        "context_estimated": false,
+        "tokens_per_s": 76.2,
+        "usage": {
+          "model": "cursor/composer-2.5",
+          "provider": "cursor",
+          "context_used": 68453,
+          "context_max": 200000,
+          "context_percent": 34,
+          "context_estimated": false,
+          "avg_tps": 76.2,
+          "input": 68453,
+          "output": 1287
+        }
+      }
+    },
+    {
+      "type": "message.complete",
+      "payload": {
+        "status": "complete",
+        "text": "Pas d'accès Gmail.",
+        "persisted_turn": {
+          "user_row_id": 11944,
+          "final_assistant_row_id": 11945,
+          "row_ids": [11944, 11945],
+          "complete": true
+        },
+        "usage": {
+          "model": "cursor/composer-2.5",
+          "context_used": 68453,
+          "context_max": 200000,
+          "context_estimated": false,
+          "avg_tps": 76.2
+        }
+      }
+    }
+  ]
+}

@@ -95,8 +95,19 @@ export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server
   cacheRows.forEach((row, index) => {
     if (index > lastMatched && matchAt[index] < 0) tail.push(row)
   })
-  if (!tail.length && keepCacheBody.size === 0) return server
-  const merged = keepCacheBody.size === 0 ? server : server.map((row, index) => keepCacheBody.get(index) ?? row)
+  // A fallback stamp is not in the gateway transcript. Keep it when the server row replaces the cache body.
+  const carried = new Map<number, ChatMessage>()
+  cacheRows.forEach((row, index) => {
+    const serverIndex = matchAt[index]
+    if (serverIndex < 0 || !row.answeredBy || keepCacheBody.has(serverIndex)) return
+    const serverRow = server[serverIndex]
+    if (serverRow.answeredBy) return
+    carried.set(serverIndex, { ...serverRow, answeredBy: row.answeredBy })
+  })
+  if (!tail.length && keepCacheBody.size === 0 && carried.size === 0) return server
+  const merged = keepCacheBody.size === 0 && carried.size === 0
+    ? server
+    : server.map((row, index) => keepCacheBody.get(index) ?? carried.get(index) ?? row)
   return tail.length ? [...merged, ...tail] : merged
 }
 
