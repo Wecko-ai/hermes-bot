@@ -70,6 +70,54 @@ describe('auto-router decide', () => {
     const none = await router.decide({ text: 'hi', models: models.slice(0, 2), mode: 'auto-free' })
     expect(none).toMatchObject({ ok: false, error: 'no_free_candidates' })
   })
+
+  it('ranks tiny free quotas after NVIDIA and skips a scope once its day is used up', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'nvidia/small': { quality: { coding: 0.45 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 800 },
+        'sambanova/gemma-4-31B-it': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 }, dailyQuota: { requests: 1, scope: 'sambanova' } },
+        'cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8-fast': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 }, dailyQuota: { neurons: 10000, scope: 'cloudflare' } },
+        'openrouter/nvidia/nemotron:free': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 }, dailyQuota: { requests: 1000, scope: 'openrouter-free' } },
+        'sambanova/paid': { quality: { coding: 0.99 }, costPerMToken: { in: 1, out: 1 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: [] })
+    const models = [
+      { provider: 'sambanova', model: 'gemma-4-31B-it' },
+      { provider: 'sambanova', model: 'paid' },
+      { provider: 'cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' },
+      { provider: 'openrouter', model: 'nvidia/nemotron:free' },
+      { provider: 'nvidia', model: 'small' },
+      { provider: 'cursor', model: 'cursor/claude-opus-5-5', free: true },
+    ]
+    const first = await router.decide({ text: 'Fix the bug in server/index.mjs', models, mode: 'auto-free' })
+    expect(first.ok).toBe(true)
+    expect(first.chosen).toBe('nvidia/small')
+    expect(first.reason).toContain('before')
+    expect(first.candidates.map((row) => row.model)).toEqual([
+      'nvidia/small',
+      'openrouter/nvidia/nemotron:free',
+      'cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      'sambanova/gemma-4-31B-it',
+    ])
+    const withoutNvidia = models.filter((row) => row.provider !== 'nvidia')
+    const second = await router.decide({ text: 'Fix the bug in server/index.mjs', models: withoutNvidia, mode: 'auto-free' })
+    expect(second.chosen).toBe('openrouter/nvidia/nemotron:free')
+    await router.recordLoggedUsage({
+      mode: 'auto-free',
+      fallbacks: [{ model: 'sambanova/gemma-4-31B-it', error: '429' }],
+    })
+    const blocked = await router.decide({ text: 'Fix the bug in server/index.mjs', models: [
+      { provider: 'sambanova', model: 'gemma-4-31B-it' },
+    ], mode: 'auto-free' })
+    expect(blocked).toMatchObject({ ok: false, error: 'quota_exhausted' })
+    const stillOpen = await router.decide({ text: 'Fix the bug in server/index.mjs', models: withoutNvidia, mode: 'auto-free' })
+    expect(stillOpen.chosen).toBe('openrouter/nvidia/nemotron:free')
+    expect(stillOpen.candidates.map((row) => row.model)).not.toContain('sambanova/gemma-4-31B-it')
+  })
   it('routes a long conversation to a window it fits in, preferring large windows', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
     roots.push(dir)

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, FolderOpen, ImageOff, X } from 'lucide-react'
-import { isServablePath, mediaUrl, type MediaRef } from '../lib/media'
+import { isServablePath, mediaUrl, videoUrl, type MediaRef } from '../lib/media'
 
 export interface ViewerState {
   images: MediaRef[]
@@ -83,7 +83,7 @@ export function MediaEmbed({ media, profile, version, onOpenImage, onOpenDocumen
       </span>
     )
   }
-  const src = mediaUrl(profile, media.path, version)
+  const src = media.kind === 'video' ? videoUrl(profile, media.path, version) : mediaUrl(profile, media.path, version)
   if (media.kind === 'image') {
     return (
       <button type="button" className="media-item media-thumb" title={media.name} aria-label={t('media.enlarge', { name: media.name })} onClick={() => onOpenImage?.(media)}>

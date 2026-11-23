@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseSharedSettings, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, withKeptCompaction } from './shared-settings.mjs'
+import { parseSharedSettings, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, withKeptCompaction, withPublishedAutoRouter } from './shared-settings.mjs'
 
 describe('réglages partagés', () => {
   it('ne garde que les champs connus, bien typés', () => {
@@ -17,6 +17,22 @@ describe('réglages partagés', () => {
     const existing = { hiddenModels: ['p:a'], zeroSpend: true, compaction: { mode: 'manual', gauge: 0.4, snapshot: {} } }
     expect(withKeptCompaction(existing, { hiddenModels: ['p:b'] })).toEqual({ hiddenModels: ['p:b'], zeroSpend: true, compaction: existing.compaction })
     expect(withKeptCompaction(existing, { hiddenModels: ['p:b'], zeroSpend: false }).zeroSpend).toBe(false)
+  })
+
+  it('keeps Auto in the shared file and lets the server replace a client copy', () => {
+    const existing = { hiddenModels: ['p:a'], autoRouter: { enabled: true, tablePath: '~/.hermes/hermesbot-auto-router.table.json' } }
+    expect(withKeptCompaction(existing, { hiddenModels: ['p:b'] }).autoRouter).toEqual(existing.autoRouter)
+    expect(sharedSettingsFrom({ autoRouter: { enabled: true, tablePath: '../secret', logDir: '/tmp/x' } })).toEqual({ autoRouter: { enabled: true } })
+    expect(sharedSettingsFrom({ autoRouter: { enabled: 'yes' } })).toEqual({})
+    const published = withPublishedAutoRouter(
+      { hiddenModels: ['p:b'] },
+      { enabled: true, tablePath: '~/.hermes/hermesbot-auto-router.table.json', logDir: '/secret' },
+    )
+    expect(published).toEqual({
+      hiddenModels: ['p:b'],
+      autoRouter: { enabled: true, tablePath: '~/.hermes/hermesbot-auto-router.table.json' },
+    })
+    expect(JSON.parse(sharedSettingsText(published)).autoRouter.enabled).toBe(true)
   })
 
   it('drops the upstream body on every answer, including 404 and a successful write', async () => {

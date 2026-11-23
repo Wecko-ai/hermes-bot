@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { describe, expect, it } from 'vitest'
-import { findMediaTags, isServablePath, mediaIndex, mediaPreviewText, mediaRef, mediaUrl, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaSink, conversationMedia } from './media'
+import { findMediaTags, isServablePath, mediaIndex, mediaPreviewText, mediaRef, mediaUrl, videoUrl, referencedFiles, remarkMedia, withoutUnfinishedTag, type MediaSink, conversationMedia } from './media'
 
 /** Real Markdown rendering (react-markdown + GFM + plugin): HTML produced and media recognized. */
 function render(text: string) {
@@ -177,6 +177,8 @@ describe('médias MEDIA:', () => {
   it('construit une URL locale versionnée et lit les index', () => {
     expect(mediaUrl('orion', '/a/slide 01.jpg', 'm-42')).toBe('/api/media?profile=orion&path=%2Fa%2Fslide+01.jpg&v=m-42')
     expect(mediaUrl('orion', '/a/b.png')).toBe('/api/media?profile=orion&path=%2Fa%2Fb.png')
+    expect(videoUrl('orion', '/a/renders/clip.mp4', 'm-7')).toBe('/api/video?profile=orion&path=%2Fa%2Frenders%2Fclip.mp4&v=m-7')
+    expect(mediaRef('/a/clip.m4v').kind).toBe('video')
     expect(mediaIndex('#media:12')).toBe(12)
     expect(mediaIndex('https://exemple.fr')).toBe(-1)
     expect(isServablePath('~/a.png')).toBe(true)

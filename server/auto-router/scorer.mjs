@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises'
-
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,191}$/
+import { isSafeModelId } from '../model-id.mjs'
 
 function asNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
@@ -144,24 +143,37 @@ export async function loadScoringTable(tablePath) {
 
 const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
 
+function isCloudflareId(provider, model, fullId) {
+  if (provider === 'cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
+  return `${fullId}\n${model}`.includes('@cf/')
+}
+
 /**
- * "Auto gratuit": models that cost nothing and use no subscription quota. NVIDIA's free developer
- * catalog, servers on this Mac, and OpenRouter's `:free` variants. Subscriptions (Kimi, Cursor,
- * OpenCode Go) and Gemini (its key's billing cannot be checked from here) are left out.
+ * "Auto gratuit": models that cost nothing and use no subscription quota.
+ * NVIDIA's free catalog, servers on this Mac, OpenRouter `:free` variants, SambaNova and
+ * Cloudflare Workers AI (`@cf/…` ids). A table cost above zero keeps a model out
+ * (a billed row at one of these providers). Missing rows count as zero.
+ * Subscriptions (Kimi, Cursor, OpenCode Go) and Gemini stay out.
  */
-export function isStrictlyFree(option) {
+export function isStrictlyFree(option, table = null) {
   const provider = String(option?.provider || '').toLowerCase()
   const model = String(option?.model || '').toLowerCase()
-  if (provider === 'nvidia') return true
-  if (LOCAL_PROVIDERS.has(provider)) return true
-  if (provider === 'openrouter' && (model.endsWith(':free') || model === 'openrouter/free')) return true
-  return false
+  const fullId = String(option?.fullModel || `${option?.provider || ''}/${option?.model || ''}`)
+  const openrouterFree = provider === 'openrouter' && (model.endsWith(':free') || model === 'openrouter/free')
+  const eligible = provider === 'nvidia'
+    || provider === 'sambanova'
+    || LOCAL_PROVIDERS.has(provider)
+    || openrouterFree
+    || isCloudflareId(provider, model, fullId.toLowerCase())
+  if (!eligible) return false
+  if (table && tableCost(table, fullId) > 0) return false
+  return true
 }
 
 export function normalizeCandidate(option) {
   const provider = String(option.provider || '')
   const model = String(option.model || '')
   const fullModel = option.fullModel || modelKey(provider, model)
-  if (!MODEL_ID.test(fullModel)) return null
+  if (!isSafeModelId(fullModel)) return null
   return { provider, model, fullModel, free: option.free === true }
 }

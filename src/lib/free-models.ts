@@ -19,7 +19,10 @@ export function isFreeModel(option: CostedOption): boolean {
   // OpenRouter's free variants and its free router; other gateways use the same suffix.
   if (model.endsWith(':free') || model === 'openrouter/free') return true
   // The NVIDIA API catalog (build.nvidia.com) serves every model on its free developer key.
-  if (provider === 'nvidia') return true
+  if (provider === 'nvidia' || provider === 'sambanova') return true
+  // Cloudflare Workers AI. Model ids look like `@cf/meta/llama-3.1-8b-instruct-fp8-fast`.
+  if (provider === 'cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
+  if (model.startsWith('@cf/') || model.startsWith('cloudflare/@cf/')) return true
   if (provider === 'gemini') return GEMINI_FREE.test(model) && !GEMINI_PAID.test(model)
   // Servers running on this Mac.
   return providerBrand(option.provider, option.providerName).local

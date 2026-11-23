@@ -20,7 +20,7 @@ import { createModelProbe } from './model-probe.mjs'
 import { createModelScores } from './model-scores.mjs'
 import { installProcessGuards } from './process-guards.mjs'
 import { createSessionStore, credentialsForRestore } from './sessions.mjs'
-import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction } from './shared-settings.mjs'
+import { SHARED_SETTINGS_MAX_BYTES, SHARED_SETTINGS_PATH, relaySharedSettingsGet, relaySharedSettingsPut, sharedSettingsFrom, sharedSettingsText, parseSharedSettings, withKeptCompaction, withPublishedAutoRouter } from './shared-settings.mjs'
 import { COMPACTION_BODY_MAX_BYTES, applyCompaction, compactionFrom, compressionOfConfig, gaugeFrom, profilesFrom } from './compaction.mjs'
 import {
   MEMORY_BODY_MAX_BYTES, MEMORY_ENTRY_MAX_BYTES, MEMORY_TYPES, ensureStore, filePath, memoryDir, memoryType, parseMemoryFile,
@@ -49,8 +49,10 @@ import { loadConnectorsCatalog } from './connectors-catalog.mjs'
 import { aggregateAnalytics, estimateQuotas, profilesFromQuery } from './usage-global.mjs'
 import { PagesLibrary } from './pages-library.mjs'
 import { createAutoRouter, resolveAutoRouterPaths } from './auto-router/decide.mjs'
+import { publishAutoRouterFiles, publicAutoRouter, publishedTableReady } from './auto-router/publish.mjs'
 import { appendRoutingLog, readRoutingLog, sanitizeLogEntry, summarizeRoutingLog } from './auto-router/log.mjs'
 import { estimateTokenCost, loadScoringTable } from './auto-router/scorer.mjs'
+import { resolveVideoFile, serveVideoFile, videoRouteDecision } from './video-stream.mjs'
 
 const CONFIG = configModule.loadConfig()
 const SHARED_MEMORY_DIR = memoryDir(CONFIG.sharedMemory.dir, CONFIG.dataDir)
@@ -473,7 +475,10 @@ async function handleSharedSettings(request, response) {
   // The compaction setting and its snapshots are only ever written by /api/compaction: kept as the file has them.
   const existing = await readSharedFile(request)
   if (!existing) return json(response, 502, { error: 'shared_settings_unreadable' })
-  const settings = withKeptCompaction(existing, sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES)))
+  const settings = withPublishedAutoRouter(
+    withKeptCompaction(existing, sharedSettingsFrom(await bodyJson(request, SHARED_SETTINGS_MAX_BYTES))),
+    publicAutoRouter(CONFIG.autoRouter, { tablePublished: await publishedTableReady(CONFIG.hermesHome) }),
+  )
   const upstream = await hermesFetch(request, '/api/fs/write-text', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -917,7 +922,7 @@ async function mintSocketTicket(request, profile) {
 const MEDIA_TYPES = {
   png: ['image', 'image/png'], jpg: ['image', 'image/jpeg'], jpeg: ['image', 'image/jpeg'],
   gif: ['image', 'image/gif'], webp: ['image', 'image/webp'], bmp: ['image', 'image/bmp'],
-  mp4: ['video', 'video/mp4'], mov: ['video', 'video/quicktime'], webm: ['video', 'video/webm'],
+  mp4: ['video', 'video/mp4'], m4v: ['video', 'video/x-m4v'], mov: ['video', 'video/quicktime'], webm: ['video', 'video/webm'],
   mp3: ['audio', 'audio/mpeg'], m4a: ['audio', 'audio/mp4'], wav: ['audio', 'audio/wav'],
   ogg: ['audio', 'audio/ogg'], opus: ['audio', 'audio/ogg'], flac: ['audio', 'audio/flac'],
 }
@@ -978,13 +983,37 @@ async function handleMedia(request, response, url) {
   const target = mediaRequest(url)
   if (target.error) return json(response, target.status, { error: target.error })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
-  // Images: the gateway's download route, capped. Audio and video: its streaming route, with Range, uncapped.
-  const ranged = target.kind === 'audio' || target.kind === 'video'
+  // Video is read here when the file is on this machine. Another Mac relays it; it never opens a local path.
+  if (target.kind === 'video') return serveOrRelayVideo(request, response, target)
+  // Images: the gateway's download route, capped. Audio: its streaming route, with Range, uncapped.
+  const ranged = target.kind === 'audio'
   return relayFile(request, response, target, target.kind === 'image' ? '/api/fs/download' : '/api/files/stream', {
     // The URL carries the message id (`v`): a file rewritten under the same name comes back with a fresh URL.
     'Cache-Control': 'private, max-age=600',
     'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
   }, ranged ? Infinity : IMAGE_MAX_BYTES, ranged)
+}
+
+// Same session as `/api/media`. A video that is not on this disk is streamed from the gateway.
+async function handleVideo(request, response, url) {
+  const target = mediaRequest(url)
+  if (target.error) return json(response, target.status, { error: target.error })
+  if (target.kind !== 'video') return json(response, 415, { error: 'unsupported_media' })
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  return serveOrRelayVideo(request, response, target)
+}
+
+async function serveOrRelayVideo(request, response, target) {
+  const opened = await resolveVideoFile(target.file, CONFIG.videoRoots)
+  const decision = videoRouteDecision({ authed: true, opened })
+  if (decision.action === 'serve') return serveVideoFile(request, response, opened)
+  if (decision.action === 'relay') {
+    return relayFile(request, response, target, '/api/files/stream', {
+      'Cache-Control': 'private, no-store',
+      'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
+    }, Infinity, true)
+  }
+  return json(response, decision.status, { error: decision.error })
 }
 
 async function handleDocument(request, response, url) {
@@ -1350,6 +1379,10 @@ async function handleAutoRouterLogWrite(request, response) {
     entry.costUsd = estimateTokenCost(table, entry.chosen, entry.tokensIn ?? 0, entry.tokensOut ?? 0)
   }
   await appendRoutingLog(autoRouter.logDir, entry)
+  try {
+    const hints = Array.isArray(body.quotaErrors) ? body.quotaErrors.slice(0, 8) : []
+    await autoRouter.recordLoggedUsage(entry, hints)
+  } catch { /* the routing log already landed; the counter is best-effort */ }
   return json(response, 200, { ok: true })
 }
 
@@ -1851,6 +1884,9 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/media' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleMedia(request, response, url)
     }
+    if (url.pathname === '/api/video' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return await handleVideo(request, response, url)
+    }
     if (url.pathname === '/api/document' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleDocument(request, response, url)
     }
@@ -1976,6 +2012,14 @@ export const listening = mainListening
 server.listen(PORT, HOST, () => {
   console.log(`HermesBot: http://${HOST}:${PORT} (${DEVELOPMENT ? 'dev' : 'production'})`)
   localSignInState().catch(() => {})
+  // The phone reaches the gateway, not this port. Publish Auto into the shared file it already reads.
+  if (process.env.HERMESBOT_SKIP_AUTO_PUBLISH !== '1') {
+    publishAutoRouterFiles({
+      hermesHome: CONFIG.hermesHome,
+      autoRouter: CONFIG.autoRouter,
+      sourceTablePath: autoRouterTablePath,
+    }).catch(() => console.error('HermesBot: auto router capability not published'))
+  }
 })
 
 async function shutdown() {

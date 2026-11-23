@@ -34,6 +34,28 @@ function readJson(file) {
 }
 
 const text = (value, max = 256) => typeof value === 'string' && value.trim() && value.length <= max ? value.trim() : ''
+// Video folders. Kept here so config load does not import the ESM streamer (this file is CommonJS).
+function videoRoots(value, env, home) {
+  const fromEnv = typeof env.HERMESBOT_VIDEO_ROOTS === 'string' ? env.HERMESBOT_VIDEO_ROOTS.split(path.delimiter) : []
+  const configured = [...fromEnv, ...(Array.isArray(value) ? value : [])]
+  const cleaned = []
+  for (const item of configured) {
+    if (typeof item !== 'string' || !item.trim() || item.length > 4096 || item.includes('\0')) continue
+    const expanded = item.trim() === '~' ? home : item.trim().startsWith('~/') ? path.join(home, item.trim().slice(2)) : item.trim()
+    if (!path.isAbsolute(expanded) || expanded.split(/[\\/]/).some((part) => part === '.' || part === '..')) continue
+    cleaned.push(path.resolve(expanded))
+    if (cleaned.length >= 32) break
+  }
+  if (cleaned.length) return cleaned
+  return [
+    path.join(home, 'projects'),
+    path.join(home, 'Movies'),
+    path.join(home, 'bots-workspace'),
+    path.join(home, '.hermes', 'images'),
+    path.join(home, '.hermes', 'cache'),
+    path.join(home, '.hermes', 'profiles'),
+  ]
+}
 const strings = (value, max = 64) => Array.isArray(value) ? value.map((item) => text(item, 128)).filter(Boolean).slice(0, max) : []
 const slugs = (value) => strings(value).filter((item) => SLUG.test(item))
 const providers = (value) => strings(value).filter((item) => PROVIDER.test(item))
@@ -174,6 +196,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     gatewayOrigin,
     // Home of the Hermes that runs on this machine. Only read to sign in to a gateway without a password.
     hermesHome,
+    // Folders `/api/video` may read. A path outside them is never served from this disk.
+    videoRoots: videoRoots(raw.videoRoots, env, home),
     optionalMcpsDir: optionalMcps,
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,

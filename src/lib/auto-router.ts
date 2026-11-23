@@ -74,6 +74,23 @@ export interface AutoRouteLogEntry {
   costUsd?: number | null
   latencyMs?: number | null
   outcome: 'ok' | 'error' | 'cancelled'
+  /** Provider that actually failed. Not written to the routing log. */
+  quotaErrors?: QuotaErrorHint[]
+}
+
+export interface QuotaErrorHint {
+  provider: string
+  model?: string
+  status?: number | null
+  message?: string
+}
+
+/** Names the model that failed, so a fallback is not charged with that error. */
+export function quotaErrorHint(fullId: string, message: string): QuotaErrorHint {
+  const slash = fullId.indexOf('/')
+  const provider = slash > 0 ? fullId.slice(0, slash) : fullId
+  const status = /\b402\b/.test(message) ? 402 : /\b429\b|rate limit|quota|usage limit/i.test(message) ? 429 : null
+  return { provider, model: fullId, status, message: message.slice(0, 240) }
 }
 
 export interface AutoRouteBadge {

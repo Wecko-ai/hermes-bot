@@ -55,5 +55,8 @@ describe('createModelProbe', () => {
     const probe = createModelProbe({ probes, fetchImpl: async () => { throw new Error('ECONNREFUSED') } })
     expect(await probe.check('cursor/grok-4.7')).toEqual({ checked: false })
     expect(await probe.check('cursor/../x y')).toMatchObject({ invalid: true })
+    expect(await probe.check('@cf/meta/llama-3.1-8b-instruct-fp8-fast')).toEqual({ checked: false })
+    expect(await probe.check('openrouter/z-ai/glm-5.2:free')).toEqual({ checked: false })
+    expect(await probe.check('model;rm -rf')).toMatchObject({ invalid: true })
   })
 })

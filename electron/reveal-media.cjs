@@ -6,7 +6,7 @@ const path = require('node:path')
 // Do not import the server: this check runs in the Electron main process before that module loads.
 const REVEAL_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp',
-  'mp4', 'mov', 'webm',
+  'mp4', 'm4v', 'mov', 'webm',
   'mp3', 'm4a', 'wav', 'ogg', 'opus', 'flac',
   'pdf', 'html', 'htm', 'md', 'markdown', 'txt', 'log',
 ])

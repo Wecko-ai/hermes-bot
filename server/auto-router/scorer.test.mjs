@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allowedForSpend, estimateTokenCost, pickModel, scoreCandidates } from './scorer.mjs'
+import { allowedForSpend, estimateTokenCost, isStrictlyFree, normalizeCandidate, pickModel, scoreCandidates } from './scorer.mjs'
 
 const table = {
   weights: { quality: 1, cost: 0.1, quota: 0.5, latency: 0.1 },
@@ -38,6 +38,30 @@ describe('auto-router scorer', () => {
     const picked = pickModel(scored, { quotaPercents: new Map([['kimi-coding', 92]]) })
     expect(picked.reason).toContain('quota 92%')
     expect(picked.chosen).toBe('anthropic/claude-sonnet-5-5')
+  })
+
+  it('keeps zero-cost SambaNova, Cloudflare, NVIDIA, local and OpenRouter :free', () => {
+    const priced = {
+      models: {
+        'sambanova/gemma-4-31B-it': { costPerMToken: { in: 0, out: 0 } },
+        'sambanova/paid': { costPerMToken: { in: 0.2, out: 0.4 } },
+        'cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8-fast': { costPerMToken: { in: 0, out: 0 } },
+      },
+    }
+    expect(isStrictlyFree({ provider: 'sambanova', model: 'gemma-4-31B-it' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'sambanova', model: 'paid' }, priced)).toBe(false)
+    expect(isStrictlyFree({ provider: 'cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'nvidia', model: 'z-ai/glm-5.3' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'omlx', model: 'qwen-local' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'openrouter', model: 'z-ai/glm-5.2:free' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5' }, priced)).toBe(false)
+    expect(isStrictlyFree({ provider: 'cursor', model: 'cursor/claude-opus-5-5', free: true }, priced)).toBe(false)
+    expect(isStrictlyFree({ provider: 'gemini', model: 'gemini-3.8-flash' }, priced)).toBe(false)
+    expect(normalizeCandidate({ provider: 'cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' })?.fullModel)
+      .toBe('cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8-fast')
+    expect(normalizeCandidate({ provider: 'openrouter', model: 'z-ai/glm-5.2:free' })).not.toBeNull()
+    expect(normalizeCandidate({ provider: 'nvidia', model: '../secret' })).toBeNull()
+    expect(normalizeCandidate({ provider: 'nvidia', model: 'bad id' })).toBeNull()
   })
 
   it('respects zero-spend paid block', () => {

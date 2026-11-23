@@ -30,7 +30,7 @@ export interface MediaTag {
 
 /** `MEDIA_DELIVERY_EXTS` de Hermes (`gateway/platforms/base.py`). */
 const DELIVERY_EXTENSIONS = [
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'svg', 'mp4', 'mov', 'avi', 'mkv', 'webm', '3gp',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'svg', 'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', '3gp',
   'mp3', 'm2a', 'wav', 'ogg', 'opus', 'm4a', 'flac', 'pdf', 'docx', 'doc', 'odt', 'rtf', 'txt', 'md',
   'epub', 'xlsx', 'xls', 'ods', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'kmz', 'kml', 'geojson', 'gpx',
   'pptx', 'ppt', 'odp', 'key', 'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'apk', 'ipa', 'html', 'htm',
@@ -42,7 +42,7 @@ const DELIVERY_EXTENSIONS = [
  */
 const PLAYABLE: Record<string, MediaKind> = {
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image',
-  mp4: 'video', mov: 'video', webm: 'video',
+  mp4: 'video', m4v: 'video', mov: 'video', webm: 'video',
   mp3: 'audio', m4a: 'audio', wav: 'audio', ogg: 'audio', opus: 'audio', flac: 'audio',
   // Opened in a tab beside the chat, through `/api/document`. Must stay identical to the server’s DOCUMENT_TYPES.
   pdf: 'document', html: 'document', htm: 'document', md: 'document', markdown: 'document',
@@ -138,6 +138,14 @@ export const isServablePath = (path: string) => path.startsWith('/') || path.sta
 /** `version` (the message id) gives a fresh URL when a bot rewrites a file under the same name. */
 export function mediaUrl(profile: string, path: string, version?: string) {
   return `/api/media?${new URLSearchParams({ profile, path, ...(version ? { v: version } : {}) })}`
+}
+
+/**
+ * Video is streamed, never opened as a local path. On the machine that has the file, `/api/video`
+ * reads it (Range, allowlist). On another Mac the same URL is relayed to the gateway.
+ */
+export function videoUrl(profile: string, path: string, version?: string) {
+  return `/api/video?${new URLSearchParams({ profile, path, ...(version ? { v: version } : {}) })}`
 }
 
 export function mediaIndex(href: string | undefined) {

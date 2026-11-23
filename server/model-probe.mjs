@@ -6,7 +6,7 @@
 // `modelProbes` (server/config.cjs), the server asks that endpoint for a tiny reply first.
 // The endpoint is a keyless local proxy: no credential is read, stored or sent.
 
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/
+import { isSafeModelId } from './model-id.mjs'
 const PROBE_TIMEOUT_MS = 45_000
 /** A model that answered stays trusted this long; a refusal is asked again sooner, quotas reset. */
 const OK_TTL_MS = 10 * 60_000
@@ -50,7 +50,7 @@ export function createModelProbe({ probes = [], fetchImpl = fetch, now = Date.no
 
   /** `{checked: false}` when no probe covers this model or the endpoint did not answer. */
   async function check(model) {
-    if (typeof model !== 'string' || !MODEL_ID.test(model)) return { checked: false, invalid: true }
+    if (!isSafeModelId(model)) return { checked: false, invalid: true }
     const probe = probes.find((item) => model.startsWith(item.prefix))
     if (!probe) return { checked: false }
     const cached = cache.get(model)

@@ -70,9 +70,9 @@ import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilenc
 import { enqueuePushRelay } from './lib/push-relay'
 import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
-import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, fallbackLabel, isAutoModel, pickerModelAfterRoute } from './lib/auto-router'
+import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
 import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
-import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
+import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, providerErrorText, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
 
@@ -572,6 +572,10 @@ export default function App() {
         let deferTurnEnd = false
         const autoTrack = autoTurnRef.current.get(current.profile)
         if (autoTrack && current.sessionId) {
+          if (status === 'error') {
+            const detail = providerErrorText(payload)
+            if (detail) autoTrack.quotaErrors = [...(autoTrack.quotaErrors ?? []), quotaErrorHint(autoTrack.plan.badge.chosen, detail)]
+          }
           const logAutoRoute = (outcome: 'ok' | 'error' | 'cancelled') => {
             void appendAutoRouteLog({
               mode: autoTrack.plan.mode,
@@ -587,6 +591,7 @@ export default function App() {
               costUsd: null,
               latencyMs: Date.now() - autoTrack.startedAt,
               outcome,
+              quotaErrors: autoTrack.quotaErrors ?? [],
             })
             autoTurnRef.current.delete(current.profile)
           }
@@ -1853,6 +1858,7 @@ export default function App() {
             chat: workingChat,
             toolsRan: false,
             resubmitting: false,
+            quotaErrors: [],
           })
         }
         let submitted = workingChat
@@ -1862,13 +1868,14 @@ export default function App() {
             break
           } catch (error) {
             const err = error instanceof Error ? error.message : 'error'
+            const track = autoTurnRef.current.get(profile)
+            if (track) track.quotaErrors = [...(track.quotaErrors ?? []), quotaErrorHint(track.plan.badge.chosen, err)]
             if (attempt >= 2 || !isRetryableProviderError(error) || fallbackQueue.length === 0) throw error
             const next = fallbackQueue.shift()!
             turnFallbacks.push({ model: `${next.provider}/${next.model}`, error: err.includes('429') ? '429' : `error:${err.slice(0, 48)}` })
             const applied = await applyRoutedModel(client, workingChat, next)
             workingChat = applied.chat
             updateCachedChat(profile, { model: applied.chat.model, revision: applied.chat.revision, executionGeneration: applied.chat.executionGeneration })
-            const track = autoTurnRef.current.get(profile)
             if (track) {
               track.plan.badge.chosen = `${next.provider}/${next.model}`
               track.plan.badge.label = fallbackLabel(track.plan.decision, next)

@@ -19,6 +19,14 @@ describe('modèles gratuits', () => {
     expect(free('nvidia', 'moonshotai/kimi-k3.1-pro')).toBe(true)
   })
 
+  it('garde SambaNova et les ids Cloudflare Workers AI', () => {
+    expect(free('sambanova', 'gemma-4-31B-it')).toBe(true)
+    expect(free('cloudflare', '@cf/meta/llama-3.1-8b-instruct-fp8-fast')).toBe(true)
+    expect(free('workers-ai', '@cf/meta/llama-3.3-70b-instruct-fp8-fast')).toBe(true)
+    expect(free('other', '@cf/meta/llama-3.1-8b-instruct-fp8-fast')).toBe(true)
+    expect(free('openrouter', 'meta/llama-3.1-8b')).toBe(false)
+  })
+
   it('ne garde de Gemini que ce que le palier gratuit sert', () => {
     for (const model of ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-4-hydrogen']) expect(free('gemini', model)).toBe(true)
     for (const model of ['gemini-3.1-pro-preview', 'gemini-pro-latest', 'gemini-4-carbon', 'gemini-4-argon', 'gemini-omni-flash-preview']) expect(free('gemini', model)).toBe(false)

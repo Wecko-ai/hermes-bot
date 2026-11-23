@@ -2,7 +2,7 @@ import type { ModelOption, SessionUsage } from '../types'
 import type { ActiveChat, HermesClient } from './hermes'
 import { switchModel } from './hermes'
 import { rpcReason } from './gateway-errors'
-import type { AutoMode, AutoRouteBadge, AutoRouteDecision } from './auto-router'
+import type { AutoMode, AutoRouteBadge, AutoRouteDecision, QuotaErrorHint } from './auto-router'
 import { decideAutoRoute } from './auto-router'
 
 function lower(value: string) {
@@ -14,6 +14,10 @@ export function isRetryableProviderError(error: unknown) {
   if (reason.includes('rate') || reason.includes('429') || reason.includes('quota') || reason.includes('provider')) return true
   const message = error instanceof Error ? error.message.toLowerCase() : ''
   return message.includes('429') || message.includes('rate limit')
+}
+
+export function providerErrorText(payload: Record<string, unknown>) {
+  return [errorBits(payload.error), typeof payload.text === 'string' ? payload.text : ''].filter(Boolean).join(' ').slice(0, 300)
 }
 
 function errorBits(value: unknown) {
@@ -61,6 +65,7 @@ export interface AutoTurnTrack {
   chat: ActiveChat
   toolsRan: boolean
   resubmitting: boolean
+  quotaErrors?: QuotaErrorHint[]
 }
 
 export async function planAutoRoutedTurn(_client: HermesClient, input: {

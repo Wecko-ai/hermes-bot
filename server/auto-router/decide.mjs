@@ -2,6 +2,8 @@ import path from 'node:path'
 import { classifyPrompt, estimateTokens } from './classifier.mjs'
 import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
+import { createProviderQuotaStore, isQuotaSignal } from './provider-quota.mjs'
+import { freePickReason, rankFreeCandidates, resolveDailyQuota } from './quota.mjs'
 import { allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates } from './scorer.mjs'
 
 function quotaMap(rows) {
@@ -37,8 +39,15 @@ function labelOf(table, fullId) {
 /**
  * @param {{ tablePath: string, logDir: string, subscriptions?: string[], resolveQuotas?: () => Promise<object[]> }} deps
  */
+function optionFromFullId(fullId) {
+  const slash = String(fullId || '').indexOf('/')
+  if (slash <= 0) return { provider: String(fullId || ''), model: String(fullId || ''), fullModel: String(fullId || '') }
+  return { provider: fullId.slice(0, slash), model: fullId.slice(slash + 1), fullModel: fullId }
+}
+
 export function createAutoRouter(deps) {
   let tableCache = { mtime: 0, table: null }
+  const quotaStore = createProviderQuotaStore(deps.logDir)
 
   async function loadTable() {
     try {
@@ -64,14 +73,20 @@ export function createAutoRouter(deps) {
     const rawCandidates = Array.isArray(body.models) ? body.models : []
     const policy = spendPolicy(body, deps.subscriptions || [])
     const mode = body.mode === 'auto-free' ? 'auto-free' : 'auto'
+    const table = await loadTable()
     // Auto gratuit is decided here, never trusted from the window's `free` flags.
-    const candidates = rawCandidates.map(normalizeCandidate).filter(Boolean)
-      .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row) : allowedForSpend(row, policy)))
-    if (!candidates.length) {
+    const eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
+      .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row, table) : allowedForSpend(row, policy)))
+    if (!eligible.length) {
       return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens }
     }
 
-    const table = await loadTable()
+    const usage = await quotaStore.snapshot()
+    const candidates = eligible.filter((row) => !quotaStore.blocked(usage, table, row, tokens))
+    if (!candidates.length) {
+      return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens }
+    }
+
     // Never route to a model the conversation does not fit in (window minus headroom for the reply and tools).
     const currentModel = typeof body.currentModel === 'string' ? body.currentModel : ''
     const sizing = filterByContext(candidates, tokens, { table, currentModel, contextMax })
@@ -87,10 +102,37 @@ export function createAutoRouter(deps) {
       latencyMs,
       quotaPercents,
     })
+    const quotaOf = (row) => resolveDailyQuota(table, row)
+    const ranked = mode === 'auto-free' ? rankFreeCandidates(scored, quotaOf) : scored
 
     const quotaThreshold = typeof table?.quotaHighWatermark === 'number' ? table.quotaHighWatermark : 85
-    const picked = pickModel(scored, { quotaPercents, quotaHighWatermark: quotaThreshold })
-    if (!picked) return { ok: false, error: 'no_pick', category, mode, tokenEstimate: tokens }
+    const blocked = new Set()
+    let picked = null
+    while (blocked.size < ranked.length) {
+      picked = pickModel(ranked, { blocked, quotaPercents, quotaHighWatermark: quotaThreshold })
+      if (!picked) break
+      if (mode === 'auto-free') picked = { ...picked, reason: freePickReason(picked, ranked, quotaOf) }
+      let reserved = false
+      try {
+        reserved = await quotaStore.reserve({
+          table,
+          provider: picked.provider,
+          model: picked.model,
+          fullId: picked.chosen,
+          mode,
+          label: labelOf(table, picked.chosen),
+          reason: picked.reason,
+          tokensIn: tokens,
+          fallbackFrom: null,
+        })
+      } catch {
+        break
+      }
+      if (reserved) break
+      blocked.add(picked.chosen)
+      picked = null
+    }
+    if (!picked) return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens }
 
     const chosenWindow = sizing.candidates.find((row) => row.fullModel === picked.chosen)?.contextWindow || 0
     return {
@@ -118,7 +160,45 @@ export function createAutoRouter(deps) {
     }
   }
 
-  return { decide, tablePath: deps.tablePath, logDir: deps.logDir }
+  async function recordLoggedUsage(entry, hints = []) {
+    if (!entry || typeof entry !== 'object') return
+    const table = await loadTable()
+    const mode = entry.mode === 'auto-free' ? 'auto-free' : 'auto'
+    const seen = new Set()
+    for (const row of Array.isArray(entry.fallbacks) ? entry.fallbacks : []) {
+      const fullId = typeof row?.model === 'string' ? row.model : ''
+      if (!fullId || seen.has(fullId)) continue
+      seen.add(fullId)
+      const option = optionFromFullId(fullId)
+      try {
+        await quotaStore.recordUse({
+          table,
+          provider: option.provider,
+          model: option.model,
+          fullId,
+          mode,
+          label: '',
+          reason: 'fallback',
+          tokensIn: 0,
+          tokensOut: 0,
+          fallbackFrom: typeof entry.chosen === 'string' ? entry.chosen : null,
+        })
+      } catch { /* the routing log already landed; the counter is best-effort */ }
+    }
+    const explicit = Array.isArray(hints) ? hints : []
+    const errors = explicit.length ? explicit : (Array.isArray(entry.fallbacks) ? entry.fallbacks : []).flatMap((row) => {
+      const message = typeof row?.error === 'string' ? row.error : ''
+      if (!isQuotaSignal(null, message)) return []
+      const option = optionFromFullId(row.model)
+      return [{ provider: option.provider, model: option.model, status: /\b402\b/.test(message) ? 402 : 429, message }]
+    })
+    if (!errors.length) return
+    try {
+      await quotaStore.noteErrors({ table, errors })
+    } catch { /* best-effort, same as the counter */ }
+  }
+
+  return { decide, recordLoggedUsage, tablePath: deps.tablePath, logDir: deps.logDir }
 }
 
 export function resolveAutoRouterPaths(config, root) {

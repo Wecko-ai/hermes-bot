@@ -57,6 +57,8 @@ describe('local routes require a real session', () => {
       env: {
         PATH: process.env.PATH,
         HOME: os.homedir(),
+        // This harness keeps the real home. Do not publish Auto into the live shared settings file.
+        HERMESBOT_SKIP_AUTO_PUBLISH: '1',
         TMPDIR: os.tmpdir(),
         NODE_ENV: 'production',
         PORT: String(appPort),
