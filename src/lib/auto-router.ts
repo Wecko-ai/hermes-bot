@@ -44,13 +44,20 @@ export interface AutoRouteDecision {
   mode?: AutoMode
   category?: string
   chosen?: string
+  /** Readable name from the scoring table, e.g. « GPT-5.6 Sol (Cursor) ». */
+  label?: string
   provider?: string
   model?: string
   reason?: string
   candidates?: { model: string; score: number }[]
-  fallbacks?: { provider: string; model: string; fullId: string; score: number }[]
+  fallbacks?: { provider: string; model: string; fullId: string; label?: string; score: number }[]
   error?: string
   tokenEstimate?: number
+  /** Window of the chosen model, from the table or the gateway. */
+  contextWindow?: number
+  /** No model holds the conversation with room to work: compact before the turn. */
+  needsCompaction?: boolean
+  excludedForContext?: string[]
 }
 
 export interface AutoRouteLogEntry {
@@ -73,6 +80,7 @@ export interface AutoRouteBadge {
   mode?: AutoMode
   category: string
   chosen: string
+  label?: string
   reason: string
 }
 
@@ -95,6 +103,8 @@ export async function decideAutoRoute(input: {
   imageCount: number
   contextUsed?: number
   contextMax?: number
+  /** Model the session runs on now: its window is the gateway's `contextMax`. */
+  currentModel?: string
   models: ModelOption[]
   analyticsProfiles?: string[]
   mode?: AutoMode
@@ -118,6 +128,7 @@ export async function decideAutoRoute(input: {
       imageCount: input.imageCount,
       contextUsed: input.contextUsed ?? 0,
       contextMax: input.contextMax ?? 0,
+      currentModel: input.currentModel ?? '',
       models,
       zeroSpend,
       subscriptionProviders: subscriptions,
@@ -150,4 +161,8 @@ export async function loadAutoRoutingLog(days = 7): Promise<AutoRoutingLogRespon
   const response = await fetch(`/api/auto-router/log?days=${days}`, { credentials: 'same-origin' })
   if (!response.ok) throw new Error('auto_router_log_unavailable')
   return response.json() as Promise<AutoRoutingLogResponse>
+}
+/** Table label of the fallback Auto switches to, so the turn's label stays readable. */
+export function fallbackLabel(decision: Pick<AutoRouteDecision, 'fallbacks'> | undefined, next: { provider: string; model: string }) {
+  return decision?.fallbacks?.find((row) => row.provider === next.provider && row.model === next.model)?.label
 }

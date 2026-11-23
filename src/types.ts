@@ -128,7 +128,7 @@ export interface ChatMessage {
   /** Short milestone the bot wrote before the final reply (`message.interim`). */
   progress?: boolean
   /** Auto routing badge for this user turn (no prompt text). */
-  autoRoute?: { mode?: 'auto' | 'auto-free'; category: string; chosen: string; reason: string }
+  autoRoute?: { mode?: 'auto' | 'auto-free'; category: string; chosen: string; label?: string; reason: string }
 }
 
 /** One child asked for by `delegate_task`: its goal and the background the bot gave it. */

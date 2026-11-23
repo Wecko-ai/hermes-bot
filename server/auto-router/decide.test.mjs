@@ -18,7 +18,7 @@ describe('auto-router decide', () => {
     await fs.writeFile(tablePath, JSON.stringify({
       models: {
         'demo/fast': { quality: { coding: 0.4, quick: 0.9 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 500 },
-        'demo/code': { quality: { coding: 0.95, quick: 0.5 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 1500 },
+        'demo/code': { label: 'Demo Code (Demo)', quality: { coding: 0.95, quick: 0.5 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 1500 },
       },
     }))
     const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['demo'] })
@@ -31,6 +31,7 @@ describe('auto-router decide', () => {
     })
     expect(result.ok).toBe(true)
     expect(result.chosen).toBe('demo/code')
+    expect(result.label).toBe('Demo Code (Demo)')
   })
 
   it('auto-free keeps only free models, decided on the server', async () => {
@@ -68,5 +69,35 @@ describe('auto-router decide', () => {
     expect(plain.chosen).toBe('cursor/cursor/claude-opus-5-5')
     const none = await router.decide({ text: 'hi', models: models.slice(0, 2), mode: 'auto-free' })
     expect(none).toMatchObject({ ok: false, error: 'no_free_candidates' })
+  })
+  it('routes a long conversation to a window it fits in, preferring large windows', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/gpt-5.6-sol': { quality: { long_context: 0.95 }, contextWindow: 272_000, baselineLatencyMs: 500 },
+        'cursor/cursor/composer-2.5': { quality: { long_context: 0.9 }, contextWindow: 200_000, baselineLatencyMs: 500 },
+        'kimi-coding/k3.1-pro': { quality: { long_context: 0.8 }, contextWindow: 1_048_576, baselineLatencyMs: 60_000 },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor', 'kimi-coding'] })
+    const models = [
+      { provider: 'cursor', model: 'cursor/gpt-5.6-sol' },
+      { provider: 'cursor', model: 'cursor/composer-2.5' },
+      { provider: 'kimi-coding', model: 'k3.1-pro' },
+    ]
+    const long = await router.decide({ text: 'continue', contextUsed: 188_000, contextMax: 200_000, currentModel: 'cursor/composer-2.5', models })
+    expect(long.category).toBe('long_context')
+    expect(long.chosen).toBe('kimi-coding/k3.1-pro')
+    expect(long.needsCompaction).toBe(false)
+    expect(long.excludedForContext).toEqual(['cursor/cursor/composer-2.5'])
+    expect(long.contextWindow).toBe(1_048_576)
+    // A long but fitting conversation: the slow large-window model is not punished for latency.
+    const mid = await router.decide({ text: 'continue', contextUsed: 120_000, contextMax: 200_000, models: models.slice(0, 1).concat(models.slice(2)) })
+    expect(mid.chosen).toBe('kimi-coding/k3.1-pro')
+    const tooBig = await router.decide({ text: 'continue', contextUsed: 900_000, contextMax: 1_048_576, models })
+    expect(tooBig.chosen).toBe('kimi-coding/k3.1-pro')
+    expect(tooBig.needsCompaction).toBe(true)
   })
 })

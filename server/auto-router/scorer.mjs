@@ -71,7 +71,9 @@ export function allowedForSpend(option, policy) {
  */
 export function scoreCandidates(params) {
   const { table, category, candidates } = params
-  const weights = { quality: 1, cost: 0.25, quota: 0.35, latency: 0.15, ...(table?.weights || {}), ...(params.weights || {}) }
+  const weights = { quality: 1, cost: 0.25, quota: 0.35, latency: 0.15, context: 0.3, ...(table?.weights || {}), ...(params.weights || {}) }
+  // A long conversation: the bigger the window the better, and slow past turns say nothing (long turns are slow).
+  const longContext = category === 'long_context'
   const latencyMs = params.latencyMs || new Map()
   const quotaPercents = params.quotaPercents || new Map()
 
@@ -93,17 +95,20 @@ export function scoreCandidates(params) {
     const baseline = tableBaselineLatency(table, fullId)
     const lat = observed || baseline
     const latencyNorm = Math.max(0, 1 - Math.min(lat, 30_000) / 30_000)
+    const window = typeof raw.contextWindow === 'number' ? raw.contextWindow : 0
+    const contextNorm = Math.min(1, window / 1_000_000)
     const score = (weights.quality * quality)
       + (weights.cost * costNorm)
       + (weights.quota * quotaHeadroom)
-      + (weights.latency * latencyNorm)
+      + (longContext ? weights.context * contextNorm : weights.latency * latencyNorm)
     return {
       provider,
       model,
       fullId,
       score: Math.round(score * 1000) / 1000,
       quality,
-      reasonParts: { quality, costNorm, quotaHeadroom, latencyNorm },
+      contextWindow: window,
+      reasonParts: { quality, costNorm, quotaHeadroom, latencyNorm, contextNorm },
     }
   }).sort((a, b) => b.score - a.score)
 }

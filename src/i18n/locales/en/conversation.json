@@ -205,6 +205,8 @@
     "open": "Open {{name}}"
   },
   "compaction": {
+    "autoActivity": "Auto is compacting the context…",
+    "autoDone": "Auto compacted the context: {{before}} → {{after}}",
     "warn": "{{name}}: context at {{percent}}% of your limit ({{used}} / {{limit}}). Compact now (about 20 s)?",
     "warnAction": "Compact now",
     "later": "Later",

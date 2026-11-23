@@ -70,7 +70,8 @@ import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilenc
 import { enqueuePushRelay } from './lib/push-relay'
 import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
-import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, isAutoModel, pickerModelAfterRoute } from './lib/auto-router'
+import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, fallbackLabel, isAutoModel, pickerModelAfterRoute } from './lib/auto-router'
+import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
 import { applyRoutedModel, isRetryableProviderError, isRetryableTurnComplete, planAutoRoutedTurn, turnFallbackError, type AutoTurnTrack, type RoutedTurnPlan } from './lib/auto-route-turn'
 import { claimSend, modelRefreshApplies, releaseSend, sendBlockedWhileRunning, stillOnProfile } from './lib/send-guard'
 import { appendSessionStream, completedText, interruptGenerationForPriority, interruptLeftSessionIdle, isRunningTurnEnd, replayGapResumes, takeSessionStream } from './lib/turn-events'
@@ -262,7 +263,9 @@ export default function App() {
   const localBotRef = useRef<Bot | null>(null)
   const { showUsage } = settings
   // Context compaction: Manual mode guards the open chat against the user's own limit.
-  const guard = useMemo(() => evaluateGuard(settings.compactionMode, settings.compactionGauge, usage), [settings.compactionMode, settings.compactionGauge, usage])
+  // Auto handles the window itself (bigger model or automatic compaction): no manual limit banner there.
+  const autoGuarded = autoRouterEnabled() && autoModeFor(chatModel, settings) !== null
+  const guard = useMemo(() => evaluateGuard(autoGuarded ? 'auto' : settings.compactionMode, settings.compactionGauge, usage), [autoGuarded, settings.compactionMode, settings.compactionGauge, usage])
   const guardRef = useRef(guard)
   guardRef.current = guard
   const refreshChatUsage = useCallback((chat: ActiveChat) => {
@@ -504,6 +507,23 @@ export default function App() {
         if (text) setStreaming((value) => value + text)
         setRunning(true)
       }
+      // Hermes switched to its own fallback model (rate limit, outage): the Auto label follows the real model.
+      const hermesFallback = event.type === 'status.update' ? parseModelFallback(payload.text) : null
+      if (hermesFallback) {
+        const track = autoTurnRef.current.get(current.profile)
+        if (track) {
+          track.plan.badge = {
+            ...track.plan.badge,
+            chosen: fallbackRouteId(hermesFallback),
+            label: undefined,
+            reason: `Hermes fallback${hermesFallback.reason ? ` (${hermesFallback.reason})` : ''} from ${hermesFallback.fromModel}`,
+          }
+          const badge = track.plan.badge
+          useChatStore.getState().patchCachedMessage(current.profile, track.userMessageId, { autoRoute: badge })
+          setMessages((items) => items.map((item) => (item.id === track.userMessageId ? { ...item, autoRoute: badge } : item)))
+        }
+        refreshChatUsage(current)
+      }
       // Hermes compacts the context on its own before a turn: say so while it works.
       if (event.type === 'status.update' && (payload.kind === 'compacting' || payload.kind === 'compacted')) {
         if (payload.kind === 'compacting') {
@@ -585,6 +605,7 @@ export default function App() {
             autoTrack.plan.badge = {
               ...autoTrack.plan.badge,
               chosen: `${next.provider}/${next.model}`,
+              label: fallbackLabel(autoTrack.plan.decision, next),
               reason: `Fallback after ${err}`,
             }
             useChatStore.getState().patchCachedMessage(current.profile, autoTrack.userMessageId, { autoRoute: autoTrack.plan.badge })
@@ -1741,8 +1762,10 @@ export default function App() {
     let chat = useChatStore.getState().activeChat
     const profile = chat?.profile
     if (!chat || !profile || !stillOnProfile(useRosterStore.getState().selected, profile)) return false
-    // Manual compaction: the user's context limit is reached, compacting comes first.
-    if (blocksSending(guardRef.current)) {
+    // Manual compaction: the user's context limit is reached, compacting comes first. Auto never stops
+    // here: it routes to a model the conversation fits in, or compacts before the turn.
+    const autoForSend = autoRouterEnabled() && autoModeFor(useChatStore.getState().chatModel, getSettings()) !== null
+    if (blocksSending(guardRef.current) && !autoForSend) {
       setNotice(i18n.t('compaction.fullShort'))
       return false
     }
@@ -1806,6 +1829,8 @@ export default function App() {
             refreshChatUsage(workingChat)
           }
           userMessage.autoRoute = routedPlan.badge
+          // Even the largest window cannot hold the conversation with room to work: compact first.
+          if (routedPlan.decision.needsCompaction) await compactForAuto(workingChat)
         }
         if (onScreen()) setMessages((items) => [...items, userMessage])
         appendCachedMessage(profile, userMessage)
@@ -1846,6 +1871,7 @@ export default function App() {
             const track = autoTurnRef.current.get(profile)
             if (track) {
               track.plan.badge.chosen = `${next.provider}/${next.model}`
+              track.plan.badge.label = fallbackLabel(track.plan.decision, next)
               track.chat = workingChat
               useChatStore.getState().patchCachedMessage(profile, userMessage.id, { autoRoute: track.plan.badge })
               if (onScreen()) {
@@ -2034,6 +2060,68 @@ export default function App() {
       history: historyResult.status === 'fulfilled' ? historyResult.value : null,
     }
   }
+
+  /** Auto compaction (`session.compress`) when no model can hold the conversation with room to work. */
+  const compactForAuto = async (chat: ActiveChat) => {
+    if (compactingRef.current || DEMO) return false
+    compactingRef.current = true
+    setCompacting(true)
+    const onChat = () => useChatStore.getState().activeChat?.sessionId === chat.sessionId
+    if (onChat()) setActivity(i18n.t('compaction.autoActivity'))
+    try {
+      const result = parseCompressResult(await client.request('session.compress', { profile: chat.profile, session_id: chat.sessionId }, 300_000))
+      if (result.status === 'failed' || result.status === 'aborted') {
+        if (onChat()) setNotice(result.message ? i18n.t('compaction.failed', { reason: result.message }) : i18n.t('compaction.failedBare'))
+        return false
+      }
+      if (onChat()) {
+        setUsage((value) => {
+          const next = mergeUsage(value, result.usage) ?? value
+          if (!next) return next
+          return { ...next, compressions: result.usage?.compressions ?? (value?.compressions ?? 0) + 1 }
+        })
+        setNotice(result.before && result.after
+          ? i18n.t('compaction.autoDone', { before: compactNumber(result.before), after: compactNumber(result.after) })
+          : i18n.t('compaction.doneBare'))
+      }
+      return true
+    } catch (error) {
+      if (onChat()) setNotice(error instanceof Error && error.message ? i18n.t('compaction.failed', { reason: error.message }) : i18n.t('compaction.failedBare'))
+      return false
+    } finally {
+      compactingRef.current = false
+      setCompacting(false)
+      if (onChat()) setActivity('')
+    }
+  }
+
+  // An idle Auto chat near its model's window (80 %): a bigger model takes the next turn, else compact now.
+  const autoCompactKeyRef = useRef('')
+  useEffect(() => {
+    if (DEMO || !activeChat || !autoRouterEnabled()) return
+    const autoMode = autoModeFor(chatModel, settings)
+    if (!shouldCheckAutoCompact({ autoActive: autoMode !== null, running, compacting, sessionId: activeChat.sessionId, usage, lastKey: autoCompactKeyRef.current })) return
+    autoCompactKeyRef.current = autoCompactKey(activeChat.sessionId, usage)
+    const chat = activeChat
+    void (async () => {
+      const decision = await decideAutoRoute({
+        bot: chat.profile,
+        sessionId: chat.sessionId,
+        text: '',
+        imageCount: 0,
+        contextUsed: usage?.contextUsed,
+        contextMax: usage?.contextMax,
+        currentModel: chat.model,
+        models: modelOptions,
+        analyticsProfiles: useRosterStore.getState().bots.map((bot) => bot.slug),
+        mode: autoMode ?? 'auto',
+      })
+      if (!decision.ok || !decision.needsCompaction) return
+      if (useChatStore.getState().running || useChatStore.getState().activeChat?.sessionId !== chat.sessionId) return
+      await compactForAuto(chat)
+    })().catch(() => { /* the next turn routes and checks again */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.sessionId, chatModel, running, compacting, usage?.contextUsed, usage?.contextMax, usage?.compressions])
 
   /** Manual compaction of the open conversation (`session.compress`): idle session only, about 20 seconds. */
   const compactNow = async () => {

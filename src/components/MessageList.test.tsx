@@ -179,7 +179,7 @@ describe('Auto routing labels', () => {
   const free = { mode: 'auto-free' as const, category: 'chat', chosen: 'nvidia/llama-4', reason: 'free tier' }
 
   it('names the short model and keeps category and reason for the tooltip', () => {
-    expect(autoRouteModel(route)).toBe('kimi-k2.8')
+    expect(autoRouteModel(route)).toBe('Kimi K2.8 · OpenRouter')
     expect(autoRouteTitle(route)).toBe('openrouter/moonshot/kimi-k2.8 · code · best score for code')
   })
 
@@ -219,7 +219,7 @@ describe('Auto routing labels', () => {
     // Shown once: on the working line, not again on the user bubble.
     expect(labels).toHaveLength(1)
     expect(labels[0].className).toBe('working-auto-route')
-    expect(labels[0].text).toContain('kimi-k2.8')
+    expect(labels[0].text).toContain('Kimi K2.8 · OpenRouter')
     expect(labels[0].title).toContain('best score for code')
   })
 
@@ -232,7 +232,7 @@ describe('Auto routing labels', () => {
     }))
     expect(html).not.toContain('working-auto-route')
     expect(html.match(/class="message-auto-route"/g)?.length).toBe(1)
-    expect(html).toMatch(/message-assistant[\s\S]*message-auto-route[\s\S]*llama-4/)
+    expect(html).toMatch(/message-assistant[\s\S]*message-auto-route[\s\S]*Llama 4 · NVIDIA/)
   })
 
   it('shows no label outside Auto mode', async () => {

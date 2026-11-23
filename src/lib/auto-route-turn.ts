@@ -80,6 +80,7 @@ export async function planAutoRoutedTurn(_client: HermesClient, input: {
     imageCount: input.imageCount,
     contextUsed: input.usage?.contextUsed,
     contextMax: input.usage?.contextMax,
+    currentModel: input.chat.model,
     models: input.modelOptions,
     analyticsProfiles: input.analyticsProfiles,
     mode,
@@ -98,6 +99,7 @@ export async function planAutoRoutedTurn(_client: HermesClient, input: {
       mode,
       category: decision.category || 'other',
       chosen: decision.chosen,
+      ...(decision.label ? { label: decision.label } : {}),
       reason: decision.reason || 'Auto',
     },
   }

@@ -1,6 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Copy, ArrowDown, ChevronDown, Volume2 } from 'lucide-react'
+import { autoRouteDisplay } from '../lib/auto-route-label'
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AgentMessage, Bot, ChatMessage } from '../types'
@@ -303,9 +304,9 @@ export function AgentNote({ message, profile, onOpenImages, onOpenDocument, init
 
 type AutoRoute = NonNullable<ChatMessage['autoRoute']>
 
-/** Short model name for a routed id: `openrouter/vendor/model` → `model`. */
+/** Readable model and provider for a routed turn: « GPT 5.6 Sol · Cursor ». */
 export function autoRouteModel(route: AutoRoute) {
-  return route.chosen.split('/').pop() || route.chosen
+  return autoRouteDisplay(route.chosen, route.label)
 }
 
 /** Tooltip of an Auto label: the router's category and reason, never prompt text. */
