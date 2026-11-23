@@ -1111,6 +1111,19 @@ button.agent-note-name:hover { background: var(--hover); }
 .message-delivery { padding: 0 5px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 600; }
 .message-delivery.is-priority { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
 .message-auto-route { padding: 0 5px; border-radius: 5px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); color: var(--text-secondary); font-weight: 600; }
+/* Auto mode: the routed model stays readable on the answer; the time and buttons still wait for hover. */
+.message-meta:has(.message-auto-route) { opacity: 1; }
+.message-meta:has(.message-auto-route) > :not(.message-auto-route) { opacity: 0; transition: opacity 120ms; }
+.message:hover .message-meta > *, .message-meta:focus-within > * { opacity: 1; }
+.message.is-failed .message-meta > * { opacity: 1; }
+.message-auto-route { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The model picked for the turn in progress, next to the working line. */
+.working-auto-route {
+  flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 8px; border-radius: 999px; font-size: 12px; line-height: 18px; font-weight: 600;
+  color: var(--accent-text); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .model-option.is-auto { border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent); margin-bottom: 6px; }
 .message-user:has(.message-delivery) .message-meta { opacity: 1; }
 .mode-brain { --mode: #9159fe; }

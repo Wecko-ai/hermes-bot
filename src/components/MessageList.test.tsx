@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { APPROVED_MAIL_INSTRUCTION } from '../lib/mail'
 import type { Bot, ChatMessage } from '../types'
-import { AgentNote, MessageList } from './MessageList'
+import { AgentNote, MessageList, autoRouteModel, autoRoutesByMessage, autoRouteTitle, currentAutoRoute } from './MessageList'
 import { installTestDom } from './test-dom'
 
 const bot = (extra: Partial<Bot> = {}): Bot => ({
@@ -171,5 +171,75 @@ describe('MessageList', () => {
     })
     expect(container.querySelector('.visually-hidden')?.textContent).toBe('')
     await act(async () => { root.unmount() })
+  })
+})
+
+describe('Auto routing labels', () => {
+  const route = { mode: 'auto' as const, category: 'code', chosen: 'openrouter/moonshot/kimi-k2.8', reason: 'best score for code' }
+  const free = { mode: 'auto-free' as const, category: 'chat', chosen: 'nvidia/llama-4', reason: 'free tier' }
+
+  it('names the short model and keeps category and reason for the tooltip', () => {
+    expect(autoRouteModel(route)).toBe('kimi-k2.8')
+    expect(autoRouteTitle(route)).toBe('openrouter/moonshot/kimi-k2.8 · code · best score for code')
+  })
+
+  it('maps each reply to the pick of the user turn before it, skipping milestones', () => {
+    const messages = [
+      message({ id: 'u1', role: 'user', content: 'a', autoRoute: route }),
+      message({ id: 'p1', role: 'assistant', content: 'step', progress: true }),
+      message({ id: 'a1', role: 'assistant', content: 'done' }),
+      message({ id: 'u2', role: 'user', content: 'b' }),
+      message({ id: 'a2', role: 'assistant', content: 'plain' }),
+    ]
+    const { replies, answered } = autoRoutesByMessage(messages)
+    expect(replies.get('a1')).toBe(route)
+    expect(replies.has('p1')).toBe(false)
+    expect(replies.has('a2')).toBe(false)
+    expect(answered.has('u1')).toBe(true)
+    expect(currentAutoRoute(messages)).toBeUndefined()
+    expect(currentAutoRoute(messages.slice(0, 2))).toBe(route)
+  })
+
+  const renderLive = async (extra: Partial<Parameters<typeof MessageList>[0]>) => {
+    const { container } = installTestDom()
+    const root = createRoot(container as unknown as Element)
+    await act(async () => { root.render(list(extra)) })
+    const labels = Array.from(container.querySelectorAll('.working-auto-route, .message-auto-route')).map((node) => ({
+      className: node.getAttribute('class'), text: node.textContent, title: node.getAttribute('title'),
+    }))
+    await act(async () => { root.unmount() })
+    return labels
+  }
+
+  it('shows the routed model on the working line while the bot works', async () => {
+    const labels = await renderLive({
+      running: true,
+      messages: [message({ id: 'u1', role: 'user', content: 'Hello', autoRoute: route })],
+    })
+    // Shown once: on the working line, not again on the user bubble.
+    expect(labels).toHaveLength(1)
+    expect(labels[0].className).toBe('working-auto-route')
+    expect(labels[0].text).toContain('kimi-k2.8')
+    expect(labels[0].title).toContain('best score for code')
+  })
+
+  it('keeps a small label on the finished answer, not on the question', () => {
+    const html = renderToStaticMarkup(list({
+      messages: [
+        message({ id: 'u1', role: 'user', content: 'Hello', autoRoute: free }),
+        message({ id: 'a1', role: 'assistant', content: 'Hi' }),
+      ],
+    }))
+    expect(html).not.toContain('working-auto-route')
+    expect(html.match(/class="message-auto-route"/g)?.length).toBe(1)
+    expect(html).toMatch(/message-assistant[\s\S]*message-auto-route[\s\S]*llama-4/)
+  })
+
+  it('shows no label outside Auto mode', async () => {
+    const labels = await renderLive({
+      running: true,
+      messages: [message({ id: 'u1', role: 'user', content: 'Hello' }), message({ id: 'a1', role: 'assistant', content: 'Hi' })],
+    })
+    expect(labels).toHaveLength(0)
   })
 })

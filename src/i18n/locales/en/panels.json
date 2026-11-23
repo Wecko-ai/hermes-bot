@@ -187,6 +187,9 @@
     "fallbacks": "Fallbacks",
     "estimatedCost": "Estimated cost (USD)",
     "badge": "Auto → {{model}} ({{category}})",
+    "label": "{{mode}} · {{model}}",
+    "mode": "Auto",
+    "modeFree": "Auto free",
     "tablePath": "Scoring table",
     "fallbackBlockedTools": "Auto routing could not retry: tools already ran on this turn.",
     "fallbackExhausted": "Auto routing could not recover from the provider error."

@@ -187,6 +187,9 @@
     "fallbacks": "Bascules",
     "estimatedCost": "Coût estimé (USD)",
     "badge": "Auto → {{model}} ({{category}})",
+    "label": "{{mode}} · {{model}}",
+    "mode": "Auto",
+    "modeFree": "Auto gratuit",
     "tablePath": "Table de scoring",
     "fallbackBlockedTools": "Le routage Auto n’a pas pu réessayer : des outils ont déjà tourné sur ce tour.",
     "fallbackExhausted": "Le routage Auto n’a pas pu récupérer après l’erreur du fournisseur."
