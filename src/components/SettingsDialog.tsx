@@ -9,6 +9,7 @@ import type { HermesClient } from '../lib/hermes'
 import type { Bot, ModelOption } from '../types'
 import { VaultTab } from './VaultTab'
 import { chipModelLabel, modelLabel } from '../lib/model'
+import { formatModelOptionName, localServerLabel } from '../lib/providers'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { modelCost } from '../lib/free-models'
@@ -397,7 +398,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
   const filtered = useMemo(() => {
     const words = query.toLocaleLowerCase('fr').split(/[\s/_-]+/).filter(Boolean)
     return models.filter((option) => {
-      const text = `${option.model} ${modelLabel(option.model)} ${option.providerName}`.toLocaleLowerCase('fr').replace(/[/_-]+/g, ' ')
+      const text = `${option.model} ${modelLabel(option.model)} ${option.providerName} ${localServerLabel(option.provider, option.providerName)}`.toLocaleLowerCase('fr').replace(/[/_-]+/g, ' ')
       return words.every((word) => text.includes(word))
     })
   }, [models, query])
@@ -466,7 +467,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
               {open && group.models.map((option) => (
                 <label key={hiddenModelKey(option)} className="settings-model" data-model={option.model}>
                   <input type="checkbox" checked={!hidden.has(hiddenModelKey(option))} onChange={(event) => setVisible([option], event.target.checked)} />
-                  <span className="settings-model-label">{chipModelLabel(option.model)}</span>
+                  <span className="settings-model-label">{formatModelOptionName(option, chipModelLabel(option.model))}</span>
                   <code>{option.model}</code>
                   <ModelScoreMeta info={scored.get(`${option.provider}:${option.model}`)} />
                   {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}

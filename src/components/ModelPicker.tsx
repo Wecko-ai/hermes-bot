@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } from 'lucide-react'
 import type { ModelOption } from '../types'
 import { chipModelLabel, modelLabel } from '../lib/model'
-import { providerBrand } from '../lib/providers'
+import { formatModelOptionName, localServerLabel, providerBrand } from '../lib/providers'
 import { modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
@@ -100,7 +100,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
   const filtered = useMemo(() => {
     const words = query.toLocaleLowerCase('fr').split(/[\s/_-]+/).filter(Boolean)
     return options.filter((option) => {
-      const text = `${option.model} ${modelLabel(option.model)} ${option.providerName} ${brandOf(option).name}`.toLocaleLowerCase('fr').replace(/[/_-]+/g, ' ')
+      const text = `${option.model} ${modelLabel(option.model)} ${option.providerName} ${brandOf(option).name} ${localServerLabel(option.provider, option.providerName)}`.toLocaleLowerCase('fr').replace(/[/_-]+/g, ' ')
       return words.every((word) => text.includes(word))
     })
   }, [options, query])
@@ -286,7 +286,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           onMouseMove={() => setActiveKey(key)}
                           onClick={() => choose(option)}
                         >
-                          <span className="model-option-name">{chipModelLabel(option.model)}</span>
+                          <span className="model-option-name">{formatModelOptionName(option, chipModelLabel(option.model))}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
                           {freeMode && modelCost(option, ui.subscriptionProviders) === 'paid' && <span className="model-option-tag is-paid">{t('models.paid')}</span>}

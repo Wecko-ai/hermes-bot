@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LOCAL_GROUP, providerBrand } from './providers'
+import { formatModelOptionName, LOCAL_GROUP, localServerLabel, providerBrand } from './providers'
 
 describe('logos des fournisseurs', () => {
   // Third column: the title embedded in the SVG, since Vite ships small logos as data: URLs (“upsate”: a typo in the pack).
@@ -57,5 +57,14 @@ describe('logos des fournisseurs', () => {
 
   it('n’invente pas de logo pour un fournisseur inconnu', () => {
     expect(providerBrand('moa', 'Mixture of Agents')).toEqual({ group: 'moa', name: 'Mixture of Agents', local: false, logo: undefined })
+  })
+
+  it('préfixe les modèles locaux avec le nom du serveur', () => {
+    expect(localServerLabel('custom:omlx', 'Qwen local (oMLX)')).toBe('oMLX')
+    expect(localServerLabel('custom:splash', 'Local Splash Server')).toBe('Splash')
+    expect(localServerLabel('ollama', 'Ollama')).toBe('Ollama')
+    expect(localServerLabel('anthropic', 'Anthropic')).toBe('')
+    expect(formatModelOptionName({ provider: 'custom:omlx', providerName: 'oMLX' }, 'Qwen 3.8 27B')).toBe('oMLX / Qwen 3.8 27B')
+    expect(formatModelOptionName({ provider: 'anthropic', providerName: 'Anthropic' }, 'Claude Sonnet 5.5')).toBe('Claude Sonnet 5.5')
   })
 })

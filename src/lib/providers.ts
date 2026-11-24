@@ -57,3 +57,28 @@ export function providerBrand(slug: string, name: string): ProviderBrand {
   const file = BRANDS.find(([pattern]) => pattern.test(text))?.[1]
   return { group: slug, name, local: false, logo: file ? LOGOS[`../assets/providers/${file}.svg`] : undefined }
 }
+
+const LOCAL_SERVER_NAMES: Array<[RegExp, string]> = [
+  [/\bomlx\b/, 'oMLX'],
+  [/\bollama\b/, 'Ollama'],
+  [/\bsplash\b/, 'Splash'],
+  [/\blm[- ]?studio\b/, 'LM Studio'],
+  [/\bllama[.-]?cpp\b/, 'llama.cpp'],
+  [/\bvllm\b/, 'vLLM'],
+]
+
+/** Short server prefix for models grouped under “Local LLM” (e.g. `oMLX / …`, `Splash / …`). */
+export function localServerLabel(slug: string, name = ''): string {
+  const brand = providerBrand(slug, name)
+  if (!brand.local) return ''
+  const text = `${slug} ${name}`.toLocaleLowerCase('en').replace(/^custom:/, '')
+  const matched = LOCAL_SERVER_NAMES.find(([pattern]) => pattern.test(text))?.[1]
+  if (matched) return matched
+  const cleanSlug = slug.replace(/^custom:/, '').trim()
+  return name.trim() || cleanSlug || 'Local'
+}
+
+export function formatModelOptionName(option: { provider: string; providerName?: string }, baseLabel: string): string {
+  const server = localServerLabel(option.provider, option.providerName)
+  return server ? `${server} / ${baseLabel}` : baseLabel
+}
