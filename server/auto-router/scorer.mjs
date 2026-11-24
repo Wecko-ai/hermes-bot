@@ -184,7 +184,7 @@ export async function loadScoringTable(tablePath) {
   return raw
 }
 
-const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
+const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'splash', 'custom:splash', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
 
 function isCloudflareId(provider, model, fullId) {
   if (provider === 'cloudflare' || provider === 'custom:cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true

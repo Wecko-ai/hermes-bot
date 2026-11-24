@@ -11,7 +11,7 @@ export interface ProviderBrand {
 }
 
 // Servers running on this machine. opencodex and LiteLLM also listen locally, but serve remote models.
-const LOCAL_SERVER = /(?:^|[^a-z])(?:local|localhost|omlx|mlx|ollama|lm[- ]?studio|llama[.-]?cpp|vllm)(?:[^a-z]|$)/
+const LOCAL_SERVER = /(?:^|[^a-z])(?:local|localhost|omlx|mlx|ollama|splash|lm[- ]?studio|llama[.-]?cpp|vllm)(?:[^a-z]|$)/
 
 // Order matters: the first brand recognized in the slug or the name wins.
 const BRANDS: Array<[RegExp, string]> = [

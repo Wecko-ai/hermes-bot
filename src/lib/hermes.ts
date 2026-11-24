@@ -810,8 +810,24 @@ export async function interruptChat(client: HermesClient, chat: ActiveChat) {
 /** Plan models served by the provider but missing from the gateway’s catalog. */
 const PLAN_MODELS: Record<string, string[]> = { 'kimi-coding': ['k3.1-pro'], anthropic: ['claude-fable-5-2'] }
 
+async function loadLocalEndpointModels(endpoint: string): Promise<string[]> {
+  try {
+    const response = await fetch(endpoint, { credentials: 'same-origin' })
+    if (!response.ok) return []
+    const body = asObject(await response.json())
+    return Array.isArray(body.models) ? body.models.filter((model): model is string => typeof model === 'string' && model !== '') : []
+  } catch {
+    return []
+  }
+}
+
 export async function loadModelOptions(client: HermesClient, profile: string, sessionId?: string): Promise<{ options: ModelOption[]; current: string }> {
-  const result = await client.request('model.options', { profile, ...(sessionId ? { session_id: sessionId } : {}) })
+  const [result, omlxModels, ollamaModels, splashModels] = await Promise.all([
+    client.request('model.options', { profile, ...(sessionId ? { session_id: sessionId } : {}) }),
+    loadLocalEndpointModels('/api/omlx/models'),
+    loadLocalEndpointModels('/api/ollama/models'),
+    loadLocalEndpointModels('/api/splash/models'),
+  ])
   const options: ModelOption[] = []
   const hiddenProviders = new Set(getAppConfig().ui.hiddenProviders)
   // A model listed lately stays offered when the gateway answers with its built-in list (see model-memory.ts).
@@ -825,6 +841,16 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
     const unavailable = new Set<string>((Array.isArray(provider.unavailable_models) ? provider.unavailable_models : []).filter((model: unknown): model is string => typeof model === 'string'))
     const pricing = asObject(provider.pricing)
     const listed = (Array.isArray(provider.models) ? provider.models : []).filter((model: unknown): model is string => typeof model === 'string' && !unavailable.has(model))
+    const extraLocal = (slug === 'omlx' || slug === 'custom:omlx')
+      ? omlxModels
+      : (slug === 'ollama' || slug === 'custom:ollama')
+        ? ollamaModels
+        : (slug === 'splash' || slug === 'custom:splash')
+          ? splashModels
+          : []
+    for (const model of extraLocal) {
+      if (!unavailable.has(model) && !listed.includes(model)) listed.push(model)
+    }
     const kept = withRememberedModels(listed, memory[slug], now, unavailable)
     memory[slug] = kept.memory
     for (const model of PLAN_MODELS[slug] ?? []) {

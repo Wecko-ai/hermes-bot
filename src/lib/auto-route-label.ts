@@ -3,14 +3,14 @@
 const PROVIDERS: Record<string, string> = {
   cursor: 'Cursor', nvidia: 'NVIDIA', 'kimi-coding': 'Kimi', kimi: 'Kimi', moonshot: 'Kimi', moonshotai: 'Kimi',
   gemini: 'Gemini', google: 'Gemini', 'google-ai-studio': 'Gemini', aistudio: 'Gemini', openrouter: 'OpenRouter',
-  omlx: 'Local', ollama: 'Local', local: 'Local', lmstudio: 'Local', 'llama-cpp': 'Local', mlx: 'Local',
+  omlx: 'Local', ollama: 'Local', splash: 'Local', local: 'Local', lmstudio: 'Local', 'llama-cpp': 'Local', mlx: 'Local',
   anthropic: 'Anthropic', openai: 'OpenAI', deepseek: 'DeepSeek', mistral: 'Mistral', groq: 'Groq',
 }
 
 const BRANDS: Record<string, string> = {
   gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', gemma: 'Gemma', kimi: 'Kimi', glm: 'GLM', deepseek: 'DeepSeek',
   qwen: 'Qwen', minimax: 'MiniMax', llama: 'Llama', nemotron: 'Nemotron', composer: 'Composer', mistral: 'Mistral',
-  grok: 'Grok', phi: 'Phi', vl: 'VL', ai: 'AI',
+  grok: 'Grok', phi: 'Phi', vl: 'VL', ai: 'AI', inkling: 'Inkling',
 }
 
 const DROPPED = new Set(['it', 'instruct', 'chat', 'hf', 'gguf'])

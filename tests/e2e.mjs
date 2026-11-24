@@ -98,7 +98,7 @@ let localMode = false
 let localTickets = 0
 const localTokenSightings = []
 const localSocketOrigins = []
-const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS, HERMES_HOME: LOCAL_HOME, HERMESBOT_DATA_NAME: 'HermesBot-e2e' }
+const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS, HERMES_HOME: LOCAL_HOME, HERMESBOT_DATA_NAME: 'HermesBot-e2e', OMLX_ORIGIN: 'http://127.0.0.1:9' }
 
 // Files the fake gateway serves for orion's MEDIA: tags.
 // A coding agent a bot started from its terminal, as it appears in orion's history.

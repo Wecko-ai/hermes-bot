@@ -41,7 +41,7 @@ const RESERVE_MATCH_MS = 15000
 
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const LOCAL = new Set([
-  'omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'lmstudio', 'custom:lmstudio',
+  'omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'splash', 'custom:splash', 'lmstudio', 'custom:lmstudio',
   'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local',
 ])
 const MIGRATED_LIMITS = {

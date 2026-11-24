@@ -66,6 +66,7 @@ describe('local routes require a real session', () => {
         HERMESBOT_CONFIG: path.join(dir, 'missing.json'),
         HERMES_ORIGIN: 'http://127.0.0.1:9',
         OLLAMA_ORIGIN: `http://127.0.0.1:${ollamaPort}`,
+        OMLX_ORIGIN: 'http://127.0.0.1:9',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

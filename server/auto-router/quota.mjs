@@ -42,7 +42,7 @@ const CF_RATES = {
 }
 const CF_UNKNOWN_RATES = CF_RATES['llama-3.3-70b-instruct-fp8-fast']
 
-const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
+const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'splash', 'custom:splash', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
 
 function positive(value) {
   const n = typeof value === 'number' ? value : (typeof value === 'string' && value.trim() ? Number(value) : NaN)

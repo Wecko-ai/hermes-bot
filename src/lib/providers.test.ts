@@ -47,6 +47,7 @@ describe('logos des fournisseurs', () => {
 
   it.each([
     ['custom:omlx', 'Qwen local (oMLX)'],
+    ['custom:splash', 'Local Splash Server'],
     ['lmstudio', 'LM Studio'],
     ['custom:ollama', 'Ollama'],
     ['llamacpp', 'llama.cpp'],

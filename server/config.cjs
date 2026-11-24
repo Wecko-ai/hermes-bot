@@ -205,6 +205,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',
     ollamaOrigin: pinnedOrigin(env.OLLAMA_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.ollamaOrigin, allowRemoteGateway) || 'http://127.0.0.1:11434',
+    omlxOrigin: pinnedOrigin(env.OMLX_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.omlxOrigin, allowRemoteGateway) || 'http://127.0.0.1:8000',
+    splashOrigin: pinnedOrigin(env.SPLASH_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.splashOrigin, allowRemoteGateway) || 'http://127.0.0.1:8099',
     localChat: {
       model: text(env.HERMESBOT_LOCAL_MODEL) || text(localChat.model),
       name: text(localChat.name, 64),
