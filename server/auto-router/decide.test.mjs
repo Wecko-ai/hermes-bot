@@ -34,13 +34,38 @@ describe('auto-router decide', () => {
     expect(result.label).toBe('Demo Code (Demo)')
   })
 
+  it('keeps only Composer and Grok among Cursor candidates', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/claude-sonnet-5-5': { quality: { coding: 0.99, writing: 0.99, other: 0.99 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.8, writing: 0.8, other: 0.8 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor'] })
+    const result = await router.decide({
+      text: 'Fix the bug in server/index.mjs',
+      models: [
+        { provider: 'cursor', model: 'cursor/claude-sonnet-5-5' },
+        { provider: 'cursor', model: 'cursor/gpt-5.6-sol' },
+        { provider: 'cursor', model: 'cursor/grok-4.7' },
+        { provider: 'cursor', model: 'cursor/composer-2.5' },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    expect(['cursor/cursor/grok-4.7', 'cursor/cursor/composer-2.5']).toContain(result.chosen)
+    expect(JSON.stringify(result.candidates)).not.toMatch(/claude|gpt/)
+  })
+
   it('auto-free keeps only free models, decided on the server', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
     roots.push(dir)
     const tablePath = path.join(dir, 'table.json')
     await fs.writeFile(tablePath, JSON.stringify({
       models: {
-        'cursor/cursor/claude-opus-5-5': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
         'kimi-coding/k3.1-pro': { quality: { coding: 0.98 }, costPerMToken: { in: 0, out: 0 } },
         'nvidia/z-ai/glm-5.3': { quality: { coding: 0.8 }, costPerMToken: { in: 0, out: 0 } },
         'omlx/qwen-local': { quality: { coding: 0.6 }, costPerMToken: { in: 0, out: 0 } },
@@ -48,7 +73,7 @@ describe('auto-router decide', () => {
     }))
     const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['kimi-coding', 'cursor'] })
     const models = [
-      { provider: 'cursor', model: 'cursor/claude-opus-5-5', free: true },
+      { provider: 'cursor', model: 'cursor/grok-4.7', free: true },
       { provider: 'kimi-coding', model: 'k3.1-pro', free: true },
       { provider: 'opencode-go', model: 'beam-free', free: true },
       { provider: 'gemini', model: 'gemini-3.8-flash', free: true },
@@ -66,7 +91,7 @@ describe('auto-router decide', () => {
     for (const row of result.fallbacks) expect(allowed.has(row.fullId)).toBe(true)
     const plain = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
     expect(plain.mode).toBe('auto')
-    expect(plain.chosen).toBe('cursor/cursor/claude-opus-5-5')
+    expect(plain.chosen).toBe('cursor/cursor/grok-4.7')
     const none = await router.decide({ text: 'hi', models: models.slice(0, 2), mode: 'auto-free' })
     expect(none).toMatchObject({ ok: false, error: 'no_free_candidates' })
   })
@@ -91,7 +116,7 @@ describe('auto-router decide', () => {
       { provider: 'cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' },
       { provider: 'openrouter', model: 'nvidia/nemotron:free' },
       { provider: 'nvidia', model: 'small' },
-      { provider: 'cursor', model: 'cursor/claude-opus-5-5', free: true },
+      { provider: 'cursor', model: 'cursor/grok-4.7', free: true },
     ]
     const first = await router.decide({ text: 'Fix the bug in server/index.mjs', models, mode: 'auto-free' })
     expect(first.ok).toBe(true)
@@ -124,14 +149,14 @@ describe('auto-router decide', () => {
     const tablePath = path.join(dir, 'table.json')
     await fs.writeFile(tablePath, JSON.stringify({
       models: {
-        'cursor/cursor/gpt-5.6-sol': { quality: { long_context: 0.95 }, contextWindow: 272_000, baselineLatencyMs: 500 },
+        'cursor/cursor/grok-4.6': { quality: { long_context: 0.95 }, contextWindow: 272_000, baselineLatencyMs: 500 },
         'cursor/cursor/composer-2.5': { quality: { long_context: 0.9 }, contextWindow: 200_000, baselineLatencyMs: 500 },
         'kimi-coding/k3.1-pro': { quality: { long_context: 0.8 }, contextWindow: 1_048_576, baselineLatencyMs: 60_000 },
       },
     }))
     const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor', 'kimi-coding'] })
     const models = [
-      { provider: 'cursor', model: 'cursor/gpt-5.6-sol' },
+      { provider: 'cursor', model: 'cursor/grok-4.6' },
       { provider: 'cursor', model: 'cursor/composer-2.5' },
       { provider: 'kimi-coding', model: 'k3.1-pro' },
     ]

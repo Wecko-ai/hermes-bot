@@ -492,7 +492,9 @@
     },
     "autoFree": "Auto free",
     "autoFreeHint": "Free models only, no subscription quota",
-    "autoFreeLabel": "Auto free"
+    "autoFreeLabel": "Auto free",
+    "chefQwen": "Chef Qwen",
+    "chefQwenHint": "Grok 4.7 leads, local Qwen 27B does the work"
   },
   "providers": {},
   "serverRequest": {

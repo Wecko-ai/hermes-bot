@@ -45,6 +45,7 @@ function quotaModuleCandidates() {
     process.env.HERMESBOT_QUOTA_MODULE,
     path.join(HERE, 'provider-quota.mjs'),
     path.resolve(HERE, '../../../server/auto-router/provider-quota.mjs'),
+    path.join(home, 'worktrees/hermes-bot-quota-models/server/auto-router/provider-quota.mjs'),
     path.join(home, 'worktrees/hermes-bot-quota-gw/server/auto-router/provider-quota.mjs'),
   ].filter((file) => typeof file === 'string' && file.length > 0)
 }
@@ -53,23 +54,24 @@ let quotaModule = null
 
 export async function loadQuotaModule() {
   if (quotaModule) return quotaModule
-  let fallback = null
+  let best = null
+  let bestContract = -1
   for (const file of quotaModuleCandidates()) {
     if (!fs.existsSync(file)) continue
     try {
       const mod = await import(pathToFileURL(file).href)
-      if (Number(mod.QUOTA_GATEWAY_CONTRACT) >= 1) {
-        quotaModule = mod
-        return mod
-      }
-      if (!fallback) fallback = mod
+      const contract = Number(mod.QUOTA_GATEWAY_CONTRACT) || 0
+      if (contract > bestContract) {
+        best = mod
+        bestContract = contract
+      } else if (!best) best = mod
     } catch {
       /* try the next checkout */
     }
   }
-  if (!fallback) throw new Error('provider-quota.mjs not found')
-  quotaModule = fallback
-  return fallback
+  if (!best) throw new Error('provider-quota.mjs not found')
+  quotaModule = best
+  return best
 }
 
 function argValue(args, name) {

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAutoRouter } from './decide.mjs'
 import {
-  createProviderQuotaStore, exhaustionFromSignal, limitSpec, publicError, quotaProviderId,
+  createProviderQuotaStore, exhaustionFromSignal, isQuotaSignal, limitSpec, modelQuotaId, publicError, quotaProviderId,
 } from './provider-quota.mjs'
 
 const roots = []
@@ -301,14 +301,14 @@ describe('auto-router skips exhausted providers', () => {
     await fs.writeFile(tablePath, JSON.stringify({
       models: {
         'kimi-coding/k3.1-pro': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
-        'cursor/cursor/gpt': { quality: { coding: 0.5 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok': { quality: { coding: 0.5 }, costPerMToken: { in: 0, out: 0 } },
         'nvidia/small': { quality: { coding: 0.4 }, costPerMToken: { in: 0, out: 0 } },
       },
     }))
     const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: [] })
     const models = [
       { provider: 'kimi-coding', model: 'k3.1-pro' },
-      { provider: 'cursor', model: 'cursor/gpt' },
+      { provider: 'cursor', model: 'cursor/grok' },
       { provider: 'nvidia', model: 'small' },
     ]
     const first = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
@@ -316,7 +316,7 @@ describe('auto-router skips exhausted providers', () => {
     await router.recordLoggedUsage({
       mode: 'auto',
       chosen: 'kimi-coding/k3.1-pro',
-      fallbacks: [{ model: 'cursor/cursor/gpt', error: '429' }],
+      fallbacks: [{ model: 'cursor/cursor/grok', error: '429' }],
     }, [{
       provider: 'kimi-coding',
       model: 'k3.1-pro',
@@ -329,7 +329,97 @@ describe('auto-router skips exhausted providers', () => {
     expect(file.providers.cursor.used).toBe(1)
     expect(file.providers.cursor.exhaustedUntil).toBeNull()
     const second = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
-    expect(second.chosen).toBe('cursor/cursor/gpt')
+    expect(second.chosen).toBe('cursor/cursor/grok')
+    expect(second.reason).toMatch(/provider kimi exhausted/)
     expect(second.candidates.map((row) => row.model)).not.toContain('kimi-coding/k3.1-pro')
+  })
+
+  it('skips exhausted cursor models and keeps composer-2.5', async () => {
+    const dir = await temp()
+    let now = new Date('2026-11-23T12:00:00.000Z')
+    const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+    expect(isQuotaSignal(400, 'resource limit exceeded')).toBe(true)
+    expect(isQuotaSignal(403, 'Plan limit reached')).toBe(true)
+    expect(isQuotaSignal(500, 'insufficient credits')).toBe(true)
+    expect(isQuotaSignal(500, 'internal error')).toBe(false)
+    expect(isQuotaSignal(400, 'bad request')).toBe(false)
+    expect(modelQuotaId('cursor/cursor/claude-opus-5-5')).toBe('claude-opus-5-5')
+
+    const recorded = await store.noteErrors({
+      table: {},
+      errors: [
+        { provider: 'custom', model: 'cursor/claude-opus-5-5', status: 400, message: 'Cursor rate limit exceeded: resource limit exceeded' },
+        { provider: 'cursor', model: 'cursor/gpt-5.6-sol', status: 500, message: 'resource limit exceeded' },
+        { provider: 'cursor', model: 'composer-2.5', status: 500, message: 'internal error' },
+      ],
+    })
+    expect(recorded).toBe(true)
+    const file = JSON.parse(await fs.readFile(store.file, 'utf8'))
+    expect(file.providers.custom).toBeUndefined()
+    expect(file.providers.cursor.exhaustedUntil).toBeNull()
+    expect(file.providers.cursor.models['claude-opus-5-5']).toMatchObject({
+      exhaustedUntil: '2026-11-23T18:00:00.000Z',
+      lastStatus: 400,
+    })
+    expect(file.providers.cursor.models['claude-opus-5-5'].lastError).toMatch(/resource limit exceeded/i)
+    expect(file.providers.cursor.models['gpt-5.6-sol'].exhaustedUntil).toBe('2026-11-23T18:00:00.000Z')
+    expect(file.providers.cursor.models['composer-2.5']).toBeUndefined()
+    const view = await store.snapshot()
+    expect(store.blocked(view, {}, { provider: 'cursor', model: 'cursor/claude-opus-5-5' }, 0)).toBe(true)
+    expect(store.blocked(view, {}, { provider: 'cursor', model: 'cursor/composer-2.5' }, 0)).toBe(false)
+
+    now = new Date('2026-11-23T13:00:00.000Z')
+    await store.noteErrors({
+      table: {},
+      errors: [{ provider: 'cursor', model: 'claude-opus-5-5', status: 400, message: 'resource limit exceeded' }],
+    })
+    const renewed = JSON.parse(await fs.readFile(store.file, 'utf8')).providers.cursor.models['claude-opus-5-5']
+    expect(renewed.exhaustedUntil).toBe('2026-11-23T19:00:00.000Z')
+
+    const raw = JSON.parse(await fs.readFile(store.file, 'utf8'))
+    raw.providers.cursor.models['claude-opus-5-5'].exhaustedUntil = '2026-11-24T00:00:00.000Z'
+    raw.providers.cursor.models['claude-opus-5-5'].lastErrorAt = '2026-11-23T13:30:00.000Z'
+    await fs.writeFile(store.file, JSON.stringify(raw))
+    now = new Date('2026-11-23T13:10:00.000Z')
+    await store.noteErrors({
+      table: {},
+      errors: [{ provider: 'cursor', model: 'claude-opus-5-5', status: 403, message: 'resource limit exceeded' }],
+    })
+    expect(JSON.parse(await fs.readFile(store.file, 'utf8')).providers.cursor.models['claude-opus-5-5'].exhaustedUntil)
+      .toBe('2026-11-24T00:00:00.000Z')
+
+    expect(await store.reserve(pick('cursor', 'cursor/composer-2.5'))).toBe(true)
+    const afterUse = JSON.parse(await fs.readFile(store.file, 'utf8')).providers.cursor
+    expect(afterUse.used).toBe(1)
+    expect(afterUse.models['claude-opus-5-5'].exhaustedUntil).toBe('2026-11-24T00:00:00.000Z')
+    expect(await store.reserve(pick('cursor', 'cursor/claude-opus-5-5'))).toBe(false)
+
+    const wide = createProviderQuotaStore(await temp(), { now: () => now, host: 'host-a' })
+    await wide.noteErrors({
+      table: {},
+      errors: [{ provider: 'cursor', model: 'cursor/claude-opus-5-5', status: 429, message: 'rate limit' }],
+    })
+    const wideView = await wide.snapshot()
+    expect(wide.blocked(wideView, {}, { provider: 'cursor', model: 'cursor/composer-2.5' }, 0)).toBe(true)
+    expect(JSON.parse(await fs.readFile(wide.file, 'utf8')).providers.cursor.exhaustedUntil).toBe('2026-11-23T19:10:00.000Z')
+
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/claude-opus-5-5': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/composer-2.5': { quality: { coding: 0.4 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/small': { quality: { coding: 0.2 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor'] })
+    const models = [
+      { provider: 'cursor', model: 'cursor/claude-opus-5-5' },
+      { provider: 'cursor', model: 'cursor/composer-2.5' },
+      { provider: 'nvidia', model: 'small' },
+    ]
+    const picked = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
+    expect(picked.chosen).toBe('cursor/cursor/composer-2.5')
+    expect(picked.candidates.map((row) => row.model)).not.toContain('cursor/cursor/claude-opus-5-5')
+    expect(picked.candidates.map((row) => row.model)).toContain('cursor/cursor/composer-2.5')
   })
 })

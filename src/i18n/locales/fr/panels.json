@@ -492,7 +492,9 @@
     },
     "autoFree": "Auto gratuit",
     "autoFreeHint": "Modèles gratuits seulement, sans quota d’abonnement",
-    "autoFreeLabel": "Auto gratuit"
+    "autoFreeLabel": "Auto gratuit",
+    "chefQwen": "Chef Qwen",
+    "chefQwenHint": "Grok 4.7 dirige, Qwen 27B local fait le travail"
   },
   "providers": {},
   "serverRequest": {

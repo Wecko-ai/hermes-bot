@@ -131,6 +131,23 @@ describe('messages de la gateway', () => {
     expect(messages[1]).toMatchObject({ role: 'tool', technical: true, delegation: [{ goal: 'Implement the backend.', context: 'Repo: site' }, { goal: 'Implement the frontend.' }] })
     expect(messages[1].content).toContain('Implement the backend.')
   })
+
+  it('keeps the full transcript when this gateway rejects the history page', async () => {
+    let resumes = 0
+    const request = vi.fn(async (method: string) => {
+      if (method === 'session.resume') {
+        resumes += 1
+        if (resumes === 1) return { revision: 1, messages: [] }
+        return { revision: 1, messages: [{ row_id: 1, role: 'user', content: 'hello', timestamp: 1 }] }
+      }
+      if (method === 'session.history') throw new HermesRpcError('invalid_params', {}, 4001)
+      return {}
+    })
+    const opened = await openChat({ request, generation: 1 } as unknown as HermesClient, 'lyra', 'chat-lyra', { revision: 'v1|s|1|1|1', sinceId: 1 })
+    expect(opened.sync).toBe('full')
+    expect(opened.deltaSupported).toBe(false)
+    expect(opened.messages.map((message) => message.content)).toContain('hello')
+  })
 })
 
 describe('statut réel du roster', () => {

@@ -12,6 +12,10 @@ export interface ChatCacheEntry {
   routines: Routine[]
   /** Model picker choice (may be `hermesbot:auto` while `chat.model` is a routed model). */
   pickerModel?: string
+  /** Gateway transcript fingerprint (`v1|…`). Empty until the gateway speaks that dialect. */
+  revision?: string
+  lastId?: number
+  hasOlder?: boolean
 }
 
 export function latestMessageTime(messages: ChatMessage[]) {
@@ -218,7 +222,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   getCached: (profile) => get().cache.get(profile),
   setCached: (profile, entry) => {
     const messages = trimCachedMessages(entry.messages)
-    get().cache.set(profile, messages === entry.messages ? entry : { ...entry, messages })
+    const { cache, activeChat } = get()
+    cache.delete(profile)
+    cache.set(profile, messages === entry.messages ? entry : { ...entry, messages })
+    const keep = new Set([profile, activeChat?.profile].filter((value): value is string => Boolean(value)))
+    for (const key of [...cache.keys()]) {
+      if (cache.size <= 8) break
+      if (keep.has(key)) continue
+      cache.delete(key)
+    }
   },
   updateCachedChat: (profile, changes) => {
     const { cache } = get()
@@ -296,7 +308,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const stored = messages === synced.messages ? synced : { ...synced, messages }
     const prev = get().cache.get(profile)
     const pickerModel = prev?.pickerModel || pickerForSession(synced.chat.sessionId)
-    get().cache.set(profile, { ...stored, ...(pickerModel ? { pickerModel } : {}) })
+    get().cache.set(profile, {
+      ...stored,
+      ...(pickerModel ? { pickerModel } : {}),
+      revision: prev?.revision,
+      lastId: prev?.lastId,
+      hasOlder: prev?.hasOlder,
+    })
     set({
       activeChat: synced.chat,
       chatModel: pickerModelForSession(pickerModel, synced.chat.model),

@@ -11,6 +11,7 @@ import { UNASSIGNED_SECTION_ID, UNASSIGNED_SECTION_NAME } from './roster-groups'
 import { i18n } from '../i18n'
 import { readModelMemory, withRememberedModels, writeModelMemory } from './model-memory'
 import { expandToolMessage } from './tool-transcript'
+import { isGatewayRevision, type HistorySync } from './replica'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -589,7 +590,67 @@ export async function loadRoster(client: HermesClient, browserOwner: () => Promi
   return { bots, health: { connected: true, label: i18n.t('hermes.connected') } }
 }
 
-export async function openChat(client: HermesClient, profile: string, sessionIdHint?: string): Promise<{ chat: ActiveChat; messages: ChatMessage[]; prompts: PendingPrompt[] }> {
+export interface OpenChatOptions {
+  /** Gateway `v1|…` revision. With a replica, the transcript is a delta instead of a full resume. */
+  revision?: string
+  sinceId?: number
+  limit?: number
+  /** False for a few minutes after this gateway rejected the new history fields. */
+  tryDelta?: boolean
+}
+
+export interface OpenedChat {
+  chat: ActiveChat
+  messages: ChatMessage[]
+  prompts: PendingPrompt[]
+  sync: HistorySync
+  revision: string
+  hasOlder: boolean
+  /** False when this gateway does not know the history page fields. */
+  deltaSupported: boolean
+}
+
+function historyUnsupported(error: unknown) {
+  // 4000: this gateway's strict params. 4001: the running gateway's invalid_params.
+  // -32602: JSON-RPC invalid params. Any of these means the page fields are not spoken here.
+  return error instanceof HermesRpcError && (error.code === 4000 || error.code === 4001 || error.code === -32602)
+}
+
+function chatFromSnapshot(profile: string, sessionId: string, snapshot: Json | undefined, client: HermesClient): ActiveChat {
+  return {
+    profile,
+    sessionId,
+    revision: asNumber(snapshot?.revision),
+    executionGeneration: asNumber(snapshot?.execution_generation, 1),
+    replayEpoch: asString(snapshot?.replay_epoch, undefined),
+    subscriptionId: asString(snapshot?.subscription_id, undefined),
+    running: snapshot?.running === true,
+    model: asString(asObject(snapshot?.info).model) || undefined,
+    socketGeneration: client.generation,
+  }
+}
+
+function promptsFrom(sessionId: string, snapshot: Json | undefined) {
+  return (Array.isArray(snapshot?.prompts) ? snapshot.prompts as unknown[] : [])
+    .map((value) => parsePendingPrompt(sessionId, value))
+    .filter((prompt): prompt is PendingPrompt => prompt !== null)
+}
+
+function mapHistory(history: Json | undefined, profile: string) {
+  return ((history?.messages || []) as unknown[]).flatMap((value, index) => mapMessages(value, index, profile))
+}
+
+/** Older messages above `beforeId` (`session.history` `before` + `limit`). */
+export async function fetchHistoryPage(client: HermesClient, profile: string, sessionId: string, beforeId: number, limit = 50) {
+  const history = await client.request('session.history', { profile, session_id: sessionId, before: beforeId, limit })
+  return {
+    messages: mapHistory(history, profile),
+    hasOlder: history?.has_older === true,
+    revision: asString(history?.revision),
+  }
+}
+
+export async function openChat(client: HermesClient, profile: string, sessionIdHint?: string, options: OpenChatOptions = {}): Promise<OpenedChat> {
   let sessionId = sessionIdHint || ''
   if (!sessionId) {
     const roster = await client.request('profiles.list', { include_sessions: true })
@@ -616,6 +677,39 @@ export async function openChat(client: HermesClient, profile: string, sessionIdH
   }
   if (!sessionId) throw new Error(i18n.t('hermes.chatNotFound'))
 
+  const wantDelta = options.tryDelta !== false && isGatewayRevision(options.revision)
+  if (wantDelta) {
+    try {
+      const snapshot = await client.request('session.resume', {
+        profile,
+        session_id: sessionId,
+        source: 'gui',
+        omit_messages: true,
+        defer_history: true,
+      })
+      const history = await client.request('session.history', {
+        profile,
+        session_id: sessionId,
+        if_revision: options.revision,
+        ...(options.sinceId ? { since_id: options.sinceId } : {}),
+        limit: options.limit || 200,
+      })
+      deliverOpenRequests(client, snapshot?.open_requests)
+      const sync: HistorySync = history?.unchanged === true ? 'unchanged' : history?.replaced === true ? 'replaced' : 'delta'
+      return {
+        chat: chatFromSnapshot(profile, sessionId, snapshot, client),
+        messages: sync === 'unchanged' ? [] : mapHistory(history, profile),
+        prompts: promptsFrom(sessionId, snapshot),
+        sync,
+        revision: asString(history?.revision) || options.revision || '',
+        hasOlder: history?.has_older === true,
+        deltaSupported: true,
+      }
+    } catch (error) {
+      if (!historyUnsupported(error)) throw error
+    }
+  }
+
   const snapshot = await client.request('session.resume', {
     profile,
     session_id: sessionId,
@@ -628,24 +722,31 @@ export async function openChat(client: HermesClient, profile: string, sessionIdH
   let messages = (rawMessages as unknown[]).flatMap((value, index) => mapMessages(value, index, profile))
   if (messages.length === 0) {
     const history = await client.request('session.history', { profile, session_id: sessionId })
-    messages = ((history?.messages || []) as unknown[]).flatMap((value, index) => mapMessages(value, index, profile))
+    messages = mapHistory(history, profile)
+  }
+  let revision = ''
+  let deltaSupported = options.tryDelta !== false
+  if (options.tryDelta !== false) {
+    try {
+      const probed = await client.request('session.history', {
+        profile,
+        session_id: sessionId,
+        if_revision: 'v1|probe',
+        limit: 1,
+      })
+      revision = asString(probed?.revision)
+    } catch (error) {
+      if (historyUnsupported(error)) deltaSupported = false
+    }
   }
   return {
-    chat: {
-      profile,
-      sessionId,
-      revision: asNumber(snapshot?.revision),
-      executionGeneration: asNumber(snapshot?.execution_generation, 1),
-      replayEpoch: asString(snapshot?.replay_epoch, undefined),
-      subscriptionId: asString(snapshot?.subscription_id, undefined),
-      running: snapshot?.running === true,
-      model: asString(asObject(snapshot?.info).model) || undefined,
-      socketGeneration: client.generation,
-    },
+    chat: chatFromSnapshot(profile, sessionId, snapshot, client),
     messages,
-    prompts: (Array.isArray(snapshot?.prompts) ? snapshot.prompts as unknown[] : [])
-      .map((value) => parsePendingPrompt(sessionId, value))
-      .filter((prompt): prompt is PendingPrompt => prompt !== null),
+    prompts: promptsFrom(sessionId, snapshot),
+    sync: 'full',
+    revision,
+    hasOlder: false,
+    deltaSupported,
   }
 }
 

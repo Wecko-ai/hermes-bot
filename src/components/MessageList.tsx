@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Copy, ArrowDown, ChevronDown, Volume2 } from 'lucide-react'
 import { autoRouteDisplay } from '../lib/auto-route-label'
@@ -36,6 +36,8 @@ import { nextStick } from '../lib/scroll-stick'
 import { useScrollIntent } from '../lib/use-scroll-intent'
 import { mayBecomeSilent } from '../lib/hermes'
 import { messageDay, shortTime } from '../lib/time'
+import { createLru, ESTIMATED_ROW_HEIGHT, messageTail, messageWindow } from '../lib/message-window'
+import { scrollMemory, setScrollMemory } from '../lib/replica'
 import { useAppConfig } from '../lib/app-config'
 import { guessLanguage, toSpokenText } from '../lib/spoken-text'
 
@@ -473,13 +475,25 @@ interface MessageListProps {
   onSearchCount?: (count: number) => void
   /** Milestone bubbles in the thread; defaults to the Conversations setting. */
   progressInThread?: boolean
+  /** Older rows exist above the replica. The list asks for them near the top. */
+  hasOlder?: boolean
+  onLoadOlder?: () => Promise<boolean | void> | boolean | void
+}
+
+const citedCache = createLru<readonly string[]>(400)
+/** Short threads stay fully mounted. A long Bot Chat windows to the rows on screen. */
+const VIRTUAL_MIN_ROWS = 320
+
+function rowAnchor(row: { kind: string; message?: ChatMessage; progress?: ChatMessage[]; answer?: ChatMessage }) {
+  if (row.kind === 'message') return row.message?.id || ''
+  return row.progress?.[0]?.id || row.answer?.id || ''
 }
 
 // Only one list owns the page highlights at a time (the local chat keeps its own list mounted).
 let highlightOwner: object | null = null
 const supportsHighlights = () => typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined'
 
-export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onVaultFormDone, onOpenBot, search, onSearchCount, progressInThread = getSettings().progressInThread }: MessageListProps) {
+export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onVaultFormDone, onOpenBot, search, onSearchCount, progressInThread = getSettings().progressInThread, hasOlder = false, onLoadOlder }: MessageListProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -489,6 +503,10 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   // near-bottom scroll event cannot pin the thread again on its own.
   const wheelDeltaRef = useRef(0)
   const scrollTopRef = useRef(0)
+  const heightsRef = useRef<number[]>([])
+  const headRef = useRef('')
+  const heightBeforeRef = useRef(0)
+  const [frame, setFrame] = useState({ start: 0, end: 0, top: 0, bottom: 0, on: false })
   // A scroll upward without a gesture is the layout: it must not detach the thread from the bottom.
   const intent = useScrollIntent()
   const [showJump, setShowJump] = useState(false)
@@ -512,9 +530,20 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   }, [messages, streamed, progressInThread])
   const thread = useMemo(() => threadItems(threadMessages, running, bot.slug, progressInThread), [threadMessages, running, bot.slug, progressInThread])
   const citedById = useMemo(() => {
-    const paths = citedPathsByMessage(messages)
     const map = new Map<string, readonly string[]>()
-    messages.forEach((message, index) => map.set(message.id, paths[index] ?? []))
+    const keyOf = (message: ChatMessage) => `${message.id}:${message.content.length}:${message.content.slice(0, 64)}`
+    const stale = messages.some((message) => citedCache.get(keyOf(message)) === undefined)
+    if (!stale) {
+      messages.forEach((message) => map.set(message.id, citedCache.get(keyOf(message)) ?? []))
+      return map
+    }
+    // Paths are shared across a turn, so a partial list would drop a neighbour's file.
+    const paths = citedPathsByMessage(messages)
+    messages.forEach((message, index) => {
+      const value = paths[index] ?? []
+      citedCache.set(keyOf(message), value)
+      map.set(message.id, value)
+    })
     return map
   }, [messages])
   // A `NOREPLY` being written never shows: the bot at work is shown instead.
@@ -575,9 +604,44 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
     setShowJump(false)
     endRef.current?.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'instant' })
   }
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const queryRef = useRef('')
+  const publishFrame = () => {
+    const element = scrollRef.current
+    const list = itemsRef.current
+    const height = element?.clientHeight || 0
+    if (!element || list.length < VIRTUAL_MIN_ROWS || height <= 0 || queryRef.current.trim()) {
+      setFrame((current) => (current.on ? { start: 0, end: list.length, top: 0, bottom: 0, on: false } : current))
+      return
+    }
+    const heightAt = (index: number) => heightsRef.current[index] || ESTIMATED_ROW_HEIGHT
+    const next = stickToBottomRef.current
+      ? messageTail(list.length, height, heightAt)
+      : messageWindow(list.length, element.scrollTop, height, heightAt)
+    setFrame((current) => (
+      current.on && current.start === next.start && current.end === next.end && current.top === next.top && current.bottom === next.bottom
+        ? current
+        : { ...next, on: true }
+    ))
+  }
   useEffect(() => {
     setViewer(null)
-    scrollToBottom()
+    heightsRef.current = []
+    const memory = scrollMemory(bot.slug)
+    if (memory && !memory.stick && memory.anchorId) {
+      stickToBottomRef.current = false
+      setShowJump(true)
+      const index = itemsRef.current.findIndex((row) => rowAnchor(row) === memory.anchorId)
+      const element = scrollRef.current
+      if (element && index > 0) {
+        let top = 0
+        for (let at = 0; at < index; at += 1) top += heightsRef.current[at] || ESTIMATED_ROW_HEIGHT
+        element.scrollTop = top
+        scrollTopRef.current = top
+      }
+      publishFrame()
+    } else scrollToBottom()
   }, [bot.slug])
 
   // Find in the conversation: ranges are rebuilt when the text changes, but the view only moves on Enter.
@@ -585,6 +649,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   const lastJumpRef = useRef(search?.jump ?? 0)
   const flashRef = useRef<number | undefined>(undefined)
   const query = search?.query ?? ''
+  queryRef.current = query
   const position = search?.position ?? -1
   const jump = search?.jump ?? 0
   // Finished messages only. The streaming bubble is excluded, so a token does not walk the thread.
@@ -644,6 +709,33 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
   useEffect(() => {
     if (stickToBottomRef.current) followBottom()
   }, [count, streaming, running, loading])
+  useLayoutEffect(() => {
+    publishFrame()
+  }, [count, query, loading])
+  useLayoutEffect(() => {
+    const element = scrollRef.current
+    const head = items[0] ? rowAnchor(items[0]) : ''
+    if (element && head && headRef.current && head !== headRef.current && !stickToBottomRef.current) {
+      const delta = element.scrollHeight - heightBeforeRef.current
+      if (delta > 0) element.scrollTop += delta
+    }
+    headRef.current = head
+    heightBeforeRef.current = element?.scrollHeight || 0
+  }, [items])
+  useLayoutEffect(() => {
+    const column = columnRef.current
+    if (!column || !frame.on) return
+    let changed = false
+    column.querySelectorAll<HTMLElement>('[data-row]').forEach((node) => {
+      const index = Number(node.dataset.row)
+      const height = node.getBoundingClientRect().height
+      if (height > 1 && Math.abs((heightsRef.current[index] || 0) - height) > 1) {
+        heightsRef.current[index] = height
+        changed = true
+      }
+    })
+    if (changed) publishFrame()
+  }, [frame.start, frame.end, frame.on, count])
   // An image or video that finishes loading makes the thread taller: we stay at the bottom only if the user was there.
   // The viewport too: a window that opens taller or a composer that grows must keep the last line in view.
   useEffect(() => {
@@ -684,6 +776,12 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           const deltaY = wheelDeltaRef.current < 0 && moved <= 0 ? wheelDeltaRef.current : moved
           if (moved > 0) wheelDeltaRef.current = 0
           applyStick(deltaY)
+          publishFrame()
+          if (element.scrollTop < 280 && hasOlder) void onLoadOlder?.()
+          const anchor = element.querySelector('[data-anchor]')?.getAttribute('data-anchor') || ''
+          const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+          // A short nudge off the latest line still reopens on the latest line.
+          setScrollMemory(profile, { stick: stickToBottomRef.current || distance < 480, anchorId: anchor })
         }}
       >
       <MailContext.Provider value={mailContext}>
@@ -713,7 +811,9 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
             ) : undefined}
           />
         )}
-        {!loading && items.map((row, index) => {
+        {!loading && (frame.on && frame.top > 0) && <div className="messages-spacer" style={{ height: frame.top }} aria-hidden="true" />}
+        {!loading && (frame.on ? items.slice(frame.start, frame.end) : items).map((row, localIndex) => {
+          const index = frame.on ? frame.start + localIndex : localIndex
           const stamp = (message: ChatMessage | undefined) => message ? messageDay(message.createdAt) : ''
           const rowStamp = (entry: typeof row) => entry.kind === 'message' ? stamp(entry.message) : stamp(entry.answer ?? entry.progress.at(-1))
           const currentDay = rowStamp(row)
@@ -724,7 +824,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           if (row.kind === 'turn') {
             const lastAssistant = !working && index === items.length - 1
             return (
-              <div key={`turn-${row.progress[0]?.id ?? row.answer?.id ?? index}`}>
+              <div key={`turn-${row.progress[0]?.id ?? row.answer?.id ?? index}`} data-row={index} data-anchor={rowAnchor(row)}>
                 {currentDay && currentDay !== previousDay && <div className="day-separator">{currentDay}</div>}
                 <ProgressTurn
                   progress={row.progress}
@@ -737,12 +837,13 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           }
           const message = row.message
           return (
-            <div key={message.id}>
+            <div key={message.id} data-row={index} data-anchor={message.id}>
               {currentDay && currentDay !== previousDay && <div className="day-separator">{currentDay}</div>}
               {renderMessage(message, index === items.length - 1 && !working && message.role === 'assistant')}
             </div>
           )
         })}
+        {!loading && frame.on && frame.bottom > 0 && <div className="messages-spacer" style={{ height: frame.bottom }} aria-hidden="true" />}
         {working && (
           <div className="working-row" role="status" aria-live="polite">
             <LiveAvatar bot={{ ...bot, status: bot.status === 'idle' || bot.status === 'done' ? 'working' : bot.status }} size={24} />

@@ -62,6 +62,9 @@ interface ChatViewProps {
   compaction?: ComponentProps<typeof Composer>['compaction']
   /** Hermes is compacting this conversation on its own: shown in the status line while it lasts. */
   compactionLabel?: string
+  /** Rows older than the replica. The list asks for the next page near the top. */
+  hasOlder?: boolean
+  onLoadOlder?: () => Promise<boolean | void> | boolean | void
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
@@ -197,6 +200,8 @@ export function ChatView(props: ChatViewProps) {
         onVaultFormDone={props.onVaultFormDone}
         onOpenBot={props.onOpenBot}
         progressInThread={progressInThread}
+        hasOlder={props.hasOlder}
+        onLoadOlder={props.onLoadOlder}
       />
       {props.modelPicker}
       {!props.hidden && props.voiceOverlay}

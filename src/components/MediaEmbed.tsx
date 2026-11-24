@@ -97,6 +97,21 @@ function formatClock(seconds: number) {
   return `${minutes}:${ss}`
 }
 
+const posterBlobs = new Map<string, string>()
+const POSTER_BLOB_CAP = 40
+
+function rememberPoster(key: string, url: string) {
+  posterBlobs.delete(key)
+  posterBlobs.set(key, url)
+  while (posterBlobs.size > POSTER_BLOB_CAP) {
+    const oldest = posterBlobs.keys().next().value
+    if (oldest === undefined) break
+    const dropped = posterBlobs.get(oldest)
+    posterBlobs.delete(oldest)
+    if (dropped && dropped !== url) URL.revokeObjectURL(dropped)
+  }
+}
+
 /** Poster first. A missing poster is a film card that still plays. A failed play returns to that card. */
 function VideoCard({ profile, version, media, src, onFail }: { profile: string; version: string; media: MediaRef; src: string; onFail: () => void }) {
   const { t } = useTranslation()
@@ -108,27 +123,27 @@ function VideoCard({ profile, version, media, src, onFail }: { profile: string; 
   useEffect(() => {
     const controller = new AbortController()
     setPlaying(false)
-    setPoster('')
     setDuration('')
     setStillFailed(false)
+    const cached = posterBlobs.get(posterRequest)
+    if (cached) {
+      setPoster(cached)
+      return () => controller.abort()
+    }
+    setPoster('')
     void fetch(posterRequest, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) return
         const seconds = Number(response.headers.get('X-Video-Duration'))
         if (Number.isFinite(seconds) && seconds > 0) setDuration(formatClock(seconds))
         const blob = await response.blob()
-        if (controller.signal.aborted) return
         const url = URL.createObjectURL(blob)
-        if (controller.signal.aborted) {
-          URL.revokeObjectURL(url)
-          return
-        }
-        setPoster(url)
+        rememberPoster(posterRequest, url)
+        if (!controller.signal.aborted) setPoster(url)
       })
       .catch(() => {})
     return () => controller.abort()
   }, [posterRequest])
-  useEffect(() => () => { if (poster) URL.revokeObjectURL(poster) }, [poster])
   if (playing) {
     return (
       <span className="media-item media-video-frame">

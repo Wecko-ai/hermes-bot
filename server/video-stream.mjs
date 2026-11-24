@@ -143,6 +143,14 @@ export async function resolveVideoFile(rawPath, roots, { home = os.homedir(), fs
 }
 
 /** What `/api/video` does once the path has been resolved. A missing file is relayed; anything refused is not. */
+/** A poster the disk does not have is asked of the gateway. A refused path is not. */
+export function posterRouteDecision({ authed, opened }) {
+  if (!authed) return { action: 'deny', status: 401, error: 'unauthenticated' }
+  if (opened.ok) return { action: 'serve' }
+  if (opened.status === 404) return { action: 'relay' }
+  return { action: 'deny', status: opened.status || 403, error: opened.error || 'media_forbidden' }
+}
+
 export function videoRouteDecision({ authed, opened }) {
   if (!authed) return { action: 'deny', status: 401, error: 'unauthenticated' }
   if (opened?.ok) return { action: 'serve' }

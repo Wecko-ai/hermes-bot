@@ -9,6 +9,7 @@ import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { AUTO_FREE_MODEL_SENTINEL, AUTO_FREE_PICKER_OPTION, AUTO_MODEL_SENTINEL, AUTO_PICKER_OPTION } from '../lib/auto-router'
+import { CHEF_QWEN_PICKER_OPTION, isChefQwenModel } from '../lib/chef-qwen'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { ViewEmpty } from './ViewEmpty'
 
@@ -228,6 +229,17 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
             >
               <span className="model-option-label">{t('models.autoFree')}</span>
               <span className="model-option-meta">{t('models.autoFreeHint')}</span>
+            </button>
+          )}
+          {!searching && (
+            <button
+              type="button"
+              className={`model-option is-auto ${isChefQwenModel(current) ? 'is-current' : ''}`}
+              data-row="model:chef-qwen"
+              onClick={() => choose(CHEF_QWEN_PICKER_OPTION)}
+            >
+              <span className="model-option-label">{t('models.chefQwen')}</span>
+              <span className="model-option-meta">{t('models.chefQwenHint')}</span>
             </button>
           )}
           {freeMode && <p className="model-picker-note">{t('models.freeModeOn')}</p>}

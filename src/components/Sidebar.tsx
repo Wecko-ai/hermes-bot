@@ -64,9 +64,11 @@ interface SidebarProps {
   onBotAction: (bot: Bot, action: BotAction) => Promise<void>
   onNotice: (message: string) => void
   onEditBot: (bot: Bot) => void
+  /** Warm this profile's replica before the click. */
+  onPrefetch?: (slug: string) => void
 }
 
-export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice, onEditBot, onOpenTeam }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice, onEditBot, onOpenTeam, onPrefetch }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const roomCache = useRoomStore((state) => state.cache)
@@ -335,6 +337,7 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                         setAppConfig({ ...getAppConfig(), ui: { ...ui, rosterOrder: nextOrder } })
                       })
                     }}
+                    onMouseEnter={() => onPrefetch?.(bot.slug)}
                     onClick={() => onSelect(bot)}
                     // The local chat is not a Hermes profile: nothing to pin, move, rename or delete.
                     onContextMenu={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => openMenu(event, bot)}

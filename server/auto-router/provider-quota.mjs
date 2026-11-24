@@ -15,13 +15,23 @@ import { chargeFor, quotaSource, utcDay } from './quota.mjs'
  * NVIDIA does not fit one window: the contract fields track the 40/minute
  * rate limit, and `dayUsed` / `dayLimit` / `dayStart` keep the ~10_000/day cap.
  * Those extra fields are kept when another writer omits them.
+ *
+ * A provider may also carry `models`, keyed by the model id (the last path
+ * segment, e.g. `claude-opus-5-5`). A model entry is
+ * `{ exhaustedUntil, lastStatus, lastError, lastErrorAt }`. Writers merge it
+ * like the provider row: the later `exhaustedUntil` wins, and the newer error
+ * text is kept. A model-scoped quota error fills only that entry. A
+ * provider-wide error still sets the provider `exhaustedUntil` and blocks
+ * every model. Old readers ignore `models`.
  */
 
 export const PROVIDER_QUOTA_FILE = 'provider-quota.json'
 export const PROVIDER_QUOTA_PRO_FILE = 'provider-quota-pro.json'
 export const RECENT_PICKS_MAX = 50
-/** Gateway `cli-quota.mjs` prefers a store that exports this. */
-export const QUOTA_GATEWAY_CONTRACT = 1
+/** Gateway `cli-quota.mjs` prefers the store with the highest contract. */
+export const QUOTA_GATEWAY_CONTRACT = 2
+/** Cursor's reset time is not in the proxy error. Re-probe after this. */
+export const CURSOR_UNKNOWN_EXHAUST_MS = 6 * 60 * 60 * 1000
 /** A completion this soon after an Auto reserve is the same request. */
 const RESERVE_MATCH_MS = 15000
 
@@ -64,6 +74,38 @@ export function quotaProviderId(provider, model = '') {
   if (name === 'opencode' || name === 'opencode-go' || name === 'opencode_go') return 'opencode-go'
   const slug = name.replace(/:/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64)
   return ID.test(slug) ? slug : ''
+}
+
+const MODEL_KEY = /^[a-z0-9][a-z0-9._+-]{0,79}$/
+/** Per-model caps. A shared window ("weekly", "per day") stays on the provider. */
+const MODEL_QUOTA_TEXT = /resource limit exceeded|plan limit|insufficient credits/i
+const QUOTA_TEXT = /429|402|quota|rate limit|too many requests|usage limit|resource limit exceeded|plan limit|insufficient credits|weekly|\b7[- ]day\b/i
+
+/** Leaf model id (`cursor/claude-opus-5-5` and `cursor/cursor/claude-opus-5-5` → `claude-opus-5-5`). */
+export function modelQuotaId(model) {
+  const parts = String(model || '').toLowerCase().split('/').filter(Boolean)
+  const leaf = parts.length ? parts[parts.length - 1] : ''
+  const slug = leaf.replace(/[^a-z0-9._+-]/g, '').slice(0, 80)
+  return MODEL_KEY.test(slug) ? slug : ''
+}
+
+/**
+ * Opencodex calls arrive as provider `custom` with model `cursor/<id>`.
+ * Those belong on the cursor provider, not on `custom`.
+ */
+export function quotaTarget(provider, model) {
+  let name = String(provider || '').trim()
+  const id = String(model || '').trim()
+  const lowerModel = id.toLowerCase()
+  const lowerName = name.toLowerCase()
+  if (lowerModel === 'cursor' || lowerModel.startsWith('cursor/') || lowerModel.includes('/cursor/')) name = 'cursor'
+  else if (['custom', 'openai', 'opencode', ''].includes(lowerName) && lowerModel.startsWith('cursor')) name = 'cursor'
+  return { provider: name, model: id }
+}
+
+/** `model` marks one model. `provider` marks the whole provider. */
+export function quotaErrorScope(message) {
+  return MODEL_QUOTA_TEXT.test(String(message || '')) ? 'model' : 'provider'
 }
 
 function noOpenRouterCredits(table) {
@@ -243,7 +285,8 @@ function isoInText(text) {
 export function isQuotaSignal(status, message) {
   const code = Number(status)
   if (code === 429 || code === 402) return true
-  return /429|402|quota|rate limit|too many requests|usage limit|weekly|\b7[- ]day\b/i.test(String(message || ''))
+  // 400/403/500 count only when the body is a quota error (the opencodex proxy).
+  return QUOTA_TEXT.test(String(message || ''))
 }
 
 /** A duration written in the error ("5-hour usage limit"), not a window name like "7-day". */
@@ -266,19 +309,31 @@ function defaultUntil(spec, status, message, now) {
   if (spec?.window === 'day-utc' || spec?.dayLimit != null || /daily|per day/i.test(text) || Number(status) === 402 || /quota/i.test(text)) {
     return windowBounds('day-utc', now).reset
   }
+  if (spec?.id === 'cursor') return new Date(now.getTime() + CURSOR_UNKNOWN_EXHAUST_MS)
   return new Date(now.getTime() + 60 * 1000)
 }
 
+function signalStatus(status, message) {
+  const code = Number(status)
+  const text = String(message || '')
+  if (code === 402 || /\b402\b/.test(text)) return 402
+  if (Number.isInteger(code) && code >= 400 && code <= 599) return code
+  if (/\b429\b/.test(text)) return 429
+  return 429
+}
+
 /**
- * When a 429/402 (or a quota/rate-limit message) exhausts a provider.
- * Returns null when the text is not a quota signal.
+ * When a quota signal exhausts a provider, or one model.
+ * `scope` is `model` for a per-model cap (resource limit, plan limit, credits)
+ * and `provider` for a shared window. Returns null when the text is not a quota signal.
+ * Cursor with no reset time is exhausted for 6 hours, renewed on the next error.
  */
 export function exhaustionFromSignal({ status, message, headers, spec, now }) {
   if (!isQuotaSignal(status, message)) return null
-  const code = Number(status) === 402 || /\b402\b/.test(String(message || '')) ? 402 : 429
+  const code = signalStatus(status, message)
   const until = headerReset(headers, now) || isoInText(message) || durationInText(message, now) || defaultUntil(spec, code, message, now)
-  const text = publicError(message) || (code === 402 ? '402' : '429')
-  return { status: code, error: text, exhaustedUntil: until.toISOString() }
+  const text = publicError(message) || (code === 402 ? '402' : String(code))
+  return { status: code, error: text, exhaustedUntil: until.toISOString(), scope: quotaErrorScope(message) }
 }
 
 function blankState(now, host) {
@@ -317,7 +372,62 @@ function normalizeRecord(row) {
     record.dayLimit = row.dayLimit == null ? null : (num(row.dayLimit) || null)
     record.dayStart = typeof row.dayStart === 'string' ? row.dayStart : null
   }
+  const models = normalizeModels(row.models)
+  if (models) record.models = models
   return record
+}
+
+function normalizeModel(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  const status = Number(row.lastStatus)
+  return {
+    exhaustedUntil: typeof row.exhaustedUntil === 'string' ? row.exhaustedUntil : null,
+    lastStatus: Number.isInteger(status) && status > 0 ? status : null,
+    lastError: row.lastError ? publicError(row.lastError) : null,
+    lastErrorAt: typeof row.lastErrorAt === 'string' ? row.lastErrorAt : null,
+  }
+}
+
+function normalizeModels(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const models = {}
+  for (const [key, value] of Object.entries(raw)) {
+    const id = modelQuotaId(key)
+    const model = normalizeModel(value)
+    if (id && model) models[id] = model
+  }
+  return Object.keys(models).length ? models : null
+}
+
+function mergeModel(a, b, now) {
+  const left = normalizeModel(a)
+  const right = normalizeModel(b)
+  if (!left) return right
+  if (!right) return left
+  const ae = Date.parse(left.lastErrorAt || '') || 0
+  const be = Date.parse(right.lastErrorAt || '') || 0
+  const newer = ae >= be ? left : right
+  return {
+    exhaustedUntil: liveUntil(laterIso(left.exhaustedUntil, right.exhaustedUntil), now),
+    lastStatus: newer.lastStatus ?? null,
+    lastError: newer.lastError ?? null,
+    lastErrorAt: laterIso(left.lastErrorAt, right.lastErrorAt),
+  }
+}
+
+function mergeModels(a, b, now) {
+  const left = a && typeof a === 'object' && !Array.isArray(a) ? a : {}
+  const right = b && typeof b === 'object' && !Array.isArray(b) ? b : {}
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  if (!keys.size) return null
+  const models = {}
+  for (const key of keys) {
+    const id = modelQuotaId(key)
+    if (!id) continue
+    const merged = mergeModel(left[key] || left[id], right[key] || right[id], now)
+    if (merged) models[id] = merged
+  }
+  return Object.keys(models).length ? models : null
 }
 
 function normalizeState(raw, now, host) {
@@ -387,6 +497,8 @@ function mergeProvider(a, b, now) {
   }
   const day = dayFields(left, right)
   if (day) Object.assign(record, day)
+  const models = mergeModels(left.models, right.models, now)
+  if (models) record.models = models
   return record
 }
 
@@ -457,6 +569,7 @@ function stampRecord(spec, now, previous) {
     record.dayLimit = spec.dayLimit
     record.dayStart = utcDay(now)
   }
+  if (previous?.models) record.models = { ...previous.models }
   return record
 }
 
@@ -487,6 +600,29 @@ function applyError(state, spec, signal, now) {
   record.lastUsedAt = now.toISOString()
   state.providers[spec.id] = record
   return state
+}
+
+function applyModelError(state, spec, modelId, signal, now) {
+  const previous = state.providers[spec.id]
+  const record = stampRecord(spec, now, previous)
+  const models = { ...(record.models || {}) }
+  const prior = models[modelId]
+  models[modelId] = {
+    exhaustedUntil: laterIso(prior?.exhaustedUntil, signal.exhaustedUntil) || signal.exhaustedUntil,
+    lastStatus: signal.status,
+    lastError: signal.error,
+    lastErrorAt: now.toISOString(),
+  }
+  record.models = models
+  state.providers[spec.id] = record
+  return state
+}
+
+function modelExhausted(record, model, now) {
+  const id = modelQuotaId(model)
+  if (!id || !record?.models) return null
+  const until = liveUntil(record.models[id]?.exhaustedUntil, now)
+  return until ? { model: id, until } : null
 }
 
 function samePickModel(pickModel, full, model) {
@@ -653,14 +789,29 @@ export function createProviderQuotaStore(dir, { now = () => new Date(), host = '
         return { local: written, pro: await readPro() }
       })
     },
-    blocked(view, table, option, tokensIn) {
+    blockDetail(view, table, option, tokensIn) {
       const spec = limitSpec(table, option)
-      if (!spec.id) return false
+      if (!spec.id) return null
       const delta = usageDelta(spec, option?.model, tokensIn, null)
-      const local = view?.local?.providers?.[spec.id]
-      const pro = view?.pro?.providers?.[spec.id]
       const clock = now()
-      return providerBlocked(local, spec, delta, clock) || providerBlocked(pro, spec, delta, clock)
+      const model = option?.model || option?.fullModel || ''
+      for (const record of [view?.local?.providers?.[spec.id], view?.pro?.providers?.[spec.id]]) {
+        if (providerBlocked(record, spec, delta, clock)) {
+          const viewRow = aligned(record, spec, clock)
+          return {
+            scope: 'provider',
+            provider: spec.id,
+            model: modelQuotaId(model),
+            until: viewRow.exhaustedUntil || (spec.limit != null || spec.dayLimit != null ? viewRow.resetAt : null),
+          }
+        }
+        const hit = modelExhausted(record, model, clock)
+        if (hit) return { scope: 'model', provider: spec.id, model: hit.model, until: hit.until }
+      }
+      return null
+    },
+    blocked(view, table, option, tokensIn) {
+      return Boolean(this.blockDetail(view, table, option, tokensIn))
     },
     reserve(opts) {
       return enqueue(async () => {
@@ -670,7 +821,9 @@ export function createProviderQuotaStore(dir, { now = () => new Date(), host = '
         if (!spec.id) return false
         const delta = usageDelta(spec, opts.model, opts.tokensIn, opts.tokensOut ?? null)
         const pro = await readPro()
-        if (providerBlocked(base.providers[spec.id], spec, delta, clock) || providerBlocked(pro?.providers?.[spec.id], spec, delta, clock)) {
+        const model = opts.model || opts.fullId
+        if (providerBlocked(base.providers[spec.id], spec, delta, clock) || providerBlocked(pro?.providers?.[spec.id], spec, delta, clock)
+          || modelExhausted(base.providers[spec.id], model, clock) || modelExhausted(pro?.providers?.[spec.id], model, clock)) {
           memory = base
           return false
         }
@@ -723,6 +876,9 @@ export function createProviderQuotaStore(dir, { now = () => new Date(), host = '
             if (!provider) provider = model.slice(0, model.indexOf('/'))
             if (model.startsWith(`${provider}/`)) model = model.slice(provider.length + 1)
           }
+          const targeted = quotaTarget(provider, model)
+          provider = targeted.provider
+          model = targeted.model
           const fullModel = hint?.model && String(hint.model).includes('/') ? String(hint.model) : ''
           const spec = limitSpec(table, { provider, model, fullModel })
           if (!spec.id) continue
@@ -734,7 +890,9 @@ export function createProviderQuotaStore(dir, { now = () => new Date(), host = '
             now: clock,
           })
           if (!signal) continue
-          applyError(draft, spec, signal, clock)
+          const modelId = modelQuotaId(model)
+          if (signal.scope === 'model' && modelId) applyModelError(draft, spec, modelId, signal, clock)
+          else applyError(draft, spec, signal, clock)
           changed = true
         }
         if (!changed) {

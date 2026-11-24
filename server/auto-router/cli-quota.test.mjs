@@ -84,4 +84,25 @@ describe('cli-quota', () => {
     expect(until).toBeGreaterThan(before + 20000)
     expect(until).toBeLessThan(before + 40000)
   })
+
+  it('marks one cursor model for 6 hours on a proxy resource-limit error', async () => {
+    const dir = await temp()
+    const io = capture()
+    const before = Date.now()
+    const code = await run([
+      'error', '--dir', dir, '--provider', 'custom', '--model', 'cursor/claude-opus-5-5',
+      '--status', '400', '--message', 'resource limit exceeded',
+    ], io)
+    expect(code).toBe(0)
+    expect(JSON.parse(io.out.join('')).recorded).toBe(true)
+    const file = JSON.parse(await fs.readFile(path.join(dir, 'provider-quota.json'), 'utf8'))
+    expect(file.providers.custom).toBeUndefined()
+    const model = file.providers.cursor.models['claude-opus-5-5']
+    expect(model.lastStatus).toBe(400)
+    expect(model.lastError).toMatch(/resource limit exceeded/i)
+    const until = Date.parse(model.exhaustedUntil)
+    expect(until).toBeGreaterThan(before + 5 * 60 * 60 * 1000)
+    expect(until).toBeLessThan(before + 7 * 60 * 60 * 1000)
+    expect(file.providers.cursor.exhaustedUntil).toBeNull()
+  })
 })

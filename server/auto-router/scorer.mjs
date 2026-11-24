@@ -170,6 +170,23 @@ export function isStrictlyFree(option, table = null) {
   return true
 }
 
+/**
+ * Default Auto candidates per provider: via Cursor only Composer and Grok, never Claude,
+ * GPT or Gemini (their Cursor quota runs out). A table `candidateAllow` replaces the default;
+ * `{}` lifts every rule. Matching is a case-insensitive substring of the model id.
+ */
+export const DEFAULT_CANDIDATE_ALLOW = Object.freeze({ cursor: Object.freeze(['composer', 'grok']) })
+
+export function allowedByCandidateRules(option, table = null) {
+  const rules = table && typeof table.candidateAllow === 'object' && table.candidateAllow !== null
+    ? table.candidateAllow
+    : DEFAULT_CANDIDATE_ALLOW
+  const allow = rules[String(option?.provider || '').toLowerCase()]
+  if (!Array.isArray(allow)) return true
+  const model = String(option?.model || '').toLowerCase()
+  return allow.some((part) => typeof part === 'string' && part !== '' && model.includes(part.toLowerCase()))
+}
+
 export function normalizeCandidate(option) {
   const provider = String(option.provider || '')
   const model = String(option.model || '')

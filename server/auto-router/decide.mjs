@@ -5,7 +5,7 @@ import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
 import { createProviderQuotaStore, isQuotaSignal } from './provider-quota.mjs'
 import { freePickReason, rankFreeCandidates, resolveDailyQuota } from './quota.mjs'
-import { allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates } from './scorer.mjs'
+import { allowedByCandidateRules, allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates } from './scorer.mjs'
 
 function quotaMap(rows) {
   const map = new Map()
@@ -40,6 +40,22 @@ function labelOf(table, fullId) {
 /**
  * @param {{ tablePath: string, logDir: string, subscriptions?: string[], resolveQuotas?: () => Promise<object[]> }} deps
  */
+function exhaustionNote(skipped, chosen) {
+  const rows = []
+  const seen = new Set()
+  for (const row of skipped) {
+    if (row.fullId && row.fullId === chosen) continue
+    const key = `${row.scope}|${row.provider}|${row.model || ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const until = row.until ? ` until ${row.until}` : ''
+    if (row.scope === 'provider') rows.push(`provider ${row.provider} exhausted${until}`)
+    else rows.push(`model ${row.model} exhausted${until}`)
+  }
+  if (!rows.length) return ''
+  return `skipped ${rows.slice(0, 6).join('; ')}`
+}
+
 function optionFromFullId(fullId) {
   const slash = String(fullId || '').indexOf('/')
   if (slash <= 0) return { provider: String(fullId || ''), model: String(fullId || ''), fullModel: String(fullId || '') }
@@ -88,13 +104,20 @@ export function createAutoRouter(deps) {
     const table = await loadTable()
     // Auto gratuit is decided here, never trusted from the window's `free` flags.
     const eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
+      .filter((row) => allowedByCandidateRules(row, table))
       .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row, table) : allowedForSpend(row, policy)))
     if (!eligible.length) {
       return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
 
     const usage = await quotaStore.snapshot()
-    const candidates = eligible.filter((row) => !quotaStore.blocked(usage, table, row, tokens))
+    const skippedExhausted = []
+    const candidates = eligible.filter((row) => {
+      const block = quotaStore.blockDetail(usage, table, row, tokens)
+      if (!block) return true
+      skippedExhausted.push({ ...block, fullId: row.fullModel })
+      return false
+    })
     if (!candidates.length) {
       return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
@@ -146,6 +169,8 @@ export function createAutoRouter(deps) {
       picked = null
     }
     if (!picked) return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
+    const skipNote = exhaustionNote(skippedExhausted, picked.chosen)
+    if (skipNote) picked = { ...picked, reason: `${picked.reason}; ${skipNote}` }
 
     const chosenWindow = sizing.candidates.find((row) => row.fullModel === picked.chosen)?.contextWindow || 0
     return {

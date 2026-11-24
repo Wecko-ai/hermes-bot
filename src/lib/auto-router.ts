@@ -2,6 +2,7 @@ import type { ModelOption } from '../types'
 import { getAppConfig } from './app-config'
 import { modelCost } from './free-models'
 import { getSettings } from './settings'
+import { isChefQwenModel } from './chef-qwen'
 
 /** Conversation-only choice: routing runs before each send. */
 export const AUTO_MODEL_SENTINEL = 'hermesbot:auto'
@@ -33,6 +34,7 @@ export function pickerModelForSession(
   settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean } = getSettings(),
   enabled = autoRouterEnabled(),
 ) {
+  if (isChefQwenModel(sessionModel) && !isChefQwenModel(pickerModel) && !isAutoModel(pickerModel)) return sessionModel || ''
   if (isAutoModel(pickerModel)) return pickerModel
   if (pickerModel) return pickerModel
   return defaultAutoPicker(settings, enabled) || sessionModel || ''

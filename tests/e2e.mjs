@@ -98,7 +98,7 @@ let localMode = false
 let localTickets = 0
 const localTokenSightings = []
 const localSocketOrigins = []
-const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS, HERMES_HOME: LOCAL_HOME }
+const TEST_ENV = { HERMESBOT_NO_PRIVATE: '1', HERMESBOT_CONFIG: TEST_CONFIG, HERMESBOT_ANIMATIONS: TEST_ANIMATIONS, HERMES_HOME: LOCAL_HOME, HERMESBOT_DATA_NAME: 'HermesBot-e2e' }
 
 // Files the fake gateway serves for orion's MEDIA: tags.
 // A coding agent a bot started from its terminal, as it appears in orion's history.
@@ -4835,6 +4835,8 @@ try {
   await localPage.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   if (await localPage.locator('.login-card').count()) throw new Error('Formulaire affiché malgré le lien de connexion.')
   if (new URL(localPage.url()).search) throw new Error('La clé locale reste dans la barre d’adresse.')
+  // The roster can paint from the disk snapshot before the socket ticket comes back.
+  for (let attempt = 0; attempt < 50 && !localTickets; attempt += 1) await delay(100)
   if (!localTickets || localSocketOrigins.some(Boolean)) throw new Error(`Socket sans mot de passe : ${localTickets} ticket(s), Origin « ${localSocketOrigins.join(', ')} ».`)
   if ((await localPage.content()).includes(LOCAL_TOKEN) || localLog.includes(LOCAL_TOKEN)) throw new Error('Jeton local visible dans la page ou dans les logs.')
   await localContext.close()

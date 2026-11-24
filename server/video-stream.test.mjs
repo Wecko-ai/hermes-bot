@@ -10,6 +10,7 @@ import {
   resolveVideoFile,
   serveVideoFile,
   videoRootList,
+  posterRouteDecision,
   videoRouteDecision,
 } from './video-stream.mjs'
 
@@ -103,6 +104,16 @@ describe('resolveVideoFile', () => {
 
   it('reports a missing allowlisted file as absent, so a remote desktop can relay it', async () => {
     expect(await open(path.join(root, 'renders', 'missing.mp4'))).toMatchObject({ status: 404, error: 'media_not_found' })
+  })
+})
+
+describe('posterRouteDecision', () => {
+  it('serves a local frame and asks the gateway when the file is not on this machine', () => {
+    expect(posterRouteDecision({ authed: false, opened: { ok: false, status: 404 } })).toMatchObject({ action: 'deny', status: 401 })
+    expect(posterRouteDecision({ authed: true, opened: { ok: true } })).toEqual({ action: 'serve' })
+    expect(posterRouteDecision({ authed: true, opened: { ok: false, status: 404, error: 'media_not_found' } })).toEqual({ action: 'relay' })
+    expect(posterRouteDecision({ authed: true, opened: { ok: false, status: 403, error: 'media_forbidden' } })).toMatchObject({ action: 'deny', status: 403 })
+    expect(posterRouteDecision({ authed: true, opened: { ok: false, status: 400, error: 'invalid_path' } })).toMatchObject({ action: 'deny', status: 400 })
   })
 })
 

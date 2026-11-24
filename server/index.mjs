@@ -55,10 +55,12 @@ import { estimateTokenCost, loadScoringTable } from './auto-router/scorer.mjs'
 import { isLocateName, locateCandidates, locateFromStatus, locateStep, mediaExtension } from './media-locate.mjs'
 import { resolveCitedFile, workspacesForProfile } from './cite-resolve.mjs'
 import { ensurePreviewImage, ensureVideoPoster } from './video-poster.mjs'
-import { resolveVideoFile, serveVideoFile, videoRouteDecision } from './video-stream.mjs'
+import { posterRouteDecision, resolveVideoFile, serveVideoFile, videoRouteDecision } from './video-stream.mjs'
+import { createConvCache } from './conv-cache.mjs'
 
 const CONFIG = configModule.loadConfig()
 const THUMB_DIR = path.join(CONFIG.dataDir, 'thumbs')
+const convCache = createConvCache(path.join(CONFIG.dataDir, 'conv-cache'))
 const SHARED_MEMORY_DIR = memoryDir(CONFIG.sharedMemory.dir, CONFIG.dataDir)
 void ensureStore(SHARED_MEMORY_DIR).catch(() => {})
 const pagesLibrary = new PagesLibrary(CONFIG.pagesLibraryDir)
@@ -192,6 +194,34 @@ function localRequest(request) {
   if (!new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]).has(host)) return false
   const origin = request.headers.origin
   return !origin || LOCAL_ORIGINS.has(origin)
+}
+
+async function handleConvCache(request, response, url) {
+  if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (url.pathname === '/api/conv-cache/boot' && request.method === 'GET') {
+    return json(response, 200, await convCache.boot(url.searchParams.get('profile') || ''))
+  }
+  if (url.pathname === '/api/conv-cache/replica' && request.method === 'GET') {
+    const replica = await convCache.replica(url.searchParams.get('profile') || '')
+    return json(response, replica ? 200 : 404, replica || { error: 'not_found' })
+  }
+  if (request.method !== 'PUT') return json(response, 405, { error: 'method' })
+  let body
+  try {
+    body = await bodyJson(request, 8_000_000)
+  } catch (error) {
+    return json(response, error?.message === 'payload_too_large' ? 413 : 400, { error: 'bad_body' })
+  }
+  const routes = {
+    '/api/conv-cache/replica': () => convCache.saveReplica(body),
+    '/api/conv-cache/roster': () => convCache.saveRoster(body.roster),
+    '/api/conv-cache/selection': () => convCache.saveSelection(typeof body.profile === 'string' ? body.profile : ''),
+    '/api/conv-cache/journal': () => convCache.saveJournal(body.journal),
+    '/api/conv-cache/capabilities': () => convCache.saveCapabilities(body),
+  }
+  const save = routes[url.pathname]
+  if (!save) return json(response, 404, { error: 'not_found' })
+  return json(response, 200, { ok: await save() })
 }
 
 async function bodyJson(request, limit = 32_768) {
@@ -1052,7 +1082,14 @@ async function handleVideoPoster(request, response, url) {
   if (target.kind !== 'video') return json(response, 415, { error: 'unsupported_media' })
   if (!browserSession(request) && !adoptableCookieHeader(request)) return json(response, 401, { error: 'unauthenticated' })
   const opened = await openCited(target.file, target.profile, 'video')
-  if (!opened.ok) return json(response, opened.status === 404 ? 404 : opened.status, { error: opened.status === 404 ? 'poster_unavailable' : opened.error })
+  const decision = posterRouteDecision({ authed: true, opened })
+  if (decision.action === 'relay') {
+    return relayFile(request, response, { ...target, contentType: 'image/jpeg' }, '/api/files/poster', {
+      'Cache-Control': 'private, max-age=86400',
+      'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
+    })
+  }
+  if (decision.action !== 'serve') return json(response, decision.status, { error: decision.status === 404 ? 'poster_unavailable' : decision.error })
   const poster = await ensureVideoPoster(opened.file, opened, { cacheDir: THUMB_DIR })
   if (!poster.ok) return json(response, 404, { error: 'poster_unavailable' })
   const body = await readFile(poster.file)
@@ -2009,6 +2046,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/video' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleVideo(request, response, url)
+    }
+    if (url.pathname.startsWith('/api/conv-cache')) {
+      return await handleConvCache(request, response, url)
     }
     if (url.pathname === '/api/video/poster' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleVideoPoster(request, response, url)

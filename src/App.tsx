@@ -3,7 +3,9 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, X } from 'lucide-react'
 import type { AnsweredBy, Bot, ChatMessage, ModelOption } from './types'
-import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, HermesClient, HermesRpcError, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
+import { answerPrompt, attachFile, attachImageBytes, checkModelRoute, checkModelRoutes, fetchHistoryPage, HermesClient, HermesRpcError, interruptChat, isSilentMessage, liveTurnStatus, loadContextBreakdown, loadLiveStatuses, loadModelOptions, loadRoster, loadRoutines, loadSessionEvents, loadUsage, loadUsageHistory, mergeUsage, openChat, parsePendingPrompt, parseUsage, steerSession, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type PendingPrompt, type ServerRequest } from './lib/hermes'
+import { loadBoot, loadReplica, saveCapabilities, saveJournal, saveReplica, saveRoster, saveSelection, type StoredReplica } from './lib/conv-cache'
+import { isGatewayRevision, maxRowId, minRowId, scrollMemory, setScrollMemory, shouldTryDelta, stitchHistory, withJournalEntry, withoutJournalEntry, type HostCapabilities, type SendJournalEntry } from './lib/replica'
 import { enrichRoutines } from './lib/routines'
 import { mergeRoster } from './lib/activity'
 import { hasBackground, loadBackgroundWork, loadChatBackground, loadSubagentTail, mergeBackground, sameBackground } from './lib/background'
@@ -53,7 +55,7 @@ import { createSpeechEngine } from './lib/speech-engines'
 import { createDictationEngine } from './lib/dictation-engines'
 import { priorityApiText, type DeliveryMode } from './lib/delivery'
 import { LOCAL_CHAT_SLUG, chooseLocalModel, loadLocalModels, localChatBot, type LocalModels } from './lib/local-chat'
-import { probeModel } from './lib/model-probe'
+import { probeModel, type ModelProbe } from './lib/model-probe'
 import { pullSharedSettingsSoon, syncSharedSettings } from './lib/shared-settings'
 import { botActionError, runBotAction, type BotAction } from './lib/bot-actions'
 import { createBot, createdBotEntry, loadProfileNames, withCreatedBot, type BotDraft } from './lib/bot-create'
@@ -71,6 +73,7 @@ import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilenc
 import { enqueuePushRelay } from './lib/push-relay'
 import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
+import { isChefQwenModel } from './lib/chef-qwen'
 import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, defaultAutoPicker, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
 import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
 import { answeredFromEvent, answeredFromUsage, answeredStorageIds, composerChipText, composerReadout, lastTurnUserId, preferAnswered, rememberAnswered, stampAnswered, usageNamesAnswered, withRememberedAnswers } from './lib/turn-model'
@@ -179,6 +182,10 @@ export default function App() {
   const client = clientRef.current
   /** Stale-request guard: only the latest re-read of a Bot Chat applies. */
   const chatRequestRef = useRef(0)
+  const capabilitiesRef = useRef<HostCapabilities>({})
+  const prefetchRef = useRef<(slugs: string[]) => Promise<void>>(async () => undefined)
+  const journalRef = useRef<SendJournalEntry[]>([])
+  const olderLock = useRef(false)
   const initializedRef = useRef(false)
   /** Off-screen streaming text, keyed by session id, used when a completion arrives with empty text. */
   const backgroundStreams = useRef(new Map<string, string>())
@@ -309,6 +316,7 @@ export default function App() {
   const [roomRoutingSaving, setRoomRoutingSaving] = useState(false)
   const [focusSignal, setFocusSignal] = useState(0)
   const [notice, setNotice] = useState('')
+  const [hasOlder, setHasOlder] = useState(false)
   const [modelQuery, setModelQuery] = useState<string | null>(null)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   modelOptionsRef.current = modelOptions
@@ -1531,6 +1539,15 @@ export default function App() {
       const defaultBot = appConfig.ui.defaultBot
       const preferred = (defaultBot && roster.bots.find((bot) => bot.slug === defaultBot && !bot.hidden)) || roster.bots.find((bot) => !bot.hidden)
       if (preferred) setSelected((current) => current || preferred.slug)
+      const pinned = getSettings().pinnedBots || []
+      const recent = roster.bots.filter((bot) => !bot.hidden).slice(0, 4).map((bot) => bot.slug)
+      const warm = [...new Set([...pinned, ...recent])].filter((slug) => slug && slug !== useRosterStore.getState().selected).slice(0, 6)
+      const idle = (fn: () => void) => {
+        if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(() => fn())
+        else window.setTimeout(fn, 300)
+      }
+      idle(() => { void prefetchRef.current(warm) })
+      void replayJournal()
       void loadLocalModels().then(setLocalModels)
       void syncSharedSettings()
       void refreshRooms()
@@ -1543,6 +1560,127 @@ export default function App() {
     }
   }
 
+  const seedReplica = (replica: StoredReplica) => {
+    if (!replica?.profile || !Array.isArray(replica.messages)) return
+    const current = getCached(replica.profile)
+    if (current?.messages.length) return
+    setCached(replica.profile, {
+      chat: {
+        profile: replica.profile,
+        sessionId: replica.sessionId,
+        revision: 0,
+        executionGeneration: 1,
+        running: false,
+        model: replica.model || undefined,
+        socketGeneration: client.generation,
+      },
+      messages: replica.messages,
+      routines: [],
+      revision: replica.revision,
+      lastId: replica.lastId || maxRowId(replica.messages),
+      hasOlder: replica.hasOlder,
+    })
+    if (replica.scroll) setScrollMemory(replica.profile, replica.scroll)
+  }
+
+  const paintFromDisk = async () => {
+    const boot = await loadBoot()
+    if (!boot) return
+    capabilitiesRef.current = boot.capabilities || {}
+    journalRef.current = Array.isArray(boot.journal) ? boot.journal : []
+    if (boot.replica) seedReplica(boot.replica)
+    if (Array.isArray(boot.roster) && boot.roster.length && useRosterStore.getState().bots.length === 0) setBots(boot.roster)
+    if (boot.selection && !useRosterStore.getState().selected) {
+      setSelected(boot.selection)
+      enterProfile(boot.selection)
+      setHasOlder(getCached(boot.selection)?.hasOlder === true)
+    }
+  }
+
+  const rememberReplica = (profile: string) => {
+    const entry = getCached(profile)
+    const chat = entry?.chat
+    // A cold open has no rows yet. Writing that over the file would erase the replica.
+    if (!entry || !chat || (entry.messages.length === 0 && useChatStore.getState().chatLoading)) return
+    const memory = scrollMemory(profile)
+    saveReplica({
+      profile,
+      sessionId: chat.sessionId,
+      revision: entry.revision || '',
+      lastId: entry.lastId || maxRowId(entry.messages),
+      lastTime: entry.messages.at(-1)?.createdAt || '',
+      title: 'Bot Chat',
+      model: chat.model || '',
+      usage: profile === useRosterStore.getState().selected ? useChatStore.getState().usage : null,
+      hasOlder: entry.hasOlder === true,
+      messages: entry.messages,
+      ...(memory ? { scroll: memory } : {}),
+    })
+  }
+
+  const prefetchProfiles = async (slugs: string[]) => {
+    let active = 0
+    const queue = [...slugs]
+    const run = async (): Promise<void> => {
+      const slug = queue.shift()
+      if (!slug) return
+      active += 1
+      try {
+        if (!getCached(slug)) {
+          const replica = await loadReplica(slug)
+          if (replica) seedReplica(replica)
+        }
+        const cached = getCached(slug)
+        if (!cached?.chat.sessionId || !isGatewayRevision(cached.revision) || !shouldTryDelta(capabilitiesRef.current)) return
+        if (useRosterStore.getState().selected === slug) return
+        const opened = await openChat(client, slug, cached.chat.sessionId, {
+          revision: cached.revision,
+          sinceId: cached.lastId,
+          tryDelta: true,
+        })
+        if (useRosterStore.getState().selected === slug) return
+        const messages = opened.sync === 'unchanged' ? cached.messages : stitchHistory(cached.messages, opened.messages, opened.sync)
+        const latest = getCached(slug) || cached
+        setCached(slug, {
+          ...latest,
+          chat: { ...latest.chat, ...opened.chat },
+          messages: resolveSyncedMessages(latest, messages, false),
+          revision: isGatewayRevision(opened.revision) ? opened.revision : latest.revision,
+          lastId: maxRowId(messages) || latest.lastId,
+          hasOlder: opened.hasOlder || latest.hasOlder,
+        })
+        rememberReplica(slug)
+      } catch {
+        // A prefetch must not surface an error over the chat the user is reading.
+      } finally {
+        active -= 1
+        if (queue.length && active < 2) void run()
+      }
+    }
+    await Promise.all([run(), run()])
+  }
+  prefetchRef.current = prefetchProfiles
+
+  const replayJournal = async () => {
+    const pending = journalRef.current.filter((entry) => Date.now() - entry.at < 15 * 60 * 1000)
+    for (const entry of pending) {
+      try {
+        await submitPrompt(client, {
+          profile: entry.profile,
+          sessionId: entry.sessionId,
+          revision: 0,
+          executionGeneration: 1,
+          running: false,
+          socketGeneration: client.generation,
+        }, entry.text, entry.images, { submissionId: entry.id, apiText: entry.apiText })
+        journalRef.current = withoutJournalEntry(journalRef.current, entry.id)
+        saveJournal(journalRef.current)
+      } catch {
+        // Kept in the journal. The next launch tries the same submission id.
+      }
+    }
+  }
+
   useEffect(() => {
     if (DEMO || initializedRef.current) return
     initializedRef.current = true
@@ -1550,12 +1688,14 @@ export default function App() {
       if (response.status === 401) {
         if (await restoreSession() || await localSignIn()) {
           setAuth('ready')
+          await paintFromDisk()
           await initialize()
         } else setAuth('login')
       }
       else if (!response.ok) throw new Error(i18n.t('app.gatewayDown'))
       else {
         setAuth('ready')
+        await paintFromDisk()
         await initialize()
       }
     }).catch((error) => {
@@ -1654,7 +1794,11 @@ export default function App() {
     }).finally(() => {
       if (requestId === chatRequestRef.current) setRoutinesLoading(false)
     })
-    return openChat(client, profile, cached?.chat.sessionId || bot?.sessionId).then(
+    return openChat(client, profile, cached?.chat.sessionId || bot?.sessionId, {
+      revision: cached?.revision,
+      sinceId: cached?.lastId,
+      tryDelta: shouldTryDelta(capabilitiesRef.current),
+    }).then(
       (value) => ({ status: 'fulfilled' as const, value }),
       (reason: unknown) => ({ status: 'rejected' as const, reason }),
     ).then((chatResult) => {
@@ -1664,9 +1808,20 @@ export default function App() {
       const latest = getCached(profile) || cached
       const preserveLive = !resumed && Boolean(latest && (useChatStore.getState().activeChat?.running || useChatStore.getState().streaming))
       if (chatResult.status === 'fulfilled') {
-        const nextMessages = withRememberedAnswers(chatResult.value.chat.sessionId, resolveSyncedMessages(latest, chatResult.value.messages, preserveLive))
+        const opened = chatResult.value
+        const base = opened.sync === 'unchanged'
+          ? (latest?.messages || [])
+          : stitchHistory(latest?.messages || [], opened.messages, opened.sync)
+        const nextMessages = withRememberedAnswers(opened.chat.sessionId, resolveSyncedMessages(opened.sync === 'unchanged' ? undefined : latest, base, preserveLive))
         const nextRoutines = getCached(profile)?.routines || cached?.routines || []
-        applySyncedChat(profile, { chat: chatResult.value.chat, messages: nextMessages, routines: nextRoutines }, { preserveLive, resumed })
+        applySyncedChat(profile, { chat: opened.chat, messages: nextMessages, routines: nextRoutines }, { preserveLive, resumed })
+        const stored = getCached(profile)
+        const revision = isGatewayRevision(opened.revision) ? opened.revision : (latest?.revision || cached?.revision || stored?.revision)
+        const older = opened.hasOlder || (opened.sync === 'unchanged' && (latest?.hasOlder === true || cached?.hasOlder === true))
+        if (stored) setCached(profile, { ...stored, revision, lastId: maxRowId(nextMessages) || stored.lastId, hasOlder: older })
+        if (useRosterStore.getState().selected === profile) setHasOlder(older)
+        capabilitiesRef.current = { ...capabilitiesRef.current, historyDelta: opened.deltaSupported, poster: true, checkedAt: Date.now() }
+        saveCapabilities(capabilitiesRef.current)
         const openPrompts = chatResult.value.prompts
         replaceSessionPrompts(chatResult.value.chat.sessionId, openPrompts)
         if (chatResult.value.chat.running) updateBot(profile, { status: openPrompts.length ? 'waiting' : 'working' })
@@ -1747,6 +1902,7 @@ export default function App() {
       backgroundStreams.current.set(previous.activeChat.sessionId, previous.streaming)
     }
     enterProfile(profile)
+    setHasOlder(getCached(profile)?.hasOlder === true)
     const sessionId = getCached(profile)?.chat.sessionId
     const seeded = sessionId ? backgroundStreams.current.get(sessionId) ?? '' : ''
     if (seeded) {
@@ -1757,6 +1913,53 @@ export default function App() {
     setMobileOpen(false)
     void syncChat(profile)
   }, [selected, client])
+
+  useEffect(() => {
+    if (DEMO || !selected) return
+    saveSelection(selected)
+    const timer = window.setTimeout(() => rememberReplica(selected), 400)
+    return () => window.clearTimeout(timer)
+  }, [selected, messages, running])
+
+  useEffect(() => {
+    if (DEMO || !rosterLoaded || bots.length === 0) return
+    saveRoster(bots)
+  }, [bots, rosterLoaded])
+
+  const loadOlder = useCallback(async () => {
+    if (olderLock.current) return false
+    const chat = useChatStore.getState().activeChat
+    const current = useChatStore.getState().messages
+    const before = minRowId(current)
+    if (!chat || !before) return false
+    olderLock.current = true
+    try {
+      const page = await fetchHistoryPage(client, chat.profile, chat.sessionId, before)
+      const known = new Set(useChatStore.getState().messages.map((item) => item.id))
+      const older = page.messages.filter((item) => !known.has(item.id))
+      if (older.length) {
+        setMessages((items) => [...older, ...items])
+        const cached = getCached(chat.profile)
+        if (cached) setCached(chat.profile, { ...cached, messages: [...older, ...cached.messages], hasOlder: page.hasOlder, lastId: cached.lastId || maxRowId(cached.messages) })
+      } else {
+        const cached = getCached(chat.profile)
+        if (cached) setCached(chat.profile, { ...cached, hasOlder: false })
+        setHasOlder(false)
+      }
+      const more = page.hasOlder && older.length > 0
+      setHasOlder(more)
+      return more
+    } catch (error) {
+      if (error instanceof HermesRpcError && (error.code === 4000 || error.code === 4001 || error.code === -32602)) {
+        const cached = getCached(chat.profile)
+        if (cached) setCached(chat.profile, { ...cached, hasOlder: false })
+        setHasOlder(false)
+      }
+      return false
+    } finally {
+      olderLock.current = false
+    }
+  }, [client])
 
   const pushNav = (target: NavTarget) => {
     if (skipNavPushRef.current) return
@@ -2029,18 +2232,30 @@ export default function App() {
   /** One resume and one retry when the socket is no longer subscribed to this session. */
   const submitPromptResuming = async (target: ActiveChat, prompt: string, images: { path: string; mime: string }[], options: { queued?: boolean; apiText?: string; submissionId?: string }) => {
     const onScreen = () => stillOnProfile(useRosterStore.getState().selected, target.profile)
+    const submissionId = options.submissionId || crypto.randomUUID()
+    const entry: SendJournalEntry = { id: submissionId, profile: target.profile, sessionId: target.sessionId, text: prompt, apiText: options.apiText, images, at: Date.now() }
+    journalRef.current = withJournalEntry(journalRef.current, entry)
+    saveJournal(journalRef.current)
+    const sent = { ...options, submissionId }
+    let submitted = target
     try {
-      await submitPrompt(client, target, prompt, images, options)
-      return target
+      await submitPrompt(client, target, prompt, images, sent)
     } catch (error) {
       if (!isPermissionDenied(error)) throw error
-      const reopened = await openChat(client, target.profile, target.sessionId)
+      const reopened = await openChat(client, target.profile, target.sessionId, {
+        revision: getCached(target.profile)?.revision,
+        sinceId: getCached(target.profile)?.lastId,
+        tryDelta: shouldTryDelta(capabilitiesRef.current),
+      })
       replaceSessionPrompts(reopened.chat.sessionId, reopened.prompts)
       updateCachedChat(target.profile, reopened.chat)
       if (onScreen()) setActiveChat(reopened.chat)
-      await submitPrompt(client, reopened.chat, prompt, images, options)
-      return reopened.chat
+      submitted = reopened.chat
+      await submitPrompt(client, reopened.chat, prompt, images, sent)
     }
+    journalRef.current = withoutJournalEntry(journalRef.current, submissionId)
+    saveJournal(journalRef.current)
+    return submitted
   }
   submitPromptResumingRef.current = submitPromptResuming
 
@@ -2459,7 +2674,7 @@ export default function App() {
     loadModelOptions(client, profile, useChatStore.getState().activeChat?.sessionId).then((result) => {
       if (!applies()) return
       setModelOptions(result.options)
-      if (result.current) setChatModel((value) => value || defaultAutoPicker() || result.current)
+      if (result.current) setChatModel((value) => value || (isChefQwenModel(result.current) ? result.current : defaultAutoPicker()) || result.current)
       // The rows appear at once; the routes without a usable key are marked when the checks answer.
       void checkModelRoutes(client, profile, result.options.map((option) => option.provider))
         .then((issues) => { if (applies()) setRouteIssues({ profile, issues }) })
@@ -2478,17 +2693,19 @@ export default function App() {
       setLiveAnswered(null)
       return
     }
+    // Chef Qwen is a gateway-side mode (sentinel kept as the session model): no key/probe check of its own.
+    const chefQwen = isChefQwenModel(option.model)
     try {
       // Checked again at the moment of the switch: a route with no usable key would only fail when
       // the next turn builds its agent, after the conversation has already left the working model.
-      const issue = await checkModelRoute(client, chat.profile, option.provider)
+      const issue = chefQwen ? null : await checkModelRoute(client, chat.profile, option.provider)
       if (issue) {
         setRouteIssues((value) => ({ profile: chat.profile, issues: { ...(value.profile === chat.profile ? value.issues : {}), [option.provider]: issue.error } }))
         if (!window.confirm(i18n.t('app.modelRouteUnusable', { provider: option.providerName, error: issue.error }))) return
       }
       // A key is not enough: a provider out of quota still lists the model, and Hermes would only find out
       // on the next turn, then answer with the profile's fallback. A model refused for quota is not offered.
-      const probe = await probeModel(option.model)
+      const probe: ModelProbe = chefQwen ? { checked: false } : await probeModel(option.model)
       if (probe.checked && !probe.ok) {
         if (probe.reason === 'quota') {
           setModelsError(i18n.t('app.modelQuotaRefused', { model: modelLabel(option.model), error: probe.message }))
@@ -2682,6 +2899,7 @@ export default function App() {
   const onSidebarReconnect = useCallback(() => { void sidebarActions.current.reconnect() }, [])
   const onSidebarLogout = useCallback(() => { void sidebarActions.current.logout() }, [])
   const onSidebarSelect = useCallback((bot: Bot) => { sidebarActions.current.selectBot(bot) }, [])
+  const onSidebarPrefetch = useCallback((slug: string) => { void prefetchRef.current([slug]) }, [])
   const onSidebarSelectRoom = useCallback((roomId: string) => { sidebarActions.current.selectRoom(roomId) }, [])
   const onSidebarRoomRename = useCallback((roomId: string, name: string) => sidebarActions.current.renameRoomById(roomId, name), [])
   const onSidebarRoomDelete = useCallback((roomId: string) => sidebarActions.current.deleteRoomById(roomId), [])
@@ -2808,6 +3026,7 @@ export default function App() {
         mobileOpen={mobileOpen}
         onCloseMobile={onSidebarCloseMobile}
         onSelect={onSidebarSelect}
+        onPrefetch={onSidebarPrefetch}
         onSelectRoom={onSidebarSelectRoom}
         canRoomRename={DEMO || roomCanRename(roomCapabilities)}
         canRoomDisband={DEMO || roomCanDisband(roomCapabilities)}
@@ -2834,6 +3053,8 @@ export default function App() {
         activity={activity}
         workText={workLine(workSummaries[selectedBot.slug], selectedBot.workTitle)}
         loading={chatLoading}
+        hasOlder={hasOlder}
+        onLoadOlder={loadOlder}
         detailsOpen={detailsOpen}
         focusSignal={focusSignal}
         onOpenMobile={() => setMobileOpen(true)}
@@ -2856,6 +3077,7 @@ export default function App() {
             botModel: selectedBot.model,
             fallbackMark: t('models.fallbackMark'),
             autoLabel: isAutoModel(shown) ? t(shown === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : null,
+            chefLabel: isChefQwenModel(shown) ? t('models.chefQwen') : null,
           })
         })()}
         onOpenModels={openModels}
