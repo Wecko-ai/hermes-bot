@@ -15,9 +15,11 @@ function positive(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
-/** `contextWindow` from the scoring table (exact id, else the model's last segment). */
+/** `contextWindow` from the scoring table (exact id, bare `custom:` id, else the model's last segment). */
 export function tableContextWindow(table, fullId) {
-  const entry = table?.models?.[fullId] || table?.models?.[String(fullId).split('/').slice(-1)[0]]
+  const id = String(fullId || '')
+  const bare = id.startsWith('custom:') ? id.slice(7) : ''
+  const entry = table?.models?.[id] || (bare ? table?.models?.[bare] : null) || table?.models?.[id.split('/').slice(-1)[0]]
   return positive(entry?.contextWindow)
 }
 

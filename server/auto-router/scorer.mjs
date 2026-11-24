@@ -10,13 +10,18 @@ function modelKey(provider, model) {
 }
 
 function tableQuality(table, fullId, category) {
-  const entry = table?.models?.[fullId] || table?.models?.[fullId.split('/').slice(-1)[0]]
+  const entry = tableEntry(table, fullId)
   if (!entry || !entry.quality) return 0.5
   return asNumber(entry.quality[category]) || 0.5
 }
 
-function tableEntry(table, fullId) {
-  return table?.models?.[fullId] || table?.models?.[fullId.split('/').slice(-1)[0]] || null
+export function tableEntry(table, fullId) {
+  const id = String(fullId || '')
+  const bare = id.startsWith('custom:') ? id.slice(7) : ''
+  return table?.models?.[id]
+    || (bare ? table?.models?.[bare] : null)
+    || table?.models?.[id.split('/').slice(-1)[0]]
+    || null
 }
 
 function tableCost(table, fullId) {
@@ -48,7 +53,7 @@ function quotaPercentFor(fullId, quotaPercents) {
 }
 
 function tableBaselineLatency(table, fullId) {
-  const entry = table?.models?.[fullId] || table?.models?.[fullId.split('/').slice(-1)[0]]
+  const entry = tableEntry(table, fullId)
   return asNumber(entry?.baselineLatencyMs) || 2000
 }
 
@@ -112,7 +117,45 @@ export function scoreCandidates(params) {
   }).sort((a, b) => b.score - a.score)
 }
 
-export function pickModel(scored, { blocked = new Set(), quotaPercents = new Map(), quotaHighWatermark = 85 } = {}) {
+function selectFallbacks(ranked, table = null, count = 2) {
+  const rest = ranked.slice(1)
+  if (!rest.length || count <= 0) return []
+  const top = ranked[0]
+  const chosen = []
+  const usedIds = new Set([top.fullId])
+  const usedProviders = new Set([top.provider])
+
+  const take = (row) => {
+    if (!row || usedIds.has(row.fullId)) return false
+    chosen.push(row)
+    usedIds.add(row.fullId)
+    if (row.provider) usedProviders.add(row.provider)
+    return true
+  }
+
+  // First fallback: prefer a different provider so a provider-wide outage does not fail twice in a row.
+  const firstDistinct = rest.find((row) => row.provider !== top.provider)
+  take(firstDistinct || rest[0])
+
+  // Second fallback: when neither the pick nor the first fallback is strictly free, reserve a slot for
+  // the best strictly free candidate so exhausted subscriptions still land on a free model.
+  if (chosen.length < count) {
+    const hasFree = isStrictlyFree(top, table) || chosen.some((row) => isStrictlyFree(row, table))
+    if (!hasFree) {
+      const freeDistinct = rest.find((row) => !usedIds.has(row.fullId) && !usedProviders.has(row.provider) && isStrictlyFree(row, table))
+      const freeAny = freeDistinct || rest.find((row) => !usedIds.has(row.fullId) && isStrictlyFree(row, table))
+      take(freeAny)
+    }
+  }
+  while (chosen.length < count) {
+    const distinct = rest.find((row) => !usedIds.has(row.fullId) && !usedProviders.has(row.provider))
+    const next = distinct || rest.find((row) => !usedIds.has(row.fullId))
+    if (!take(next)) break
+  }
+  return chosen
+}
+
+export function pickModel(scored, { blocked = new Set(), quotaPercents = new Map(), quotaHighWatermark = 85, table = null } = {}) {
   const ranked = scored.filter((row) => !blocked.has(row.fullId))
   if (!ranked.length) return null
   const top = ranked[0]
@@ -131,7 +174,7 @@ export function pickModel(scored, { blocked = new Set(), quotaPercents = new Map
     model: top.model,
     reason,
     candidates: ranked.slice(0, 8).map((row) => ({ model: row.fullId, score: row.score })),
-    fallbacks: ranked.slice(1, 3).map((row) => row),
+    fallbacks: selectFallbacks(ranked, table, 2),
   }
 }
 
@@ -144,7 +187,7 @@ export async function loadScoringTable(tablePath) {
 const LOCAL_PROVIDERS = new Set(['omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'lmstudio', 'custom:lmstudio', 'llamacpp', 'custom:llamacpp', 'vllm', 'custom:vllm', 'local'])
 
 function isCloudflareId(provider, model, fullId) {
-  if (provider === 'cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
+  if (provider === 'cloudflare' || provider === 'custom:cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
   return `${fullId}\n${model}`.includes('@cf/')
 }
 
@@ -158,10 +201,11 @@ function isCloudflareId(provider, model, fullId) {
 export function isStrictlyFree(option, table = null) {
   const provider = String(option?.provider || '').toLowerCase()
   const model = String(option?.model || '').toLowerCase()
-  const fullId = String(option?.fullModel || `${option?.provider || ''}/${option?.model || ''}`)
+  const fullId = String(option?.fullModel || option?.fullId || `${option?.provider || ''}/${option?.model || ''}`)
   const openrouterFree = provider === 'openrouter' && (model.endsWith(':free') || model === 'openrouter/free')
   const eligible = provider === 'nvidia'
     || provider === 'sambanova'
+    || provider === 'custom:sambanova'
     || LOCAL_PROVIDERS.has(provider)
     || openrouterFree
     || isCloudflareId(provider, model, fullId.toLowerCase())

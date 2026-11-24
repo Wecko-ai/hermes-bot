@@ -32,6 +32,10 @@ export const RECENT_PICKS_MAX = 50
 export const QUOTA_GATEWAY_CONTRACT = 2
 /** Cursor's reset time is not in the proxy error. Re-probe after this. */
 export const CURSOR_UNKNOWN_EXHAUST_MS = 6 * 60 * 60 * 1000
+/** Retired or removed model (HTTP 410 / end of life): cool down that model alone for a day. */
+export const MODEL_GONE_EXHAUST_MS = 24 * 60 * 60 * 1000
+/** Single-model upstream rate limit (e.g. an aggregator `:free` route): short per-model pause. */
+export const UPSTREAM_MODEL_RATE_MS = 10 * 60 * 1000
 /** A completion this soon after an Auto reserve is the same request. */
 const RESERVE_MATCH_MS = 15000
 
@@ -69,23 +73,28 @@ export function quotaProviderId(provider, model = '') {
   if (name === 'openrouter-free') return 'openrouter-free'
   if (name === 'openrouter' && (id.endsWith(':free') || id === 'free' || id.includes(':free'))) return 'openrouter-free'
   if (name === 'kimi' || name === 'kimi-coding' || name === 'moonshot') return 'kimi'
-  if (name === 'cloudflare' || name === 'workers-ai' || name === 'workersai' || id.includes('@cf/')) return 'cloudflare'
+  if (name === 'sambanova' || name === 'custom:sambanova') return 'sambanova'
+  if (name === 'cloudflare' || name === 'custom:cloudflare' || name === 'workers-ai' || name === 'workersai' || id.includes('@cf/')) return 'cloudflare'
   if (LOCAL.has(name)) return 'local'
   if (name === 'opencode' || name === 'opencode-go' || name === 'opencode_go') return 'opencode-go'
   const slug = name.replace(/:/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64)
   return ID.test(slug) ? slug : ''
 }
 
-const MODEL_KEY = /^[a-z0-9][a-z0-9._+-]{0,79}$/
+const MODEL_KEY = /^[a-z0-9][a-z0-9._:+-]{0,79}$/
+/** Retired/removed models: cool down only that model, never the whole provider. */
+const MODEL_GONE_TEXT = /end of life|no longer available|model .* gone|\b410\b/i
+/** Single-model upstream rate limits (e.g. OpenRouter `:free` upstream congestion). */
+const UPSTREAM_MODEL_RATE_TEXT = /temporarily rate-limited upstream/i
 /** Per-model caps. A shared window ("weekly", "per day") stays on the provider. */
-const MODEL_QUOTA_TEXT = /resource limit exceeded|plan limit|insufficient credits/i
-const QUOTA_TEXT = /429|402|quota|rate limit|too many requests|usage limit|resource limit exceeded|plan limit|insufficient credits|weekly|\b7[- ]day\b/i
+const MODEL_QUOTA_TEXT = /resource limit exceeded|plan limit|insufficient credits|temporarily rate-limited upstream|end of life|no longer available|model .* gone/i
+const QUOTA_TEXT = /429|402|410|quota|rate limit|too many requests|usage limit|resource limit exceeded|plan limit|insufficient credits|weekly|\b7[- ]day\b|end of life|no longer available/i
 
 /** Leaf model id (`cursor/claude-opus-5-5` and `cursor/cursor/claude-opus-5-5` → `claude-opus-5-5`). */
 export function modelQuotaId(model) {
   const parts = String(model || '').toLowerCase().split('/').filter(Boolean)
   const leaf = parts.length ? parts[parts.length - 1] : ''
-  const slug = leaf.replace(/[^a-z0-9._+-]/g, '').slice(0, 80)
+  const slug = leaf.replace(/[^a-z0-9._:+-]/g, '').slice(0, 80)
   return MODEL_KEY.test(slug) ? slug : ''
 }
 
@@ -275,17 +284,20 @@ function parseReset(raw, now, asDelta) {
   return Number.isFinite(parsed) ? new Date(parsed) : null
 }
 
-function isoInText(text) {
+function isoInText(text, now = null) {
   const match = String(text || '').match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/)
   if (!match) return null
   const parsed = Date.parse(match[0])
-  return Number.isFinite(parsed) ? new Date(parsed) : null
+  if (!Number.isFinite(parsed)) return null
+  // Ignore past timestamps (e.g. an end-of-life date in a 410 message).
+  if (now && parsed <= now.getTime()) return null
+  return new Date(parsed)
 }
 
 export function isQuotaSignal(status, message) {
   const code = Number(status)
-  if (code === 429 || code === 402) return true
-  // 400/403/500 count only when the body is a quota error (the opencodex proxy).
+  if (code === 429 || code === 402 || code === 410) return true
+  // 400/403/500 count only when the body is a quota or retired-model error.
   return QUOTA_TEXT.test(String(message || ''))
 }
 
@@ -300,6 +312,12 @@ function durationInText(text, now) {
 
 function defaultUntil(spec, status, message, now) {
   const text = String(message || '')
+  if (Number(status) === 410 || MODEL_GONE_TEXT.test(text)) {
+    return new Date(now.getTime() + MODEL_GONE_EXHAUST_MS)
+  }
+  if (UPSTREAM_MODEL_RATE_TEXT.test(text)) {
+    return new Date(now.getTime() + UPSTREAM_MODEL_RATE_MS)
+  }
   const weekly = spec?.window === 'week' || /weekly|\b7[- ]day\b/i.test(text)
   if (weekly && !/retry-after/i.test(text)) {
     const reset = windowBounds('week', now).reset
@@ -317,6 +335,7 @@ function signalStatus(status, message) {
   const code = Number(status)
   const text = String(message || '')
   if (code === 402 || /\b402\b/.test(text)) return 402
+  if (code === 410 || /\b410\b/.test(text)) return 410
   if (Number.isInteger(code) && code >= 400 && code <= 599) return code
   if (/\b429\b/.test(text)) return 429
   return 429
@@ -324,16 +343,18 @@ function signalStatus(status, message) {
 
 /**
  * When a quota signal exhausts a provider, or one model.
- * `scope` is `model` for a per-model cap (resource limit, plan limit, credits)
- * and `provider` for a shared window. Returns null when the text is not a quota signal.
+ * `scope` is `model` for a per-model cap (resource limit, plan limit, credits, 410 EOL,
+ * upstream single-model rate limit) and `provider` for a shared window.
+ * Returns null when the text is not a quota signal.
  * Cursor with no reset time is exhausted for 6 hours, renewed on the next error.
  */
 export function exhaustionFromSignal({ status, message, headers, spec, now }) {
   if (!isQuotaSignal(status, message)) return null
   const code = signalStatus(status, message)
-  const until = headerReset(headers, now) || isoInText(message) || durationInText(message, now) || defaultUntil(spec, code, message, now)
+  const gone = code === 410 || MODEL_GONE_TEXT.test(String(message || ''))
+  const until = headerReset(headers, now) || isoInText(message, now) || durationInText(message, now) || defaultUntil(spec, code, message, now)
   const text = publicError(message) || (code === 402 ? '402' : String(code))
-  return { status: code, error: text, exhaustedUntil: until.toISOString(), scope: quotaErrorScope(message) }
+  return { status: code, error: text, exhaustedUntil: until.toISOString(), scope: gone ? 'model' : quotaErrorScope(message) }
 }
 
 function blankState(now, host) {

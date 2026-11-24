@@ -49,8 +49,10 @@ describe('auto-router scorer', () => {
       },
     }
     expect(isStrictlyFree({ provider: 'sambanova', model: 'gemma-4-31B-it' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'custom:sambanova', model: 'gemma-4-31B-it' }, priced)).toBe(true)
     expect(isStrictlyFree({ provider: 'sambanova', model: 'paid' }, priced)).toBe(false)
     expect(isStrictlyFree({ provider: 'cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' }, priced)).toBe(true)
+    expect(isStrictlyFree({ provider: 'custom:cloudflare', model: '@cf/meta/llama-3.1-8b-instruct-fp8-fast' }, priced)).toBe(true)
     expect(isStrictlyFree({ provider: 'nvidia', model: 'z-ai/glm-5.3' }, priced)).toBe(true)
     expect(isStrictlyFree({ provider: 'omlx', model: 'qwen-local' }, priced)).toBe(true)
     expect(isStrictlyFree({ provider: 'openrouter', model: 'z-ai/glm-5.2:free' }, priced)).toBe(true)
@@ -72,5 +74,32 @@ describe('auto-router scorer', () => {
       isPaidBlocked: (o) => o.provider === 'paid',
     })
     expect(allowed).toBe(false)
+  })
+
+  it('diversifies fallbacks across providers and includes a free fallback behind subscriptions', () => {
+    const rich = {
+      weights: { quality: 1, cost: 0, quota: 0, latency: 0 },
+      models: {
+        'kimi-coding/k3.1-pro': { quality: { coding: 0.96 }, costPerMToken: { in: 0, out: 0 } },
+        'kimi-coding/kimi-for-coding': { quality: { coding: 0.92 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.9 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/composer-2.5': { quality: { coding: 0.88 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/moonshotai/kimi-k3': { quality: { coding: 0.86 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }
+    const candidates = [
+      { provider: 'kimi-coding', model: 'k3.1-pro' },
+      { provider: 'kimi-coding', model: 'kimi-for-coding' },
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'cursor', model: 'cursor/composer-2.5' },
+      { provider: 'nvidia', model: 'moonshotai/kimi-k3' },
+    ]
+    const scored = scoreCandidates({ table: rich, category: 'coding', candidates, quotaPercents: new Map() })
+    const picked = pickModel(scored, { table: rich })
+    expect(picked.chosen).toBe('kimi-coding/k3.1-pro')
+    expect(picked.fallbacks.map((row) => row.fullId)).toEqual([
+      'cursor/cursor/grok-4.7',
+      'nvidia/moonshotai/kimi-k3',
+    ])
   })
 })

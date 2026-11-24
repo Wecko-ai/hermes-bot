@@ -422,4 +422,42 @@ describe('auto-router skips exhausted providers', () => {
     expect(picked.candidates.map((row) => row.model)).not.toContain('cursor/cursor/claude-opus-5-5')
     expect(picked.candidates.map((row) => row.model)).toContain('cursor/cursor/composer-2.5')
   })
+
+  it('cools down a 410 end-of-life model and an upstream rate-limited free model without blocking the provider', async () => {
+    const dir = await temp()
+    const now = new Date('2026-11-24T03:00:00.000Z')
+    const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+    expect(isQuotaSignal(410, 'Gone')).toBe(true)
+    expect(isQuotaSignal(null, "The model 'z-ai/glm-5.3' has reached its end of life on 2026-10-28T08:00:00Z")).toBe(true)
+
+    await store.noteErrors({
+      table: {},
+      errors: [
+        {
+          provider: 'nvidia',
+          model: 'z-ai/glm-5.3',
+          status: 410,
+          message: "Error code: 410 - The model 'z-ai/glm-5.3' has reached its end of life on 2026-10-28T08:00:00Z and is no longer available.",
+        },
+        {
+          provider: 'openrouter',
+          model: 'baidu/ernie-5.5-flash-preview:free',
+          status: 429,
+          message: 'baidu/ernie-5.5-flash-preview:free is temporarily rate-limited upstream',
+        },
+      ],
+    })
+    const view = await store.snapshot()
+    // Only the retired NVIDIA model is blocked; other NVIDIA models remain open.
+    expect(store.blocked(view, {}, { provider: 'nvidia', model: 'z-ai/glm-5.3' }, 0)).toBe(true)
+    expect(store.blocked(view, {}, { provider: 'nvidia', model: 'moonshotai/kimi-k3' }, 0)).toBe(false)
+    // Only the rate-limited OpenRouter free model is paused (10 min), not all of openrouter-free.
+    expect(store.blocked(view, {}, { provider: 'openrouter', model: 'baidu/ernie-5.5-flash-preview:free' }, 0)).toBe(true)
+    expect(store.blocked(view, {}, { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra:free' }, 0)).toBe(false)
+    const file = JSON.parse(await fs.readFile(store.file, 'utf8'))
+    expect(file.providers.nvidia.exhaustedUntil).toBeNull()
+    expect(file.providers.nvidia.models['glm-5.3'].exhaustedUntil).toBe('2026-11-25T03:00:00.000Z')
+    expect(file.providers['openrouter-free'].exhaustedUntil).toBeNull()
+    expect(file.providers['openrouter-free'].models['ernie-5.5-flash-preview:free'].exhaustedUntil).toBe('2026-11-24T03:10:00.000Z')
+  })
 })

@@ -127,7 +127,13 @@ export interface QuotaErrorHint {
 export function quotaErrorHint(fullId: string, message: string): QuotaErrorHint {
   const slash = fullId.indexOf('/')
   const provider = slash > 0 ? fullId.slice(0, slash) : fullId
-  const status = /\b402\b/.test(message) ? 402 : /\b429\b|rate limit|quota|usage limit/i.test(message) ? 429 : null
+  const status = /\b402\b/.test(message)
+    ? 402
+    : /\b410\b|end of life|no longer available/i.test(message)
+      ? 410
+      : /\b429\b|rate limit|quota|usage limit|resource limit/i.test(message)
+        ? 429
+        : null
   return { provider, model: fullId, status, message: message.slice(0, 240) }
 }
 

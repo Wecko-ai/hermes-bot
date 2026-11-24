@@ -11,11 +11,27 @@ function lower(value: string) {
   return value.toLowerCase()
 }
 
+function matchesRetryableProviderText(haystack: string) {
+  return haystack.includes('429')
+    || haystack.includes('402')
+    || haystack.includes('410')
+    || haystack.includes('rate')
+    || haystack.includes('quota')
+    || haystack.includes('provider')
+    || haystack.includes('resource limit')
+    || haystack.includes('usage limit')
+    || haystack.includes('payment')
+    || haystack.includes('budget')
+    || haystack.includes('end of life')
+    || haystack.includes('no longer available')
+    || haystack.includes('fallback chain')
+}
+
 export function isRetryableProviderError(error: unknown) {
   const reason = rpcReason(error).toLowerCase()
-  if (reason.includes('rate') || reason.includes('429') || reason.includes('quota') || reason.includes('provider')) return true
+  if (matchesRetryableProviderText(reason)) return true
   const message = error instanceof Error ? error.message.toLowerCase() : ''
-  return message.includes('429') || message.includes('rate limit')
+  return matchesRetryableProviderText(message)
 }
 
 export function providerErrorText(payload: Record<string, unknown>) {
@@ -32,18 +48,19 @@ export function isRetryableTurnComplete(payload: Record<string, unknown>) {
   const status = typeof payload.status === 'string' ? payload.status : ''
   if (status !== 'error') return false
   const haystack = lower([errorBits(payload.error), typeof payload.text === 'string' ? payload.text : ''].join(' '))
-  return haystack.includes('429')
-    || haystack.includes('rate')
-    || haystack.includes('quota')
-    || haystack.includes('provider')
+  return matchesRetryableProviderText(haystack)
 }
 
 export function turnFallbackError(payload: Record<string, unknown>, error?: unknown) {
   const fromPayload = errorBits(payload.error)
   if (lower(fromPayload).includes('429') || lower(fromPayload).includes('rate')) return '429'
+  if (lower(fromPayload).includes('402')) return '402'
+  if (lower(fromPayload).includes('410') || lower(fromPayload).includes('end of life')) return '410'
   if (fromPayload) return `error:${fromPayload.slice(0, 48)}`
   const reason = rpcReason(error)
   if (reason.includes('429') || lower(reason).includes('rate')) return '429'
+  if (reason.includes('402')) return '402'
+  if (reason.includes('410')) return '410'
   return `error:${reason.slice(0, 48) || 'provider'}`
 }
 

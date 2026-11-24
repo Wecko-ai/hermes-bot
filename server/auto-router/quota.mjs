@@ -81,8 +81,11 @@ export function parseDailyQuota(value) {
 function lookupEntry(table, fullId) {
   const models = table?.models
   if (!models || typeof models !== 'object') return null
-  if (models[fullId] && typeof models[fullId] === 'object') return models[fullId]
-  const short = String(fullId).split('/').pop()
+  const id = String(fullId || '')
+  if (models[id] && typeof models[id] === 'object') return models[id]
+  const bare = id.startsWith('custom:') ? id.slice(7) : ''
+  if (bare && models[bare] && typeof models[bare] === 'object') return models[bare]
+  const short = id.split('/').pop()
   if (short && models[short] && typeof models[short] === 'object') return models[short]
   return null
 }
@@ -128,13 +131,13 @@ function isOpenRouterFree(model) {
 }
 
 function isCloudflare(provider, model, fullId) {
-  if (provider === 'cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
+  if (provider === 'cloudflare' || provider === 'custom:cloudflare' || provider === 'workers-ai' || provider === 'workersai') return true
   return `${fullId}\n${model}`.toLowerCase().includes('@cf/')
 }
 
 function defaultQuota(provider, model, fullId) {
   if (provider === 'nvidia' || LOCAL_PROVIDERS.has(provider)) return null
-  if (provider === 'sambanova') return { requests: 20, tokens: 0, neurons: 0, scope: 'sambanova', unlimited: false }
+  if (provider === 'sambanova' || provider === 'custom:sambanova') return { requests: 20, tokens: 0, neurons: 0, scope: 'sambanova', unlimited: false }
   if (provider === 'openrouter' && isOpenRouterFree(model)) return { requests: 1000, tokens: 0, neurons: 0, scope: 'openrouter-free', unlimited: false }
   if (isCloudflare(provider, model, fullId)) return { requests: 0, tokens: 0, neurons: 10000, scope: 'cloudflare', unlimited: false }
   return null

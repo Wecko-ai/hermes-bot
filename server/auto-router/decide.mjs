@@ -5,7 +5,7 @@ import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
 import { createProviderQuotaStore, isQuotaSignal } from './provider-quota.mjs'
 import { freePickReason, rankFreeCandidates, resolveDailyQuota } from './quota.mjs'
-import { allowedByCandidateRules, allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates } from './scorer.mjs'
+import { allowedByCandidateRules, allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates, tableEntry } from './scorer.mjs'
 
 function quotaMap(rows) {
   const map = new Map()
@@ -21,19 +21,64 @@ function quotaMap(rows) {
   return map
 }
 
-function spendPolicy(body, subscriptions) {
+function spendPolicy(body, subscriptions, table = null) {
   const zeroSpend = body.zeroSpend === true
+  // A strictly free route (NVIDIA, local, OpenRouter :free, SambaNova, Cloudflare) is free whatever
+  // the caller's flags say: headless callers list table rows without `free`, which used to block them all.
+  const isFree = (option) => option.free === true || isStrictlyFree(option, table)
   return {
     zeroSpend,
     subscriptionProviders: subscriptions,
-    isFreeModel: (option) => option.free === true,
-    isPaidBlocked: (option) => zeroSpend && !option.free && !subscriptions.includes(option.provider),
+    isFreeModel: isFree,
+    isPaidBlocked: (option) => zeroSpend && !isFree(option) && !subscriptions.includes(option.provider),
   }
+}
+
+/**
+ * Free first: easy turns go to a strictly free model when one meets the quality bar.
+ * Table `freeFirst` overrides: { enabled, categories, easyCategories, minQuality }. Rows with
+ * `tools: false` or `disabled: true` never route. Subscriptions stay behind as fallbacks.
+ */
+const FREE_FIRST_DEFAULTS = Object.freeze({
+  enabled: true,
+  categories: ['quick'],
+  easyCategories: ['quick', 'writing', 'other', 'research'],
+  minQuality: 0.7,
+})
+
+function freeFirstConfig(table) {
+  const raw = table && typeof table.freeFirst === 'object' && table.freeFirst !== null ? table.freeFirst : {}
+  return { ...FREE_FIRST_DEFAULTS, ...raw }
+}
+
+function rowRoutable(table, fullId) {
+  const entry = tableEntry(table, fullId)
+  return entry?.tools !== false && entry?.disabled !== true
+}
+
+export function freeFirstApplies(category, triage, table) {
+  const cfg = freeFirstConfig(table)
+  if (cfg.enabled === false) return false
+  if (triage?.difficulty === 'hard') return false
+  if (Array.isArray(cfg.categories) && cfg.categories.includes(category)) return true
+  return triage?.difficulty === 'easy' && Array.isArray(cfg.easyCategories) && cfg.easyCategories.includes(category)
+}
+
+export function rankFreeFirst(scored, table, quotaOf) {
+  const cfg = freeFirstConfig(table)
+  const minQuality = Number(cfg.minQuality) || 0
+  const good = (row) => isStrictlyFree(row, table)
+    && rowRoutable(table, row.fullId)
+    && row.quality >= minQuality
+  const free = scored.filter(good)
+  if (!free.length) return { ranked: scored, applied: false }
+  const rest = scored.filter((row) => !free.includes(row))
+  return { ranked: [...rankFreeCandidates(free, quotaOf), ...rest], applied: true }
 }
 
 /** Readable name of a table model (« GPT-5.6 Sol (Cursor) »), when the table gives one. */
 function labelOf(table, fullId) {
-  const label = table?.models?.[fullId]?.label
+  const label = tableEntry(table, fullId)?.label
   return typeof label === 'string' && label.trim() ? label.trim() : ''
 }
 
@@ -45,7 +90,7 @@ function exhaustionNote(skipped, chosen) {
   const seen = new Set()
   for (const row of skipped) {
     if (row.fullId && row.fullId === chosen) continue
-    const key = `${row.scope}|${row.provider}|${row.model || ''}`
+    const key = row.scope === 'provider' ? `provider|${row.provider}` : `${row.scope}|${row.provider}|${row.model || ''}`
     if (seen.has(key)) continue
     seen.add(key)
     const until = row.until ? ` until ${row.until}` : ''
@@ -99,12 +144,14 @@ export function createAutoRouter(deps) {
     const triagePublic = publicTriage(triage)
 
     const rawCandidates = Array.isArray(body.models) ? body.models : []
-    const policy = spendPolicy(body, deps.subscriptions || [])
     const mode = body.mode === 'auto-free' ? 'auto-free' : 'auto'
     const table = await loadTable()
+    const policy = spendPolicy(body, deps.subscriptions || [], table)
     // Auto gratuit is decided here, never trusted from the window's `free` flags.
     const eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
       .filter((row) => allowedByCandidateRules(row, table))
+      // Hermes turns carry tools, and retired models are marked disabled: neither should route.
+      .filter((row) => rowRoutable(table, row.fullModel))
       .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row, table) : allowedForSpend(row, policy)))
     if (!eligible.length) {
       return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens, triage: triagePublic }
@@ -139,15 +186,25 @@ export function createAutoRouter(deps) {
       ...(triage.source === 'local' ? { weights: weightsForDifficulty(triage.difficulty) } : {}),
     })
     const quotaOf = (row) => resolveDailyQuota(table, row)
-    const ranked = mode === 'auto-free' ? rankFreeCandidates(scored, quotaOf) : scored
+    let freeFirst = false
+    let ranked = scored
+    if (mode === 'auto-free') ranked = rankFreeCandidates(scored, quotaOf)
+    else if (freeFirstApplies(category, triage, table)) {
+      const result = rankFreeFirst(scored, table, quotaOf)
+      ranked = result.ranked
+      freeFirst = result.applied
+    }
 
     const quotaThreshold = typeof table?.quotaHighWatermark === 'number' ? table.quotaHighWatermark : 85
     const blocked = new Set()
     let picked = null
     while (blocked.size < ranked.length) {
-      picked = pickModel(ranked, { blocked, quotaPercents, quotaHighWatermark: quotaThreshold })
+      picked = pickModel(ranked, { blocked, quotaPercents, quotaHighWatermark: quotaThreshold, table })
       if (!picked) break
       if (mode === 'auto-free') picked = { ...picked, reason: freePickReason(picked, ranked, quotaOf) }
+      else if (freeFirst && isStrictlyFree({ provider: picked.provider, model: picked.model, fullModel: picked.chosen }, table)) {
+        picked = { ...picked, reason: `Free first (${category}): ${picked.reason}` }
+      }
       let reserved = false
       try {
         reserved = await quotaStore.reserve({

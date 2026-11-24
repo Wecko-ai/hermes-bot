@@ -59,6 +59,75 @@ describe('auto-router decide', () => {
     expect(JSON.stringify(result.candidates)).not.toMatch(/claude|gpt/)
   })
 
+  it('free first: a quick turn goes to a good free model even under zero-spend without free flags', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/grok-4.7': { quality: { quick: 0.9, coding: 0.9 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/z-ai/glm-5.3-flash': { quality: { quick: 0.8, coding: 0.6 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/weak': { quality: { quick: 0.5 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/notools': { quality: { quick: 0.95 }, tools: false, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/retired': { quality: { quick: 0.99, coding: 0.99 }, disabled: true, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor'] })
+    const models = [
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'nvidia', model: 'z-ai/glm-5.3-flash' },
+      { provider: 'nvidia', model: 'weak' },
+      { provider: 'nvidia', model: 'notools' },
+      { provider: 'nvidia', model: 'retired' },
+    ]
+    const quick = await router.decide({ text: 'salut ça va ?', zeroSpend: true, models })
+    expect(quick.ok).toBe(true)
+    expect(quick.chosen).toBe('nvidia/z-ai/glm-5.3-flash')
+    expect(quick.reason).toMatch(/^Free first/)
+    expect(quick.fallbacks[0].fullId).toBe('cursor/cursor/grok-4.7')
+    const coding = await router.decide({ text: 'Fix the bug in server/index.mjs and run the tests', zeroSpend: true, models })
+    expect(coding.chosen).toBe('cursor/cursor/grok-4.7')
+    expect(JSON.stringify(coding.candidates)).not.toMatch(/notools|retired/)
+  })
+
+  it('picks the best free model under zero-spend when all subscriptions and Gemini are exhausted', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'kimi-coding/k3.1-pro': { quality: { coding: 0.96 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.9 }, costPerMToken: { in: 0, out: 0 } },
+        'gemini/gemini-3.8-flash': { quality: { coding: 0.85 }, costPerMToken: { in: 0.5, out: 3 } },
+        'nvidia/z-ai/glm-5.3': { quality: { coding: 0.88 }, disabled: true, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/moonshotai/kimi-k3': { quality: { coding: 0.86 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 12000 },
+        'openrouter/nvidia/nemotron-3-ultra:free': { quality: { coding: 0.78 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 10000 },
+        'omlx/local-qwen': { quality: { coding: 0.62 }, costPerMToken: { in: 0, out: 0 }, baselineLatencyMs: 35000 },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['kimi-coding', 'cursor', 'gemini'] })
+    await router.recordLoggedUsage({ mode: 'auto', chosen: 'kimi-coding/k3.1-pro', fallbacks: [] }, [
+      { provider: 'kimi-coding', model: 'k3.1-pro', status: 429, message: 'weekly (7-day) usage limit' },
+      { provider: 'cursor', model: 'cursor/grok-4.7', status: 429, message: 'Cursor rate limit exceeded: resource limit exceeded' },
+      { provider: 'gemini', model: 'gemini-3.8-flash', status: 402, message: '402 Gemini API monthly budget cap reached' },
+    ])
+    // Call without `free` flags (same as headless gateway CLI).
+    const models = [
+      { provider: 'kimi-coding', model: 'k3.1-pro' },
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'gemini', model: 'gemini-3.8-flash' },
+      { provider: 'nvidia', model: 'z-ai/glm-5.3' },
+      { provider: 'nvidia', model: 'moonshotai/kimi-k3' },
+      { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra:free' },
+      { provider: 'omlx', model: 'local-qwen' },
+    ]
+    const decision = await router.decide({ text: 'Fix the bug in server/index.mjs and run tests', zeroSpend: true, models })
+    expect(decision.ok).toBe(true)
+    expect(decision.chosen).toBe('nvidia/moonshotai/kimi-k3')
+    expect(decision.fallbacks.map((row) => row.provider)).toEqual(['openrouter', 'omlx'])
+    expect(JSON.stringify(decision.candidates)).not.toContain('glm-5.3')
+  })
+
   it('auto-free keeps only free models, decided on the server', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
     roots.push(dir)

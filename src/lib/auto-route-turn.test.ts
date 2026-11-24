@@ -22,6 +22,9 @@ function fakeClient(request: (method: string, params?: Record<string, unknown>) 
 describe('auto route in-turn errors', () => {
   it('detects retryable provider completions', () => {
     expect(isRetryableTurnComplete({ status: 'error', error: { code: 'rate_limit_exceeded', message: '429' } })).toBe(true)
+    expect(isRetryableTurnComplete({ status: 'error', error: { message: '402 payment required' } })).toBe(true)
+    expect(isRetryableTurnComplete({ status: 'error', error: { message: '410 end of life' } })).toBe(true)
+    expect(isRetryableTurnComplete({ status: 'error', text: 'every provider in the fallback chain kept failing over' })).toBe(true)
     expect(isRetryableTurnComplete({ status: 'complete', text: 'ok' })).toBe(false)
     expect(isRetryableTurnComplete({ status: 'error', text: 'provider unavailable' })).toBe(true)
   })
