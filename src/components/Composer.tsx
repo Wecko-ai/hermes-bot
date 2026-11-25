@@ -1,8 +1,7 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, AudioLines, ChevronDown, FileText, Film, Gauge, Mic, MicOff, Music, Pause, Plus, X } from 'lucide-react'
-import type { Bot, SessionUsage } from '../types'
-import { formatUsage } from '../lib/model'
+import { ArrowUp, AudioLines, FileText, Film, Mic, MicOff, Music, Pause, Plus, X } from 'lucide-react'
+import type { Bot } from '../types'
 import { defaultPrompt, filterAttachments, formatBytes, toAttachment, type PendingAttachment } from '../lib/attachments'
 import { mentionOptions, mentionTokenAt, type MentionOption, type MentionToken } from '../lib/mentions'
 import { CHAT_MODES, loadModes, modePlaceholder, saveModes, type ChatMode } from '../lib/modes'
@@ -40,11 +39,7 @@ interface ComposerProps {
   onSend: (text: string, attachments: PendingAttachment[], mode: ChatMode, delivery?: DeliveryMode, submissionId?: string) => Promise<boolean> | boolean | void
   onStop: () => void
   onNotice: (text: string) => void
-  modelLabel: string
-  onOpenModels: (query: string) => void
-  usage: SessionUsage | null
-  showUsage: boolean
-  onToggleUsage: () => void
+  onOpenModels?: (query: string) => void
   /** Opens the voice mode with this bot. Absent: nothing can speak here. */
   onVoice?: () => void
   /** Manual compaction mode: where the context stands against the user's limit, and what the guard can do. */
@@ -55,8 +50,6 @@ interface ComposerProps {
     compressions?: number
     onCompact: () => void
     onOpenSettings: () => void
-    /** What the usage readout shows on hover. */
-    tooltip: string
   }
 }
 
@@ -79,7 +72,7 @@ const DEMO = new URLSearchParams(location.search).get('demo') === '1'
 
 const releasePreviews = (attachments: PendingAttachment[]) => attachments.forEach((item) => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl) })
 
-export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, modelLabel, onOpenModels, usage, showUsage, onToggleUsage, onVoice, compaction }: ComposerProps) {
+export function Composer({ ref, minimal = false, bot, bots, running, disabled, focusSignal, onSend, onStop, onNotice, onOpenModels, onVoice, compaction }: ComposerProps) {
   const { t, i18n: translation } = useTranslation()
   const { sendKey, dictationLanguage } = useSettings()
   const [text, setText] = useState(() => loadDraft(bot.slug))
@@ -276,7 +269,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
     }
     const text = textRef.current
     const command = text.trim().match(/^\/model(?:\s+(.*))?$/i)
-    if (command) {
+    if (command && onOpenModels) {
       setText('')
       onOpenModels(command[1] || '')
       return
@@ -477,7 +470,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
         {running && <button type="button" className="composer-send is-stop" aria-label={t('composer.stopBot')} onClick={onStop}><Pause size={14} fill="currentColor" /></button>}
         {((!running && (text.trim() || attachments.length > 0)) || (text.trim() && busy && delivery !== 'wait')) && <button type="button" className={`composer-send ${busy && delivery === 'priority' ? 'is-priority' : ''}`} aria-label={busy ? (delivery === 'priority' ? t('composer.sendPriority') : t('composer.sendQueue')) : t('composer.send')} disabled={disabled || blocked || dictationState.phase === 'finishing'} onClick={() => void submit()}><ArrowUp size={18} /></button>}
       </div>
-      <div className="composer-hint">
+      {(!minimal || busy) && <div className="composer-hint">
         {!minimal && (
           <div className="mode-switch" role="radiogroup" aria-label={t('composer.modeGroup')}>
             {CHAT_MODES.map((item) => (
@@ -496,12 +489,7 @@ export function Composer({ ref, minimal = false, bot, bots, running, disabled, f
             ))}
           </div>
         )}
-        {!minimal && <div className="composer-status">
-          {showUsage && <span className="usage-readout" title={compaction?.tooltip || undefined}>{formatUsage(usage)}</span>}
-          <button type="button" className={`usage-toggle ${showUsage ? 'is-active' : ''}`} aria-label={t('composer.usageToggle')} aria-pressed={showUsage} onClick={onToggleUsage}><Gauge size={15} /></button>
-          <button type="button" className="model-chip" aria-label={t('composer.chooseModel')} onClick={() => onOpenModels('')}>{modelLabel}<ChevronDown size={13} /></button>
-        </div>}
-      </div>
+      </div>}
     </div>
   )
 }

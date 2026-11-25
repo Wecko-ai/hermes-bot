@@ -93,11 +93,7 @@ describe('Enter during IME composition', () => {
       onNotice: () => undefined,
       onOpenDocument: () => undefined,
       onOpenBot: () => undefined,
-      modelLabel: 'local',
       onOpenModels: () => undefined,
-      usage: null,
-      showUsage: false,
-      onToggleUsage: () => undefined,
       prompts: [],
       onAnswerPrompt: async () => undefined,
       subagents: [],
@@ -134,11 +130,7 @@ describe('composer hint', () => {
       onSend: () => true,
       onStop: () => undefined,
       onNotice: () => undefined,
-      modelLabel: 'local',
       onOpenModels: () => undefined,
-      usage: null,
-      showUsage: false,
-      onToggleUsage: () => undefined,
     }))
     expect(view.container.querySelector('.composer-hint-keys')).toBeNull()
     expect(view.container.textContent).not.toContain('composer.hintWait')

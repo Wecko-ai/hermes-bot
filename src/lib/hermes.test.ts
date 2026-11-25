@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_CONFIG, parseAppConfig, setAppConfig } from './app-config'
-import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, completeUsage, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
+import { answerPrompt, attachFile, checkModelRoute, checkModelRoutes, completeUsage, DEFAULT_SPLASH_MODELS, HermesClient, HermesRpcError, isGatewayMessage, isSilentMessage, loadModelOptions, loadRoster, loadUsage, mergeUsage, openChat, parsePendingPrompt, parseUsage, submitPrompt, switchModel, withoutSilentMarkers, type ActiveChat, type ServerRequest } from './hermes'
 import { BOT_KICKOFF_TEXT } from './bot-kickoff'
 
 const chat: ActiveChat = {
@@ -246,21 +246,21 @@ describe('modèles du forfait', () => {
 
   it('ajoute K3.1 Pro en tête du fournisseur connecté', async () => {
     const { options } = await loadModelOptions({ request: request(['kimi-k3']) } as unknown as HermesClient, 'orion')
-    expect(options.map((option) => option.model)).toEqual(['k3.1-pro', 'kimi-k3'])
+    expect(options.map((option) => option.model)).toEqual(['k3.1-pro', 'kimi-k3', ...DEFAULT_SPLASH_MODELS])
     expect(options[0]).toMatchObject({ provider: 'kimi-coding', tag: 'Abo' })
   })
 
   it('ne le propose ni en double, ni sans connexion', async () => {
     const listed = await loadModelOptions({ request: request(['k3.1-pro']) } as unknown as HermesClient, 'orion')
-    expect(listed.options.map((option) => option.model)).toEqual(['k3.1-pro'])
+    expect(listed.options.map((option) => option.model)).toEqual(['k3.1-pro', ...DEFAULT_SPLASH_MODELS])
     const absent = await loadModelOptions({ request: request(['kimi-k3'], false) } as unknown as HermesClient, 'orion')
-    expect(absent.options).toEqual([])
+    expect(absent.options.map((option) => option.model)).toEqual([...DEFAULT_SPLASH_MODELS])
   })
 
   it('propose Fable 5.2 chez Anthropic, sans le désigner comme modèle courant', async () => {
     const anthropic = (models: string[]) => ({ request: vi.fn().mockResolvedValue({ model: 'claude-opus-5-5', providers: [{ slug: 'anthropic', name: 'Anthropic', authenticated: true, models }] }) }) as unknown as HermesClient
     const added = await loadModelOptions(anthropic(['claude-opus-5-5']), 'orion')
-    expect(added.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5'])
+    expect(added.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5', ...DEFAULT_SPLASH_MODELS])
     expect(added.current).toBe('claude-opus-5-5')
     const listed = await loadModelOptions(anthropic(['claude-opus-5-5', 'claude-fable-5-2']), 'orion')
     expect(listed.options.filter((option) => option.model === 'claude-fable-5-2')).toHaveLength(1)
@@ -318,7 +318,7 @@ describe('changement de modèle', () => {
     setAppConfig(parseAppConfig({ ui: { hiddenProviders: ['masque'] } }))
     try {
       const result = await loadModelOptions({ request } as unknown as HermesClient, 'orion', 'chat-orion')
-      expect(result.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5'])
+      expect(result.options.map((option) => option.model)).toEqual(['claude-fable-5-2', 'claude-opus-5-5', ...DEFAULT_SPLASH_MODELS])
     } finally {
       setAppConfig(DEFAULT_APP_CONFIG)
     }

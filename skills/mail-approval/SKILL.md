@@ -34,6 +34,8 @@ References: <thread ids, or empty>
 ````
 `````
 
+Write that `hermes-mail` block directly in your reply, with those four-backtick fences. Never wrap it in a `text` or other code fence: the chat cannot turn a wrapped block into a card.
+
 3. Send nothing. The mail stays pending until you receive an approved block. One card per mail.
 
 ## When you receive a `hermes-mail-approved` block

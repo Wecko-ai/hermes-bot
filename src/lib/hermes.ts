@@ -810,6 +810,34 @@ export async function interruptChat(client: HermesClient, chat: ActiveChat) {
 /** Plan models served by the provider but missing from the gateway’s catalog. */
 const PLAN_MODELS: Record<string, string[]> = { 'kimi-coding': ['k3.1-pro'], anthropic: ['claude-fable-5-2'] }
 
+/** Shown even when the gateway omits the Splash provider (launch config without profile scope, or the Pro has no local :8099). */
+export const DEFAULT_SPLASH_MODELS = ['Inkling-2-Mini-128K', 'Inkling-2-Mini-256K']
+
+const LOCAL_PROVIDER_SLUGS = new Set([
+  'omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'splash', 'custom:splash',
+  'splash-uncensored', 'custom:splash-uncensored',
+])
+
+function isLocalProviderSlug(slug: string) {
+  return LOCAL_PROVIDER_SLUGS.has(slug) || /(?:^|:)(?:omlx|ollama|splash)(?:-|$)/i.test(slug)
+}
+
+function extraLocalModels(slug: string, omlxModels: string[], ollamaModels: string[], splashModels: string[]) {
+  if (slug === 'omlx' || slug === 'custom:omlx') return omlxModels
+  if (slug === 'ollama' || slug === 'custom:ollama') return ollamaModels
+  if (slug === 'splash' || slug === 'custom:splash') return splashModels
+  return []
+}
+
+/** `cursor/…` belongs to Cursor, `hermesbot:…` to HermesBot — never keep them under another provider's memory. */
+export function rememberedModelBelongsToProvider(slug: string, model: string) {
+  const owner = slug.toLowerCase().replace(/^custom:/, '')
+  const name = model.toLowerCase()
+  if (name.startsWith('cursor/') && owner !== 'cursor') return false
+  if (name.startsWith('hermesbot:') && owner !== 'hermesbot') return false
+  return true
+}
+
 async function loadLocalEndpointModels(endpoint: string): Promise<string[]> {
   try {
     const response = await fetch(endpoint, { credentials: 'same-origin' })
@@ -818,6 +846,31 @@ async function loadLocalEndpointModels(endpoint: string): Promise<string[]> {
     return Array.isArray(body.models) ? body.models.filter((model): model is string => typeof model === 'string' && model !== '') : []
   } catch {
     return []
+  }
+}
+
+function pushProviderModels(
+  options: ModelOption[],
+  slug: string,
+  providerName: string,
+  models: string[],
+  pricing: Record<string, unknown>,
+  planModels: string[] = [],
+  unavailable: Set<string> = new Set(),
+) {
+  for (const model of planModels) {
+    if (!models.includes(model) && !unavailable.has(model)) options.push({ model, provider: slug, providerName, tag: i18n.t('hermes.planTag') })
+  }
+  for (const model of models) {
+    const price = asObject(pricing[model])
+    options.push({
+      model,
+      provider: slug,
+      providerName,
+      inputPrice: asString(price.input) || undefined,
+      outputPrice: asString(price.output) || undefined,
+      free: price.free === true || undefined,
+    })
   }
 }
 
@@ -830,43 +883,41 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
   ])
   const options: ModelOption[] = []
   const hiddenProviders = new Set(getAppConfig().ui.hiddenProviders)
+  const seenLocal = new Set<string>()
   // A model listed lately stays offered when the gateway answers with its built-in list (see model-memory.ts).
   const memory = readModelMemory()
   const now = Date.now()
   for (const value of Array.isArray(result?.providers) ? result.providers : []) {
     const provider = asObject(value)
-    if (provider.authenticated === false) continue
     const slug = asString(provider.slug)
+    const local = isLocalProviderSlug(slug)
+    // Local servers often have no API key: drop only remote providers the gateway marks unauthenticated.
+    if (provider.authenticated === false && !local) continue
     if (hiddenProviders.has(slug)) continue
+    if (local) seenLocal.add(slug.replace(/^custom:/, ''))
     const unavailable = new Set<string>((Array.isArray(provider.unavailable_models) ? provider.unavailable_models : []).filter((model: unknown): model is string => typeof model === 'string'))
     const pricing = asObject(provider.pricing)
     const listed = (Array.isArray(provider.models) ? provider.models : []).filter((model: unknown): model is string => typeof model === 'string' && !unavailable.has(model))
-    const extraLocal = (slug === 'omlx' || slug === 'custom:omlx')
-      ? omlxModels
-      : (slug === 'ollama' || slug === 'custom:ollama')
-        ? ollamaModels
-        : (slug === 'splash' || slug === 'custom:splash')
-          ? splashModels
-          : []
-    for (const model of extraLocal) {
+    for (const model of extraLocalModels(slug, omlxModels, ollamaModels, splashModels)) {
       if (!unavailable.has(model) && !listed.includes(model)) listed.push(model)
     }
     const kept = withRememberedModels(listed, memory[slug], now, unavailable)
-    memory[slug] = kept.memory
-    for (const model of PLAN_MODELS[slug] ?? []) {
-      if (!kept.models.includes(model) && !unavailable.has(model)) options.push({ model, provider: slug, providerName: asString(provider.name, slug), tag: i18n.t('hermes.planTag') })
-    }
-    for (const model of kept.models) {
-      const price = asObject(pricing[model])
-      options.push({
-        model,
-        provider: slug,
-        providerName: asString(provider.name, slug),
-        inputPrice: asString(price.input) || undefined,
-        outputPrice: asString(price.output) || undefined,
-        free: price.free === true || undefined,
-      })
-    }
+    const models = kept.models.filter((model) => rememberedModelBelongsToProvider(slug, model))
+    memory[slug] = kept.memory.filter(([model]) => rememberedModelBelongsToProvider(slug, model))
+    const name = asString(provider.name, slug)
+    pushProviderModels(options, slug, name, models, pricing, PLAN_MODELS[slug] ?? [], unavailable)
+  }
+  // If the gateway catalog was built without a profile (no Splash in the launch config) or
+  // /api/splash/models could not reach this Mac, still offer the Inkling aliases the bots use.
+  if (!seenLocal.has('splash') && !hiddenProviders.has('splash') && !hiddenProviders.has('custom:splash')) {
+    const models = splashModels.length ? splashModels : DEFAULT_SPLASH_MODELS
+    pushProviderModels(options, 'splash', 'Inkling 2 Mini (Splash)', models, {})
+  }
+  if (!seenLocal.has('omlx') && omlxModels.length && !hiddenProviders.has('omlx') && !hiddenProviders.has('custom:omlx')) {
+    pushProviderModels(options, 'omlx', 'Qwen local (oMLX)', omlxModels, {})
+  }
+  if (!seenLocal.has('ollama') && ollamaModels.length && !hiddenProviders.has('ollama') && !hiddenProviders.has('custom:ollama')) {
+    pushProviderModels(options, 'ollama', 'Ollama (local)', ollamaModels, {})
   }
   writeModelMemory(memory)
   return { options, current: asString(result?.model) }

@@ -27,6 +27,8 @@ import { ModelPicker } from './components/ModelPicker'
 import { demoChat, demoData, demoRoomDriver, demoRoomEvents, newDemoRoom, type DemoLanguage } from './lib/demo'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
+import { EmailDraftsDock } from './components/EmailDraftCard'
+import { countAttentionDrafts } from './lib/email-drafts'
 import { RoomView } from './components/RoomView'
 import { NewRoomDialog } from './components/NewRoomDialog'
 import { CommandPalette } from './components/CommandPalette'
@@ -73,7 +75,7 @@ import { forgetTurn, noteTurnEvent, noteTurnInput, noteTurnReply, noteTurnSilenc
 import { enqueuePushRelay } from './lib/push-relay'
 import { parseDraftBlock, DRAFT_FENCE } from './lib/draft'
 import { heartbeatFailureClosesSocket, isPermissionDenied } from './lib/gateway-errors'
-import { isChefQwenModel } from './lib/chef-qwen'
+import { OYAKATA_DEFAULT_CHEF, OYAKATA_UNAVAILABLE, isOyakataModel, loadOyakata, oyakataMigrationTarget, setOyakata, type OyakataState } from './lib/oyakata'
 import { AUTO_FREE_MODEL_SENTINEL, appendAutoRouteLog, autoModeFor, autoRouterEnabled, decideAutoRoute, defaultAutoPicker, fallbackLabel, isAutoModel, pickerModelAfterRoute, quotaErrorHint } from './lib/auto-router'
 import { autoCompactKey, fallbackRouteId, parseModelFallback, shouldCheckAutoCompact } from './lib/auto-context'
 import { answeredFromEvent, answeredFromUsage, answeredStorageIds, composerChipText, composerReadout, lastTurnUserId, preferAnswered, rememberAnswered, stampAnswered, usageNamesAnswered, withRememberedAnswers } from './lib/turn-model'
@@ -282,7 +284,6 @@ export default function App() {
     }
   }, [language])
   const localBotRef = useRef<Bot | null>(null)
-  const { showUsage } = settings
   // Context compaction: Manual mode guards the open chat against the user's own limit.
   // Auto handles the window itself (bigger model or automatic compaction): no manual limit banner there.
   const autoGuarded = autoRouterEnabled() && autoModeFor(chatModel, settings) !== null
@@ -1242,11 +1243,11 @@ export default function App() {
   const headerUsageSession = activeChat?.sessionId
   useEffect(() => {
     const chat = useChatStore.getState().activeChat
-    if (!(showUsage || settings.compactionMode === 'manual') || !chat || DEMO || chat.sessionId !== headerUsageSession) return
+    if (!(detailsOpen || settings.compactionMode === 'manual') || !chat || DEMO || chat.sessionId !== headerUsageSession) return
     loadUsage(client, chat).then((next) => {
       if (useChatStore.getState().activeChat?.sessionId === chat.sessionId) setUsage(next)
     }).catch(() => setUsage(null))
-  }, [showUsage, settings.compactionMode, selected, chatLoading, client, headerUsageSession])
+  }, [detailsOpen, settings.compactionMode, selected, chatLoading, client, headerUsageSession])
 
   // What Hermes does on its own for the open bot (usage readout tooltip): read again when the setting changes.
   useEffect(() => {
@@ -2660,6 +2661,7 @@ export default function App() {
   }
 
   const openModels = (query: string) => {
+    setDetailsOpen(true)
     setModelQuery(query)
     refreshModels()
   }
@@ -2674,7 +2676,7 @@ export default function App() {
     loadModelOptions(client, profile, useChatStore.getState().activeChat?.sessionId).then((result) => {
       if (!applies()) return
       setModelOptions(result.options)
-      if (result.current) setChatModel((value) => value || (isChefQwenModel(result.current) ? result.current : defaultAutoPicker()) || result.current)
+      if (result.current) setChatModel((value) => value || (isOyakataModel(result.current) ? result.current : defaultAutoPicker()) || result.current)
       // The rows appear at once; the routes without a usable key are marked when the checks answer.
       void checkModelRoutes(client, profile, result.options.map((option) => option.provider))
         .then((issues) => { if (applies()) setRouteIssues({ profile, issues }) })
@@ -2693,19 +2695,19 @@ export default function App() {
       setLiveAnswered(null)
       return
     }
-    // Chef Qwen is a gateway-side mode (sentinel kept as the session model): no key/probe check of its own.
-    const chefQwen = isChefQwenModel(option.model)
+    // Delegate (formerly Oyakata / Chef Qwen) is a gateway-side mode (sentinel kept as the session model): no key/probe check of its own.
+    const oyakata = isOyakataModel(option.model)
     try {
       // Checked again at the moment of the switch: a route with no usable key would only fail when
       // the next turn builds its agent, after the conversation has already left the working model.
-      const issue = chefQwen ? null : await checkModelRoute(client, chat.profile, option.provider)
+      const issue = oyakata ? null : await checkModelRoute(client, chat.profile, option.provider)
       if (issue) {
         setRouteIssues((value) => ({ profile: chat.profile, issues: { ...(value.profile === chat.profile ? value.issues : {}), [option.provider]: issue.error } }))
         if (!window.confirm(i18n.t('app.modelRouteUnusable', { provider: option.providerName, error: issue.error }))) return
       }
       // A key is not enough: a provider out of quota still lists the model, and Hermes would only find out
       // on the next turn, then answer with the profile's fallback. A model refused for quota is not offered.
-      const probe: ModelProbe = chefQwen ? { checked: false } : await probeModel(option.model)
+      const probe: ModelProbe = oyakata ? { checked: false } : await probeModel(option.model)
       if (probe.checked && !probe.ok) {
         if (probe.reason === 'quota') {
           setModelsError(i18n.t('app.modelQuotaRefused', { model: modelLabel(option.model), error: probe.message }))
@@ -2837,6 +2839,85 @@ export default function App() {
     () => rosterSelected && openWork ? { ...rosterSelected, background: mergeBackground(rosterSelected.background, openWork) } : rosterSelected,
     [rosterSelected, openWork],
   )
+
+  // « Oyakata » toggle of the open chat (plugin chef-worker): the chat's model leads, the local worker works.
+  const [oyakataView, setOyakataView] = useState<{ key: string; state: OyakataState } | null>(null)
+  const [oyakataBusy, setOyakataBusy] = useState(false)
+  const [oyakataError, setOyakataError] = useState('')
+  const oyakataMigrated = useRef(new Set<string>())
+  const chatKey = (chat: { profile: string; sessionId: string }) => `${chat.profile}\n${chat.sessionId}`
+  useEffect(() => {
+    if (DEMO || !connected || !activeChat?.sessionId) { setOyakataView(null); return }
+    const target = { profile: activeChat.profile, sessionId: activeChat.sessionId }
+    let live = true
+    setOyakataError('')
+    loadOyakata(client, target)
+      .then((state) => { if (live) setOyakataView({ key: chatKey(target), state }) })
+      .catch(() => { if (live) setOyakataView({ key: chatKey(target), state: OYAKATA_UNAVAILABLE }) })
+    return () => { live = false }
+  }, [client, connected, activeChat?.profile, activeChat?.sessionId])
+
+  /** A model switch made by the app itself (no dialogs): Oyakata off on a legacy chat, or its migration. */
+  const applyOwnModelSwitch = async (chat: ActiveChat, option: ModelOption) => {
+    let result = await switchModel(client, chat, option)
+    if (result?.confirm_required && typeof result.confirm === 'string') result = await switchModel(client, chat, option, result.confirm)
+    const changes: Partial<ActiveChat> = {
+      model: option.model,
+      ...(typeof result?.revision === 'number' ? { revision: result.revision } : {}),
+      ...(typeof result?.execution_generation === 'number' ? { executionGeneration: result.execution_generation } : {}),
+    }
+    updateCachedChat(chat.profile, changes)
+    const open = useChatStore.getState().activeChat
+    if (open?.sessionId === chat.sessionId) {
+      setActiveChat({ ...open, ...changes })
+      setChatModel(defaultAutoPicker() || option.model)
+    }
+  }
+
+  // A chat that had picked the old Oyakata « model »: toggle on, then back to the bot's default model.
+  useEffect(() => {
+    const chat = activeChat
+    if (!chat || !oyakataView || oyakataView.key !== chatKey(chat) || !oyakataView.state.available) return
+    if (!(isOyakataModel(chat.model) || isOyakataModel(chatModel)) || chat.running) return
+    const key = oyakataView.key
+    if (oyakataMigrated.current.has(key)) return
+    oyakataMigrated.current.add(key)
+    const bot = bots.find((item) => item.slug === chat.profile) || selectedBot
+    const target = bot ? oyakataMigrationTarget(bot) : null
+    void (async () => {
+      try {
+        const state = await setOyakata(client, chat, true)
+        setOyakataView((value) => value?.key === key ? { key, state } : value)
+        if (target && isOyakataModel(chat.model)) await applyOwnModelSwitch(chat, target)
+        else if (isOyakataModel(useChatStore.getState().chatModel)) setChatModel(defaultAutoPicker() || target?.model || '')
+      } catch (error) {
+        setOyakataError(error instanceof Error ? error.message : String(error))
+      }
+    })()
+  }, [activeChat, chatModel, oyakataView])
+
+  const toggleOyakata = async (on: boolean) => {
+    const chat = useChatStore.getState().activeChat
+    if (!chat) return
+    const key = chatKey(chat)
+    setOyakataBusy(true)
+    setOyakataError('')
+    try {
+      if (oyakataView?.key === key && oyakataView.state.available) {
+        const state = await setOyakata(client, chat, on)
+        setOyakataView({ key, state })
+      }
+      if (!on && (isOyakataModel(chat.model) || isOyakataModel(useChatStore.getState().chatModel))) {
+        const bot = bots.find((item) => item.slug === chat.profile) || selectedBot
+        const target = bot ? oyakataMigrationTarget(bot) : null
+        if (target) await applyOwnModelSwitch(chat, target)
+      }
+    } catch (error) {
+      setOyakataError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOyakataBusy(false)
+    }
+  }
   const localModel = chooseLocalModel(localModels, settings.localModel)
   // The configured name belongs to the configured model: another model shows its own name.
   const localName = !localModels?.defaultModel || localModel === localModels.defaultModel ? appConfig.localChat.name : ''
@@ -2850,6 +2931,32 @@ export default function App() {
     [bots, selectedBot, rosterSelected],
   )
   const rosterBots = useMemo(() => !localBot ? shownBots : [...shownBots, localBot], [shownBots, localBot])
+  const [draftCounts, setDraftCounts] = useState<Record<string, number>>({})
+  const draftProfiles = useMemo(() => shownBots.map((bot) => bot.slug).sort().join('\n'), [shownBots])
+  useEffect(() => {
+    if (DEMO || !connected) return
+    let cancelled = false
+    const slugs = draftProfiles.split('\n').filter(Boolean)
+    const load = async () => {
+      const entries = await Promise.all(slugs.map(async (slug) => {
+        try { return [slug, await countAttentionDrafts(client, slug)] as const }
+        catch { return [slug, 0] as const }
+      }))
+      if (!cancelled) setDraftCounts(Object.fromEntries(entries))
+    }
+    void load()
+    const timer = window.setInterval(() => { if (!document.hidden) void load() }, 20_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [client, connected, draftProfiles, running])
+  const onDraftAttention = useCallback((count: number) => {
+    // This hook is declared before the `if (!selectedBot)` return, so a first
+    // render with no bot selected (typical on the Pro, or any empty roster)
+    // must not read `.slug` or the renderer goes white.
+    const profile = selectedBot?.slug
+    if (!profile) return
+    setDraftCounts((current) => current[profile] === count ? current : { ...current, [profile]: count })
+  }, [selectedBot?.slug])
+
   const teamItems = useMemo(
     () => teamFeedFromCaches(Object.fromEntries([...chatCache.entries()].map(([slug, entry]) => [slug, entry.messages])), rosterBots),
     [chatCache, rosterBots],
@@ -3008,6 +3115,18 @@ export default function App() {
     return <div className="app-loading"><p>{t('loading.none')}</p>{notice && <p>{notice}</p>}<button className="connection-retry" disabled={reconnecting} onClick={reconnect}>{reconnecting ? t('loading.reconnecting') : t('loading.reconnect')}</button>{connected && <button className="connection-retry" onClick={() => setNewBotOpen(true)}>{t('sidebar.newBot')}</button>}{newBotDialog}</div>
   }
 
+  const shownModel = chatModel || defaultAutoPicker() || ''
+  const activeModelLabel = composerChipText({
+    answered: liveAnswered,
+    chatModel: shownModel,
+    botModel: selectedBot.model,
+    fallbackMark: t('models.fallbackMark'),
+    autoLabel: isAutoModel(shownModel) ? t(shownModel === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : null,
+    chefLabel: isOyakataModel(shownModel) ? t('models.oyakata') : null,
+  })
+  const liveContextUsage = composerReadout(usage, { running, fresh: !usageHeld, answered: usageAnchor })
+  const shownOyakata = activeChat && oyakataView?.key === chatKey(activeChat) ? oyakataView.state : null
+
   return (
     <div className="app-shell">
       <MemoSidebar
@@ -3023,6 +3142,7 @@ export default function App() {
         onReconnect={onSidebarReconnect}
         onLogout={onSidebarLogout}
         workSummaries={workSummaries}
+        draftCounts={draftCounts}
         mobileOpen={mobileOpen}
         onCloseMobile={onSidebarCloseMobile}
         onSelect={onSidebarSelect}
@@ -3065,25 +3185,14 @@ export default function App() {
         voiceOverlay={voice && voice.profile === selectedBot.slug ? (
           <VoiceOverlay session={voice.session} bot={selectedBot} running={running} activity={activity} onClose={closeVoice} onStopBot={() => void stop()} prompt={shownPrompts[0]} onAnswerPrompt={answerPendingPrompt} handsFreeAvailable={Boolean(voiceConversation())} contextFull={blocksSending(guard)} />
         ) : undefined}
+        emailDrafts={activeChat?.sessionId && activeChat.profile === selectedBot.slug ? (
+          <EmailDraftsDock client={client} profile={activeChat.profile} sessionId={activeChat.sessionId} botName={selectedBot.name} running={running} onAttentionChange={onDraftAttention} />
+        ) : undefined}
         onVoice={speechEngine ? openVoice : undefined}
         onOpenDocument={openDocument}
         onVaultFormDone={onVaultFormDone}
         onOpenBot={openBot}
-        modelLabel={(() => {
-          const shown = chatModel || defaultAutoPicker() || ''
-          return composerChipText({
-            answered: liveAnswered,
-            chatModel: shown,
-            botModel: selectedBot.model,
-            fallbackMark: t('models.fallbackMark'),
-            autoLabel: isAutoModel(shown) ? t(shown === AUTO_FREE_MODEL_SENTINEL ? 'models.autoFreeLabel' : 'models.autoLabel') : null,
-            chefLabel: isChefQwenModel(shown) ? t('models.chefQwen') : null,
-          })
-        })()}
         onOpenModels={openModels}
-        usage={composerReadout(usage, { running, fresh: !usageHeld, answered: usageAnchor })}
-        showUsage={showUsage}
-        onToggleUsage={() => updateSettings({ showUsage: !showUsage })}
         prompts={shownPrompts}
         onAnswerPrompt={answerPendingPrompt}
         subagents={subagentEntries}
@@ -3097,24 +3206,7 @@ export default function App() {
           compressions: usage?.compressions,
           onCompact: () => void compactNow(),
           onOpenSettings: () => setSettingsTab('chat'),
-          tooltip: compactionTooltip,
         }}
-        modelPicker={modelQuery !== null ? (
-          <ModelPicker
-            options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || defaultAutoPicker() || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
-            autoEnabled={appConfig.autoRouter?.enabled === true}
-            freeMode={settings.freeMode}
-            current={chatModel || defaultAutoPicker() || selectedBot.model}
-            profileModel={selectedBot.model}
-            loading={modelsLoading}
-            error={modelsError}
-            unusable={routeIssues.profile === selected ? routeIssues.issues : undefined}
-            initialQuery={modelQuery}
-            onSelect={selectModel}
-            onClose={() => setModelQuery(null)}
-            onManage={() => { setModelQuery(null); setSettingsTab('models') }}
-          />
-        ) : undefined}
       />
       {openRoom && (
         <RoomView
@@ -3164,6 +3256,28 @@ export default function App() {
           running={running}
           sessionId={activeChat?.sessionId}
           usage={usage}
+          contextUsage={liveContextUsage}
+          modelLabel={activeModelLabel}
+          modelPickerOpen={modelQuery !== null}
+          onOpenModels={openModels}
+          oyakata={DEMO || !activeChat ? undefined : {
+            on: Boolean(shownOyakata?.enabled) || isOyakataModel(activeChat.model),
+            available: Boolean(shownOyakata?.available),
+            busy: oyakataBusy || !shownOyakata,
+            chef: isOyakataModel(shownModel) ? chipModelLabel(shownOyakata?.defaultChef || OYAKATA_DEFAULT_CHEF) : activeModelLabel,
+            worker: shownOyakata?.workerLabel || 'Inkling 2 Mini',
+            error: oyakataError || undefined,
+            onToggle: (on) => void toggleOyakata(on),
+          }}
+          compaction={{
+            mode: settings.compactionMode,
+            gauge: settings.compactionGauge,
+            guard,
+            compacting,
+            onCompact: () => void compactNow(),
+            onOpenSettings: () => setSettingsTab('chat'),
+            tooltip: compactionTooltip,
+          }}
           loadUsageDetails={loadUsageDetails}
           onOpenDocument={openDocument}
           onOpenLibraryPage={openLibraryPage}
@@ -3172,13 +3286,29 @@ export default function App() {
           onSelectRailTab={setRailTab}
           onCloseDocument={closeDocument}
           onReloadDocument={reloadDocument}
-          onClose={() => setDetailsOpen(false)}
+          onClose={() => { setDetailsOpen(false); setModelQuery(null) }}
           client={DEMO ? null : client}
           routinesEditable={appConfig.routines.editable && !DEMO}
           connectorsEnabled={appConfig.connectors.enabled && !DEMO}
           onReloadRoutines={reloadOpenRoutines}
           computerPanelEnabled={appConfig.computerPanel.enabled}
           onComputerSteer={activeChat ? (text) => steerSession(client, { profile: selectedBot.slug, sessionId: activeChat.sessionId }, text).then(() => undefined) : undefined}
+        />
+      )}
+      {modelQuery !== null && detailsOpen && !localOpen && !selectedRoomId && (
+        <ModelPicker
+          options={selectableModels(modelOptions, settings.hiddenModels, [chatModel || defaultAutoPicker() || selectedBot.model, selectedBot.model], settings.freeMode ? appConfig.ui.subscriptionProviders : undefined)}
+          autoEnabled={appConfig.autoRouter?.enabled === true}
+          freeMode={settings.freeMode}
+          current={chatModel || defaultAutoPicker() || selectedBot.model}
+          profileModel={selectedBot.model}
+          loading={modelsLoading}
+          error={modelsError}
+          unusable={routeIssues.profile === selected ? routeIssues.issues : undefined}
+          initialQuery={modelQuery}
+          onSelect={selectModel}
+          onClose={() => setModelQuery(null)}
+          onManage={() => { setModelQuery(null); setSettingsTab('models') }}
         />
       )}
       {openRequest && <ServerRequestDialog key={openRequest.id} request={openRequest} botName={openRequestBot?.name || selectedBot.name} context={openRequestContext} onAnswer={answerServerRequest} onSso={(request, provider) => void answerServerRequestSso(request, provider)} />}

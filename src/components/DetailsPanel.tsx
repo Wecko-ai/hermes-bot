@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { nextRovingIndex } from '../lib/a11y-focus'
-import { Activity, Clock3, FileText, Images, Info, Monitor, X } from 'lucide-react'
+import { Activity, ChevronDown, Clock3, FileText, Images, Info, Monitor, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { Bot, ChatMessage, Routine, SessionUsage } from '../types'
 import type { HermesClient } from '../lib/hermes'
@@ -25,6 +25,8 @@ import { isEntryActive, type SubagentEntry } from '../lib/subagent-history'
 import { SubagentHistory } from './SubagentHistory'
 import { ComputerPanel } from './ComputerPanel'
 import { ViewEmpty } from './ViewEmpty'
+import { formatUsage } from '../lib/model'
+import type { CompactionMode, Guard } from '../lib/compaction'
 
 function cleanRoutineName(name: string, bot: Bot) {
   const strip = (value: string, prefix: string) =>
@@ -56,6 +58,30 @@ interface DetailsPanelProps {
   /** Open chat session. A new session with the same bot reloads usage. */
   sessionId?: string
   usage: SessionUsage | null
+  /** Live context readout for the open chat (omits stale context right after a model switch). */
+  contextUsage?: SessionUsage | null
+  modelLabel?: string
+  modelPickerOpen?: boolean
+  onOpenModels?: (query: string) => void
+  /** Per-chat Delegate switch: the chat's model plans and reviews; the local worker does the work. */
+  oyakata?: {
+    on: boolean
+    available: boolean
+    busy: boolean
+    chef: string
+    worker: string
+    error?: string
+    onToggle: (on: boolean) => void
+  }
+  compaction?: {
+    mode: CompactionMode
+    gauge: number
+    guard: Guard
+    compacting: boolean
+    onCompact: () => void
+    onOpenSettings: () => void
+    tooltip: string
+  }
   loadUsageDetails: () => Promise<UsageDetails>
   onOpenDocument: (profile: string, media: MediaRef) => void
   documents: OpenDocument[]
@@ -73,7 +99,8 @@ interface DetailsPanelProps {
   onOpenLibraryPage?: (page: LibraryPage) => void
 }
 
-export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose, client, routinesEditable, connectorsEnabled, onReloadRoutines, computerPanelEnabled, onComputerSteer, onOpenLibraryPage }: DetailsPanelProps) {
+export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, contextUsage, modelLabel, modelPickerOpen, onOpenModels, oyakata, compaction, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose, client, routinesEditable, connectorsEnabled, onReloadRoutines, computerPanelEnabled, onComputerSteer, onOpenLibraryPage }: DetailsPanelProps) {
+  const shownContext = contextUsage !== undefined ? contextUsage : usage
   const { t } = useTranslation()
   const { features, routines: routineConfig } = useAppConfig()
   const workText = avatarPhase(bot) === 'working' ? workLine(work, bot.workTitle) : ''
@@ -156,6 +183,91 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
             <p>{workText}</p>
             {work?.task && work.note && <p>{work.note}</p>}
             {(work?.task || work?.note) && work?.step && <p>{work.step}</p>}
+          </section>
+        )}
+        {(onOpenModels || compaction) && (
+          <section className="details-session" aria-label={t('details.session.model')}>
+            {onOpenModels && (
+              <div className="details-session-model">
+                <span className="details-session-label">{t('details.session.model')}</span>
+                <button
+                  type="button"
+                  className="model-chip"
+                  data-model-trigger="true"
+                  aria-label={t('composer.chooseModel')}
+                  aria-expanded={Boolean(modelPickerOpen)}
+                  onClick={() => onOpenModels('')}
+                >
+                  <span>{modelLabel || bot.model}</span>
+                  <ChevronDown size={13} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+            {oyakata && (
+              <div className={`details-session-oyakata ${oyakata.on ? 'is-on' : ''}`}>
+                <div className="details-oyakata-text">
+                  <span className="details-session-label" id="details-oyakata-label">{t('details.session.oyakata')}</span>
+                  <span className="details-oyakata-hint" role={oyakata.error ? 'alert' : undefined}>
+                    {oyakata.error
+                      ? t('details.session.oyakataFailed', { error: oyakata.error })
+                      : !oyakata.available && !oyakata.on
+                        ? t('details.session.oyakataUnavailable')
+                        : oyakata.on
+                          ? t('details.session.oyakataOn', { chef: oyakata.chef, worker: oyakata.worker })
+                          : t('details.session.oyakataOff', { worker: oyakata.worker })}
+                  </span>
+                </div>
+                <input
+                  className="settings-switch"
+                  type="checkbox"
+                  role="switch"
+                  aria-labelledby="details-oyakata-label"
+                  aria-checked={oyakata.on}
+                  checked={oyakata.on}
+                  disabled={oyakata.busy || (!oyakata.available && !oyakata.on)}
+                  onChange={(event) => oyakata.onToggle(event.target.checked)}
+                />
+              </div>
+            )}
+            <div className="details-session-context">
+              <div className="details-context-head">
+                <span className="usage-readout" title={compaction?.tooltip || undefined}>{formatUsage(shownContext)}</span>
+              </div>
+              {shownContext && shownContext.contextMax > 0 && (
+                <div
+                  className={`details-context-meter ${compaction?.guard.level === 'full' ? 'is-full' : compaction?.guard.level === 'warn' ? 'is-warn' : ''}`}
+                  role="meter"
+                  aria-label={t('usage.contextUsed')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(shownContext.contextPercent)}
+                >
+                  <i style={{ width: `${Math.min(100, shownContext.contextPercent)}%` }} />
+                </div>
+              )}
+              {compaction && (
+                <div className="details-context-actions">
+                  <button
+                    type="button"
+                    className="details-compaction-mode"
+                    title={compaction.tooltip || t('details.session.compactionSettings')}
+                    onClick={compaction.onOpenSettings}
+                  >
+                    {compaction.mode === 'manual'
+                      ? t('details.session.compactionManual', { percent: Math.round(compaction.gauge * 100) })
+                      : t('details.session.compactionAuto')}
+                  </button>
+                  <button
+                    type="button"
+                    className="details-compact-button"
+                    disabled={running || compaction.compacting || !(shownContext && shownContext.contextUsed > 0)}
+                    onClick={compaction.onCompact}
+                  >
+                    {compaction.compacting ? t('compaction.compacting') : running ? t('compaction.afterTurn') : t('details.session.compact')}
+                  </button>
+                </div>
+              )}
+            </div>
           </section>
         )}
         <div className="details-tabs" role="tablist" aria-orientation="horizontal" aria-label={t('details.infoTabs')} onKeyDown={onTabListKey}>

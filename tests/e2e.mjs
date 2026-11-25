@@ -89,6 +89,11 @@ const LOCAL_HOME = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'hb-home-')))
 chmodSync(LOCAL_HOME, 0o700)
 mkdirSync(path.join(LOCAL_HOME, 'webapp'), { mode: 0o700 })
 writeFileSync(path.join(LOCAL_HOME, 'webapp', 'session-token'), `${LOCAL_TOKEN}\n`, { mode: 0o600 })
+// Orion drives a remote Mac with the remote-cua plugin: its lease, the plugin's own lease.py.
+const ORION_HOME = path.join(LOCAL_HOME, 'profiles', 'orion')
+mkdirSync(path.join(ORION_HOME, 'plugins', 'remote-cua'), { recursive: true })
+writeFileSync(path.join(ORION_HOME, 'config.yaml'), 'computer_use:\n  backend: remote-cua\nremote_cua:\n  host: studio-e2e\n  user: alex\n  os: macos\n')
+writeFileSync(path.join(ORION_HOME, 'plugins', 'remote-cua', 'lease.py'), readFileSync('hermes-plugins/remote-cua/lease.py'))
 const localControl = net.createServer((socket) => socket.once('data', () => socket.end(`${JSON.stringify({
   ok: true, protocol: 1, id: 1, result: { pid: process.pid, hermes_home: LOCAL_HOME },
 })}\n`)))
@@ -477,6 +482,11 @@ let configureConflicts = 0
 // A gateway that does not know the method.
 let configureMissing = false
 let promptCalls = 0
+const emailDrafts = {}
+const emailDraftRules = {}
+const emailDraftCalls = []
+const oyakataSessions = {}
+const oyakataCalls = []
 let autoRouteFailOnce = false
 // New bot (the "+" of the sidebar): `profiles.create` as Hermes answers it, the lazy Bot Chat it gets, its first turn.
 const createCalls = []
@@ -913,6 +923,35 @@ wss.on('connection', (socket) => {
       const key = frame.params?.key
       return reply({ key, value: key === 'approvals.mode' ? 'smart' : '' })
     }
+    // chef-worker plugin RPC: the per-chat Delegate toggle (the chat's model plans and reviews, Inkling works).
+    if (frame.method === 'plugin.chef-worker.oyakata.get' || frame.method === 'plugin.chef-worker.oyakata.set'
+      || frame.method === 'plugin.chef-worker.delegate.get' || frame.method === 'plugin.chef-worker.delegate.set') {
+      const { profile = '', session_id: sessionId = '', enabled } = frame.params || {}
+      oyakataCalls.push({ method: frame.method, profile, session_id: sessionId, enabled })
+      if (frame.method.endsWith('.set')) oyakataSessions[sessionId] = Boolean(enabled)
+      return reply({ session_id: sessionId, enabled: Boolean(oyakataSessions[sessionId]), worker: { model: 'Inkling-2-Mini-128K', label: 'Inkling 2 Mini Splash' }, default_chef: 'cursor/grok-4.7' })
+    }
+    // email-drafts plugin RPC (hermes-plugins/email-drafts): the drafts live here, a send is only recorded.
+    if (frame.method === 'plugin.email-drafts.api') {
+      const { op, profile = '', session_id: sessionId = '', ...rest } = frame.params || {}
+      emailDraftCalls.push({ op, profile, session_id: sessionId, ...rest })
+      const rules = emailDraftRules[profile] ||= { mode: 'approval', allowed: [] }
+      const drafts = emailDrafts[profile] ||= []
+      const found = drafts.find((item) => item.id === rest.id)
+      if (op === 'list') return reply({ ok: true, drafts: drafts.filter((item) => !sessionId || item.session_id === sessionId || ['pending', 'sending', 'failed'].includes(item.status) || item.delivery_unknown), rules })
+      if (op === 'set_mode') { rules.mode = rest.mode; return reply({ ok: true, rules }) }
+      if (op === 'allow') { rules.allowed = [...new Set([...rules.allowed, ...rest.addresses])]; rules.mode = 'allow'; return reply({ ok: true, rules }) }
+      if (op === 'unallow') { rules.allowed = rules.allowed.filter((item) => !rest.addresses.includes(item)); return reply({ ok: true, rules }) }
+      if (!found) return reply({ ok: false, error: 'Unknown draft id' })
+      if (op === 'discard') { Object.assign(found, { status: 'discarded', discarded_at: Date.now() / 1000, updated_at: Date.now() / 1000 }); return reply({ ok: true, draft: found }) }
+      if (op === 'send') {
+        if (rest.rev !== found.rev) return reply({ ok: false, error: 'The bot changed this draft; review it again' })
+        for (const key of ['to', 'cc', 'subject', 'body']) if (key in rest) found[key] = rest[key]
+        Object.assign(found, { status: 'sent', sent_by: 'human', sent_at: Date.now() / 1000, updated_at: Date.now() / 1000 })
+        return reply({ ok: true, draft: found })
+      }
+      return reply({ ok: false, error: `Unknown operation ${op}` })
+    }
     if (frame.method === 'prompt.submit') {
       if (frame.params.queued === true) {
         queuedPrompts.push({ text: frame.params.text, apiText: frame.params.api_text })
@@ -941,6 +980,19 @@ wss.on('connection', (socket) => {
         at(80, 'message.delta', { turn_id: 'turn-media', text: 'Voici la vidéo :\n\nMEDIA:/Users/test/videos/video.mp4\n' })
         at(1800, 'message.delta', { turn_id: 'turn-media', text: '\nEt la suite du texte.' })
         at(2600, 'message.complete', { turn_id: 'turn-media', text: final, status: 'complete' })
+        return
+      }
+      if (frame.params.text === 'Test brouillon e-mail') {
+        // The bot's email_draft_create tool: a pending draft for this chat, then one short line.
+        const now = Date.now() / 1000
+        ;(emailDrafts[frame.params.profile] ||= []).push({
+          id: 'ed_00e2e00e2e00e2e0', rev: 1, status: 'pending', from: 'contact@exemple.test', from_name: 'Alice', signature: '--\nAlice',
+          to: ['sam@exemple.test'], cc: [], bcc: [], subject: 'Devis de novembre', body: 'Bonjour Sam,\n\nVoici le devis demandé.',
+          attachments: [{ path: '/Users/test/docs/devis.pdf', name: 'devis.pdf', size: 48213 }], in_reply_to: { subject: 'Re: Devis' },
+          origin: 'chat', session_id: sessionId, created_at: now, updated_at: now,
+        })
+        at(30, 'message.start', { turn_id: 'turn-email-draft' })
+        at(400, 'message.complete', { turn_id: 'turn-email-draft', text: 'Le brouillon pour Sam est prêt sur la carte.', status: 'complete' })
         return
       }
       if (frame.params.text === 'Test compaction') {
@@ -1843,6 +1895,40 @@ try {
   await page.getByRole('tab', { name: 'Ordinateur' }).click()
   await page.waitForFunction(() => Boolean(document.querySelector('.computer-panel-view img')?.getAttribute('src')?.includes('base64')), null, { timeout: 10_000 })
   if (await page.locator('.computer-panel-url').getByText(cdpUrl).count() === 0) throw new Error('Panneau Ordinateur : URL CDP absente.')
+  // Remote Mac (remote-cua): take over pauses the bot's computer_use through the plugin lease, then hand back.
+  const remoteMac = page.locator('.computer-remote')
+  await remoteMac.getByText('alex@studio-e2e').waitFor({ timeout: 8_000 })
+  await remoteMac.getByText('Le bot a la main').waitFor({ timeout: 2_000 })
+  const steersBeforeRemote = steerCalls.length
+  await remoteMac.getByRole('button', { name: 'Prendre la main' }).click()
+  await remoteMac.getByText('Tu as la main').waitFor({ timeout: 4_000 })
+  const remoteLease = JSON.parse(readFileSync(path.join(ORION_HOME, 'remote-cua', 'lease.json'), 'utf8'))
+  if (remoteLease.holder !== 'human' || remoteLease.viewer !== 'hermesbot') throw new Error('Mac distant : bail non pris.')
+  for (let attempt = 0; attempt < 40 && steerCalls.length === steersBeforeRemote; attempt += 1) await delay(50)
+  if (!steerCalls.slice(steersBeforeRemote).some((call) => String(call.text).includes("remote Mac"))) throw new Error('Mac distant : le bot n’est pas prévenu.')
+  await remoteMac.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}computer-remote-mac.png` })
+  await remoteMac.getByRole('button', { name: 'Rendre la main' }).click()
+  await remoteMac.getByText('Le bot a la main').waitFor({ timeout: 4_000 })
+  if (JSON.parse(readFileSync(path.join(ORION_HOME, 'remote-cua', 'lease.json'), 'utf8')).holder !== 'agent') throw new Error('Mac distant : bail non rendu.')
+  for (let attempt = 0; attempt < 40 && !steerCalls.slice(steersBeforeRemote).some((call) => String(call.text).includes('handed the remote Mac back')); attempt += 1) await delay(50)
+  // The rest of the run counts its own steers from zero.
+  for (let extra = steerCalls.length - steersBeforeRemote; extra > 0; extra -= 1) gatewayOrder.splice(gatewayOrder.lastIndexOf('steer'), 1)
+  steerCalls.length = steersBeforeRemote
+  // Tabs of the team Chrome: watch another one (viewer only), then follow the bot again; Expand over the app.
+  const panelTabs = page.locator('.computer-panel-tabs select')
+  await panelTabs.waitFor({ timeout: 6_000 })
+  await panelTabs.selectOption('onglet-leurre')
+  await page.waitForFunction(() => document.querySelector('.computer-panel-tabs select')?.value === 'onglet-leurre', null, { timeout: 5_000 })
+  await page.waitForFunction(() => Boolean(document.querySelector('.computer-panel-view img')?.getAttribute('src')?.includes('base64')), null, { timeout: 10_000 })
+  await page.locator('.computer-panel').getByRole('button', { name: 'Agrandir', exact: true }).click()
+  await page.locator('.computer-panel.is-expanded').waitFor({ timeout: 2_000 })
+  await delay(250)
+  await page.screenshot({ path: `${SCREENSHOTS}computer-panel-expanded.png` })
+  await page.keyboard.press('Escape')
+  await page.locator('.computer-panel.is-expanded').waitFor({ state: 'detached', timeout: 2_000 })
+  await panelTabs.selectOption('')
+  await page.waitForFunction(() => document.querySelector('.computer-panel-tabs select')?.value === '', null, { timeout: 5_000 })
   // Secure vault form in chat: values stay in the vault, only refs in the acknowledgement.
   await page.locator('.messages-scroll .secure-vault-card').scrollIntoViewIfNeeded()
   await page.locator('.secure-vault-card input[placeholder="Numéro de carte"]').fill('4000 0000 0000 9999')
@@ -2956,6 +3042,35 @@ try {
   if (promptCalls !== promptsBeforeDiscard) throw new Error('Ignorer ne doit lancer aucun tour.')
   if (await page.locator('[data-bot=orion] .bot-row-preview').getByText('hermes-mail').count()) throw new Error('Le roster montre le bloc brut.')
 
+  // Email drafts (email-drafts plugin): a card under the chat; nothing leaves without Envoyer.
+  await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
+  await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test brouillon e-mail')
+  await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
+  const emailCard = page.locator('.email-draft-card')
+  await emailCard.waitFor({ timeout: 6_000 })
+  if (emailDraftCalls.some((call) => call.op === 'send')) throw new Error('Brouillon e-mail envoyé sans clic.')
+  if (await emailCard.getByText('devis.pdf').count() !== 1) throw new Error('Pièce jointe absente de la carte e-mail.')
+  if (await emailCard.locator('.email-rules-button').innerText() !== 'Approbation requise') throw new Error('Règle par défaut : approbation requise.')
+  await emailCard.getByLabel('Cc', { exact: true }).fill('compta@exemple.test')
+  await emailCard.getByLabel('Corps du mail').fill('Bonjour Sam,\n\nVoici le devis corrigé.')
+  await emailCard.locator('.email-rules-button').click()
+  await page.locator('.email-rules-menu').getByText('Autoriser sam@exemple.test').waitFor({ timeout: 2_000 })
+  await delay(250)
+  await emailCard.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SCREENSHOTS}email-draft-card.png` })
+  await page.locator('.email-rules-menu').getByRole('menuitemradio', { name: 'Désactiver les brouillons pour Orion' }).click()
+  await emailCard.locator('.email-rules-button').getByText('Brouillons désactivés').waitFor({ timeout: 2_000 })
+  if (emailDraftRules.orion?.mode !== 'disabled') throw new Error('Règle « désactiver » non transmise au plugin.')
+  await emailCard.locator('.email-rules-button').click()
+  await page.locator('.email-rules-menu').getByRole('menuitemradio', { name: 'Approbation requise' }).click()
+  await emailCard.locator('.email-rules-button').getByText('Approbation requise').waitFor({ timeout: 2_000 })
+  if (emailDraftCalls.some((call) => call.op === 'send')) throw new Error('Brouillon e-mail envoyé par un changement de règle.')
+  await emailCard.getByRole('button', { name: 'Envoyer' }).click()
+  await page.locator('.email-drafts .mail-note').getByText(/Envoyé à .*Devis de novembre/).waitFor({ timeout: 3_000 })
+  const emailSends = emailDraftCalls.filter((call) => call.op === 'send')
+  if (emailSends.length !== 1) throw new Error(`Un clic sur Envoyer doit envoyer une fois (${emailSends.length}).`)
+  if (emailSends[0].rev !== 1 || !String(emailSends[0].body).includes('devis corrigé') || emailSends[0].cc?.[0] !== 'compta@exemple.test') throw new Error('Envoi sans les modifications de la carte.')
+
   // Open questions: one field per question, only the filled ones go back, in one turn.
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('Test questions')
   await page.getByRole('textbox', { name: 'Message à Orion' }).press('Enter')
@@ -3367,10 +3482,10 @@ try {
   if (await page.getByRole('textbox', { name: 'Message à Orion' }).inputValue() !== 'Direct') throw new Error('Le champ de saisie ne prend pas le clavier à l’ouverture d’un bot.')
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('')
 
-  if (await page.locator('.usage-readout').count()) throw new Error('Contexte et tok/s doivent être masqués par défaut.')
-  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
-  await page.locator('.usage-readout').getByText('Contexte 4 % (41k/1M) · 63 tok/s').waitFor({ timeout: 5_000 })
-  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
+  if (await page.locator('.composer .model-chip, .composer .usage-toggle, .composer .usage-readout').count()) throw new Error('Le sélecteur de modèle et le contexte ne doivent plus être dans la zone de saisie.')
+  if (!(await page.locator('.details-panel').isVisible())) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
+  await page.locator('.details-panel .usage-readout').getByText('Contexte 4 % (41k/1M) · 63 tok/s').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel').getByRole('button', { name: 'Fermer les détails' }).click()
 
   const promptsBeforeCommand = promptCalls
   await page.getByRole('textbox', { name: 'Message à Orion' }).fill('/model sonnet')
@@ -3394,9 +3509,13 @@ try {
   }, null, { timeout: 5_000 })
   const localGroup = page.locator('.model-group', { hasText: 'Local LLM' })
   if (await localGroup.count() !== 1) throw new Error('Les modèles locaux doivent être réunis sous Local LLM.')
-  if (await localGroup.locator('.model-group-count').innerText() !== '2') throw new Error('Local LLM doit réunir oMLX et LM Studio.')
+  const localNames = await localGroup.locator('.model-option').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-model') || ''))
+  const localCount = await localGroup.locator('.model-group-count').innerText()
+  if (!localNames.includes('qwen-local-27b') || !localNames.includes('gemma-local')) throw new Error(`Local LLM doit contenir oMLX et LM Studio: ${localNames.join(', ')}`)
+  if (!localNames.some((name) => /inkling-2-mini/i.test(name))) throw new Error(`Local LLM doit contenir Inkling 2 Mini: ${localNames.join(', ')}`)
+  if (Number(localCount) !== localNames.length || Number(localCount) < 3) throw new Error(`Local LLM compte ${localCount} pour ${localNames.join(', ')}`)
   if (await localGroup.locator('.model-group-tile.is-local svg').count() !== 1 || await localGroup.locator('img').count()) throw new Error('Local LLM doit garder son icône neutre.')
-  if (await page.locator('.model-group-name', { hasText: /oMLX|LM Studio/ }).count()) throw new Error('Le nom du serveur local ne doit plus être affiché.')
+  if (await page.locator('.model-group-name', { hasText: /oMLX|LM Studio|Splash/ }).count()) throw new Error('Le nom du serveur local ne doit plus être affiché.')
   await kimiGroup.locator('.model-group-head').click()
   await kimiGroup.locator('.model-option[data-model="k3.1-pro"]').waitFor({ state: 'visible', timeout: 3_000 })
   await page.waitForTimeout(400)
@@ -3459,6 +3578,31 @@ try {
   if (modelProbeCalls.some((call) => !String(call.model).startsWith('cursor/'))) throw new Error(`Un modèle hors des préfixes configurés a été sondé : ${JSON.stringify(modelProbeCalls)}`)
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
+
+  // Delegate (formerly Oyakata): a per-chat toggle in the session block of the right panel, no longer a model of the picker.
+  if (!(await page.locator('.details-panel').isVisible())) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
+  await page.locator('.details-panel [data-model-trigger="true"]').click()
+  await page.locator('.model-option').first().waitFor({ timeout: 5_000 })
+  if (await page.locator('[data-row="model:oyakata"]').count()) throw new Error('Delegate ne doit plus être un modèle du sélecteur.')
+  await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
+  const oyakataRow = page.locator('.details-panel .details-session-oyakata')
+  await oyakataRow.waitFor({ timeout: 5_000 })
+  const oyakataSwitch = oyakataRow.getByRole('switch', { name: 'Delegate' })
+  await oyakataRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
+  if (await oyakataSwitch.isChecked()) throw new Error('Delegate doit être éteint par défaut.')
+  const mutationsBeforeOyakata = modelMutations.length
+  await oyakataSwitch.click()
+  await oyakataRow.getByText('Sonnet 5.5 planifie et relit · Inkling 2 Mini Splash fait le travail').waitFor({ timeout: 3_000 })
+  if (!(await oyakataSwitch.isChecked())) throw new Error('Delegate ne s’allume pas.')
+  const oyakataOn = oyakataCalls.filter((call) => call.method === 'plugin.chef-worker.oyakata.set')
+  if (oyakataOn.length !== 1 || oyakataOn[0].enabled !== true || oyakataOn[0].profile !== 'orion' || !oyakataOn[0].session_id) throw new Error(`Bascule Delegate inattendue : ${JSON.stringify(oyakataCalls)}`)
+  if (modelMutations.length !== mutationsBeforeOyakata) throw new Error('Allumer Delegate ne doit pas changer le modèle du chat (il devient le chef).')
+  await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
+  await delay(250)
+  await page.screenshot({ path: `${SCREENSHOTS}oyakata-toggle.png` })
+  await oyakataSwitch.click()
+  await oyakataRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
+  if (oyakataSessions[oyakataOn[0].session_id] !== false) throw new Error('Delegate ne s’éteint pas côté plugin.')
 
   autoRouteFailOnce = true
   const promptsBeforeAuto = promptCalls
@@ -3667,7 +3811,11 @@ try {
   await page.waitForTimeout(350)
   const offeredFree = await page.locator('.model-picker .model-option:not(.is-auto)').evaluateAll((rows) => rows.map((row) => ({ model: row.dataset.model, paid: Boolean(row.querySelector('.is-paid')) })))
   const unpaidOffered = offeredFree.filter((row) => !row.paid).map((row) => row.model).sort()
-  if (unpaidOffered.join() !== 'gemma-local,k3.1-pro,kimi-for-coding,kimi-k3,qwen-local-27b') throw new Error(`Mode zéro frais : modèles proposés ${JSON.stringify(offeredFree)}`)
+  const requiredFree = ['gemma-local', 'k3.1-pro', 'kimi-for-coding', 'kimi-k3', 'qwen-local-27b']
+  const missingFree = requiredFree.filter((model) => !unpaidOffered.includes(model))
+  if (missingFree.length) throw new Error(`Mode zéro frais : modèles gratuits manquants ${missingFree.join(', ')} parmi ${JSON.stringify(offeredFree)}`)
+  const unexpectedFree = unpaidOffered.filter((model) => !requiredFree.includes(model) && !/inkling|local|omlx|ollama|splash|lmstudio/i.test(model))
+  if (unexpectedFree.length) throw new Error(`Mode zéro frais : modèle inattendu proposé comme gratuit : ${unexpectedFree.join(', ')}`)
   if (!offeredFree.some((row) => row.paid)) throw new Error(`Mode zéro frais : le modèle actif doit rester proposé, marqué Payant : ${JSON.stringify(offeredFree)}`)
   await page.screenshot({ path: `${SCREENSHOTS}model-picker-free.png` })
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
@@ -3680,6 +3828,7 @@ try {
   if (await page.locator('.model-picker-note', { hasText: 'Mode zéro frais' }).count()) throw new Error('Mode zéro frais coupé : la note reste affichée.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-picker').waitFor({ state: 'detached', timeout: 3_000 })
+  await page.locator('.details-panel').getByRole('button', { name: 'Fermer les détails' }).click()
 
   // Caveman mode: one switch for every bot. The note is read with the turn, after the mode instruction;
   // the stored text stays the user's, and an approved mail still goes out with nothing added.
@@ -3770,7 +3919,7 @@ try {
 
   // 460k of a 500k limit (50 % of a 1M window): the warning, once, until Later; then the limit.
   fakeContextTokens = 460_000
-  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
+  if (!(await page.locator('.details-panel').isVisible())) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
   await page.locator('.compaction-guard[data-guard=warn]').waitFor({ timeout: 5_000 })
   await page.locator('.compaction-guard').getByText('Orion : contexte à 92 % de ta limite (460k / 500k)').waitFor({ timeout: 2_000 })
   if (await page.locator('.usage-readout').getAttribute('title') !== 'Ta limite : 500k (50 % de la fenêtre)') throw new Error('Compaction : l’infobulle du contexte doit donner la limite.')
@@ -3817,7 +3966,7 @@ try {
   await page.locator('.composer-send.is-stop').waitFor({ state: 'detached', timeout: 5_000 })
   if (await page.locator('.composer-send[aria-label="Envoyer"]').count()) throw new Error('Champ vide : le bouton Envoyer doit rester caché.')
   await delay(500)
-  await page.getByRole('button', { name: 'Afficher le contexte et le débit' }).click()
+  await page.locator('.details-panel').getByRole('button', { name: 'Fermer les détails' }).click()
 
   // Auto again: each profile gets back what it had before Manual, and the shared setting follows.
   await openSettings()
@@ -4850,7 +4999,7 @@ try {
   localMode = false
 
   if (errors.length) throw new Error(`Erreurs Chromium: ${errors.join(', ')}`)
-  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot (dernière ligne pendant le tour, puis « Afficher N étapes » replié), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement, cartes d’adresses hermes-places (cartes natives, streaming sans carte partielle, photos locales, liens à pied, blocs invalides inertes).')
+  console.log('E2E OK: connexion sans mot de passe (clé locale, jeton jamais prêté), auth, WebSocket, roster, routines réelles, cache instantané, médias MEDIA: (galerie, vidéo Range, visionneuse, filtres, vidéo livrée avec la réponse), statut au travail et tour en arrière-plan, statut en veille et panneau sous-agents (subagent.roster, process.list, subagent.list, subagent.tail, événements subagent.*), NOREPLY jamais affiché en streaming, étapes du bot (dernière ligne pendant le tour, puis « Afficher N étapes » replié), /model, contexte, tok/s, envoi, streaming, scroll libre, coupure 1006 et reconnexion, bouton de reconnexion (socket unique, réabonnement, gateway injoignable, session expirée), classement par groupes ou par activité, menu clic droit des bots (épingler, déplacer avec révision, nouvelle section, renommer, marquer lu, copier l’ID, masquer, suppression réversible, démo), nouveau bot (nom, apparence, profiles.create, fiche, premier tour unique hors du fil, démo), thème dans les réglages seulement, résumé du travail sans non-lu avant la fin, coffre gateway et accords, coffre CDP dans le trousseau (save, list, fill, code, bots autorisés, réglages, refus d’origine, journal sans secret, persistance), carte de mail, brouillons d’e-mail du plugin email-drafts (carte, règles, envoi au seul clic), interrupteur Delegate par chat (panneau de droite, plus dans le sélecteur), onglets et vue agrandie du panneau Ordinateur, Mac distant (bail remote-cua, prise et reprise de main), identifiants gardés, mentions @bot, glisser-déposer, documents en onglets (HTML isolé), onglet Usage, onglet Médias, message pendant le travail, raccourcis, modes BRAIN, PLAN et EXEC, mode caveman, mode zéro frais, écrans de chargement, cartes d’adresses hermes-places (cartes natives, streaming sans carte partielle, photos locales, liens à pied, blocs invalides inertes).')
 } finally {
   if (browser) await browser.close()
   if (child) child.kill('SIGTERM')

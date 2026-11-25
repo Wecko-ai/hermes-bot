@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Copy, ArrowDown, ChevronDown, Volume2 } from 'lucide-react'
 import { autoRouteDisplay } from '../lib/auto-route-label'
@@ -25,7 +25,7 @@ import { citedPathsByMessage, isServablePath, mediaIndex, mediaRef, referencedFi
 import { normalizeHref } from '../lib/links'
 import { completedMessageStamp, findRanges } from '../lib/find'
 import { mentionedSlug, mentionIndex as buildMentionIndex, remarkMentions } from '../lib/mentions'
-import { approvedMailIds, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
+import { approvedMailIds, hoistMailFences, MAIL_APPROVED_FENCE, MAIL_FENCE, withoutMailInstruction } from '../lib/mail'
 import { approvedDraftIds, DRAFT_APPROVED_FENCE, DRAFT_FENCE, withoutDraftInstruction } from '../lib/draft'
 import { threadItems } from '../lib/progress'
 import { parseToolTranscript, transcriptStepLabel } from '../lib/tool-transcript'
@@ -210,7 +210,7 @@ function CitedFiles({ files, profile, version, sent = false, hints = [], onOpenI
 
 export const Markdown = memo(function Markdown({ content, profile, version, streaming = false, localMedia = true, botCards, role, citedFiles = false, citedPaths = [], onOpenImages, onOpenDocument, onVaultFormDone }: MarkdownProps) {
   const cards = botCards ?? localMedia
-  const source = useMemo(() => (streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
+  const source = useMemo(() => hoistMailFences(streaming ? withoutUnfinishedTag(content) : content), [content, streaming])
   const tweets = useMemo(() => cards && !streaming ? findTweets(source) : [], [source, streaming, cards])
   // One collector per text: the plugin stores the media there, the #media:<index> links point back to it.
   const sink = useMemo<MediaSink>(() => ({ media: [] }), [source])
@@ -478,6 +478,8 @@ interface MessageListProps {
   /** Older rows exist above the replica. The list asks for them near the top. */
   hasOlder?: boolean
   onLoadOlder?: () => Promise<boolean | void> | boolean | void
+  /** Shown after the last message (the chat's email drafts). */
+  trailing?: ReactNode
 }
 
 const citedCache = createLru<readonly string[]>(400)
@@ -493,7 +495,7 @@ function rowAnchor(row: { kind: string; message?: ChatMessage; progress?: ChatMe
 let highlightOwner: object | null = null
 const supportsHighlights = () => typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined'
 
-export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onVaultFormDone, onOpenBot, search, onSearchCount, progressInThread = getSettings().progressInThread, hasOlder = false, onLoadOlder }: MessageListProps) {
+export function MessageList({ bot, bots, messages, streaming, streamKey, running, activity, workText, streamReply = false, loading, onSuggestion, onOpenDocument, onVaultFormDone, onOpenBot, search, onSearchCount, progressInThread = getSettings().progressInThread, hasOlder = false, onLoadOlder, trailing }: MessageListProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const columnRef = useRef<HTMLDivElement>(null)
@@ -844,6 +846,7 @@ export function MessageList({ bot, bots, messages, streaming, streamKey, running
           )
         })}
         {!loading && frame.on && frame.bottom > 0 && <div className="messages-spacer" style={{ height: frame.bottom }} aria-hidden="true" />}
+        {!loading && trailing}
         {working && (
           <div className="working-row" role="status" aria-live="polite">
             <LiveAvatar bot={{ ...bot, status: bot.status === 'idle' || bot.status === 'done' ? 'working' : bot.status }} size={24} />

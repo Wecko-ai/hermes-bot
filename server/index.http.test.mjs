@@ -102,6 +102,10 @@ describe('local routes require a real session', () => {
       ['/api/computer-panel/status?bot=orion', 'GET'],
       ['/api/computer-panel/stream?bot=orion', 'GET'],
       ['/api/computer-panel/control?bot=orion', 'GET'],
+      ['/api/computer-panel/pages?bot=orion', 'GET'],
+      ['/api/computer-panel/pages', 'POST'],
+      ['/api/computer-panel/remote?bot=orion', 'GET'],
+      ['/api/computer-panel/remote', 'POST'],
       ['/api/compaction', 'GET'],
       ['/api/compaction', 'PUT'],
     ]

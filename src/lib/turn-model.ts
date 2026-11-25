@@ -2,7 +2,7 @@ import type { AnsweredBy, ChatMessage, SessionUsage } from '../types'
 import { fallbackRouteId, parseModelFallback } from './auto-context'
 import { autoRouteDisplay } from './auto-route-label'
 import { chipModelLabel } from './model'
-import { CHEF_QWEN_DEFAULT_CHEF, chefQwenChip, isChefQwenModel } from './chef-qwen'
+import { OYAKATA_DEFAULT_CHEF, oyakataChip, isOyakataModel } from './oyakata'
 
 const STORAGE_KEY = 'hermesbot.answered-by'
 const MAX_SESSIONS = 30
@@ -30,13 +30,13 @@ export function composerChipText(input: {
   botModel?: string
   fallbackMark: string
   autoLabel?: string | null
-  /** Localized « Chef Qwen »: set when the picker (or the session) is on Chef Qwen. */
+  /** Localized « Delegate » (formerly Oyakata): set when the session is in Delegate mode (or a legacy Oyakata / Chef Qwen pick). */
   chefLabel?: string | null
 }) {
-  if (input.chefLabel || isChefQwenModel(input.chatModel)) {
-    const label = input.chefLabel || 'Chef Qwen'
-    const chef = input.answered ? answeredLabel(input.answered, input.fallbackMark) : chipModelLabel(CHEF_QWEN_DEFAULT_CHEF)
-    return chefQwenChip(label, chef)
+  if (input.chefLabel || isOyakataModel(input.chatModel)) {
+    const label = input.chefLabel || 'Delegate'
+    const chef = input.answered ? answeredLabel(input.answered, input.fallbackMark) : chipModelLabel(OYAKATA_DEFAULT_CHEF)
+    return oyakataChip(label, chef)
   }
   if (input.answered) return answeredLabel(input.answered, input.fallbackMark)
   if (input.autoLabel) return input.autoLabel

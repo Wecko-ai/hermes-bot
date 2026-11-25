@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Menu, PanelRight, Search, Upload, X } from 'lucide-react'
-import type { Bot, ChatMessage, SessionUsage } from '../types'
+import type { Bot, ChatMessage } from '../types'
 import type { MediaRef } from '../lib/media'
 import { droppedFiles, type PendingAttachment } from '../lib/attachments'
 import type { ChatMode } from '../lib/modes'
@@ -39,12 +39,7 @@ interface ChatViewProps {
   onOpenDocument: (profile: string, media: MediaRef) => void
   onVaultFormDone?: (message: string) => void
   onOpenBot: (slug: string) => void
-  modelLabel: string
   onOpenModels: (query: string) => void
-  usage: SessionUsage | null
-  showUsage: boolean
-  onToggleUsage: () => void
-  modelPicker?: ReactNode
   /** The voice mode over the chat, when open. */
   voiceOverlay?: ReactNode
   /** Opens the voice mode; absent when nothing can speak here. */
@@ -65,6 +60,8 @@ interface ChatViewProps {
   /** Rows older than the replica. The list asks for the next page near the top. */
   hasOlder?: boolean
   onLoadOlder?: () => Promise<boolean | void> | boolean | void
+  /** The chat's email drafts (email-drafts plugin), under the messages. */
+  emailDrafts?: ReactNode
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
@@ -202,8 +199,8 @@ export function ChatView(props: ChatViewProps) {
         progressInThread={progressInThread}
         hasOlder={props.hasOlder}
         onLoadOlder={props.onLoadOlder}
+        trailing={props.hidden ? undefined : props.emailDrafts}
       />
-      {props.modelPicker}
       {!props.hidden && props.voiceOverlay}
       {!props.hidden && <SubagentsPanel key={bot.slug} entries={props.subagents} profile={bot.slug} processes={props.processes} onLoadTail={props.onLoadSubagentTail} onOpenHistory={props.onOpenSubagentHistory} onOpenDocument={(media) => props.onOpenDocument(bot.slug, media)} />}
       {props.prompts[0] && !props.hidden && (
@@ -221,11 +218,7 @@ export function ChatView(props: ChatViewProps) {
         onSend={props.onSend}
         onStop={props.onStop}
         onNotice={props.onNotice}
-        modelLabel={props.modelLabel}
         onOpenModels={props.onOpenModels}
-        usage={props.usage}
-        showUsage={props.showUsage}
-        onToggleUsage={props.onToggleUsage}
         onVoice={props.onVoice}
         compaction={props.compaction}
       />

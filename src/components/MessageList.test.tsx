@@ -99,6 +99,41 @@ describe('MessageList', () => {
     expect(assistant).toContain('<pre>')
   })
 
+  it('renders a hermes-mail card even when the bot wrapped it in a text fence', () => {
+    const content = [
+      'Voici le mail, carte pour validation :',
+      '',
+      '````text',
+      '````hermes-mail',
+      'Id: sefrax-dec1',
+      'Draft-Id: 221',
+      'From: Alex Rivera <alex@example.com>',
+      'To: Sefrax Team <contact@sefrax.com>',
+      'Cc:',
+      'Subject: Re: Want to buy a slot for my link',
+      'Reply-Label: Anton (Sefrax)',
+      'In-Reply-To: <m1@exemple.test>',
+      'References: <m0@exemple.test>',
+      '',
+      'Hi Anton,',
+      '',
+      'Confirmed: we start on December 1, 2026.',
+      '',
+      'Best,',
+      'Alex',
+      '````',
+      '````',
+    ].join('\n')
+    const html = renderToStaticMarkup(list({
+      messages: [message({ id: 'a', role: 'assistant', content })],
+    }))
+    expect(html).toContain('mail-card')
+    expect(html).toContain('Alex Rivera &lt;alex@example.com&gt;')
+    expect(html).toContain('Hi Anton,')
+    expect(html).not.toContain('````hermes-mail')
+    expect(html).not.toContain('````text')
+  })
+
   it('does not turn a data url into an image', () => {
     const html = renderToStaticMarkup(list({
       messages: [message({ id: 'a', role: 'assistant', content: 'Look ![Shot](data:image/png;base64,aaaa)' })],

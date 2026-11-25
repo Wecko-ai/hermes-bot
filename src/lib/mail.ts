@@ -107,3 +107,91 @@ export function approvedMailIds(messages: ChatMessage[]) {
   }
   return ids
 }
+
+
+const MAIL_LANGUAGE = /^(hermes-mail(?:-approved)?)$/
+
+interface Fence {
+  start: number
+  end: number
+  marker: string
+  language: string
+  body: string
+}
+
+const isCloser = (line: string, marker: string) => new RegExp(`^ {0,3}\`{${marker.length},}[ \\t]*$`).test(line)
+
+/** Opening and closing backtick fences, CommonMark-style: a closer has no info string. */
+function findFences(source: string): Fence[] {
+  const text = source.replace(/\r\n/g, '\n')
+  const fences: Fence[] = []
+  let i = 0
+  while (i < text.length) {
+    const lineStart = i
+    const newline = text.indexOf('\n', i)
+    const lineEnd = newline < 0 ? text.length : newline
+    const line = text.slice(i, lineEnd)
+    const open = /^ {0,3}(`{3,})([^`\n]*)$/.exec(line)
+    if (open) {
+      const marker = open[1]
+      const language = open[2].trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+      const bodyStart = newline < 0 ? text.length : newline + 1
+      let cursor = bodyStart
+      let closed = false
+      while (cursor <= text.length) {
+        const next = text.indexOf('\n', cursor)
+        const end = next < 0 ? text.length : next
+        if (isCloser(text.slice(cursor, end), marker)) {
+          const fenceEnd = next < 0 ? text.length : next + 1
+          fences.push({ start: lineStart, end: fenceEnd, marker, language, body: text.slice(bodyStart, cursor).replace(/\n$/, '') })
+          i = fenceEnd
+          closed = true
+          break
+        }
+        if (next < 0) break
+        cursor = next + 1
+      }
+      if (closed) continue
+    }
+    i = newline < 0 ? text.length : newline + 1
+  }
+  return fences
+}
+
+const OPEN_MAIL = /^(`{3,})(hermes-mail(?:-approved)?)[ \t]*\n([\s\S]*)$/
+
+/** A mail fence hidden inside another fence (often a `text` wrapper copied from the skill example). */
+export function mailInsideFence(source: string): { marker: string; language: string; body: string } | null {
+  const complete = findFences(source).find((fence) => MAIL_LANGUAGE.test(fence.language))
+  if (complete) {
+    if (complete.language === 'hermes-mail' && !parseMailBlock(complete.body)) return null
+    return { marker: complete.marker, language: complete.language, body: complete.body }
+  }
+  const match = OPEN_MAIL.exec(source.replace(/^\n+/, ''))
+  if (!match) return null
+  if (match[2] === 'hermes-mail' && !parseMailBlock(match[3])) return null
+  return { marker: match[1], language: match[2], body: match[3].replace(/\n$/, '') }
+}
+
+/** Lift a wrapped `hermes-mail` / `hermes-mail-approved` fence to the top level so the chat can render the card. */
+export function hoistMailFences(content: string): string {
+  const text = content.replace(/\r\n/g, '\n')
+  const fences = findFences(text)
+  let result = text
+  for (const fence of [...fences].reverse()) {
+    if (MAIL_LANGUAGE.test(fence.language)) continue
+    const inner = mailInsideFence(fence.body)
+    if (!inner) continue
+    const block = `${inner.marker}${inner.language}\n${inner.body}\n${inner.marker}`
+    let end = fence.end
+    const leftover = result.slice(end)
+    const empty = /^(?:`{3,}[ \t]*(?:\n|$))*/.exec(leftover)
+    if (empty) end += empty[0].length
+    const before = result.slice(0, fence.start).replace(/[ \t]*\n+$/, '\n\n')
+    let after = result.slice(end)
+    if (after.startsWith('\n')) after = after.replace(/^\n+/, '\n')
+    else if (after) after = `\n${after}`
+    result = `${before}${block}${after}`
+  }
+  return result
+}

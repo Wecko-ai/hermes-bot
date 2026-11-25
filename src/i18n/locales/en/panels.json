@@ -27,6 +27,18 @@
       "model": "Model",
       "conversation": "Conversation",
       "permanentChat": "Permanent Bot Chat"
+    },
+    "session": {
+      "model": "Model",
+      "compact": "Compact",
+      "compactionAuto": "Auto compaction",
+      "compactionManual": "Limit · {{percent}}%",
+      "compactionSettings": "Compaction settings",
+      "oyakata": "Delegate",
+      "oyakataOff": "The chat’s model plans and reviews; a local {{worker}} worker does the work.",
+      "oyakataOn": "{{chef}} plans and reviews · {{worker}} does the work",
+      "oyakataUnavailable": "Unavailable: the chef-worker plugin is not on this bot",
+      "oyakataFailed": "Delegate could not change: {{error}}"
     }
   },
   "routines": {
@@ -465,6 +477,7 @@
     "profile": "Profile",
     "noKey": "No key",
     "paid": "Paid",
+    "hermesGroup": "HermesBot",
     "auto": "Auto",
     "autoHint": "Pick a model per send (local classifier)",
     "autoLabel": "Auto",
@@ -493,8 +506,7 @@
     "autoFree": "Auto free",
     "autoFreeHint": "Free models only, no subscription quota",
     "autoFreeLabel": "Auto free",
-    "chefQwen": "Chef Qwen",
-    "chefQwenHint": "Grok 4.7 leads, local Qwen 27B does the work"
+    "oyakata": "Delegate"
   },
   "providers": {},
   "serverRequest": {
@@ -619,7 +631,27 @@
     "takeOver": "Take over",
     "giveBack": "Give back",
     "userControlBanner": "You’re in control — the bot is asked to pause automation.",
-    "hint": "For CAPTCHAs and other checks, take over here instead of closing the bot tab."
+    "hint": "For CAPTCHAs and other checks, take over here instead of closing the bot tab.",
+    "headingTeam": "{{team}} team Chrome",
+    "tab": "Tab",
+    "followBot": "Follow the bot",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "remote": {
+      "heading": "Remote Mac",
+      "botHas": "The bot is in control (computer_use over SSH).",
+      "youHave": "You’re in control: computer_use is paused for this bot.",
+      "heldElsewhere": "Held by another viewer.",
+      "forceBack": "Hand back (force)",
+      "hint": "To act on this Mac, use Screen Sharing or the Mac itself; here you pause the bot.",
+      "errors": {
+        "held_by_other_viewer": "Another viewer already has control.",
+        "not_holder": "You don’t hold control.",
+        "stale_force": "Control changed meanwhile; nothing was handed back.",
+        "not_configured": "This bot has no remote Mac configured.",
+        "other": "Can’t do that right now."
+      }
+    }
   },
   "hermes": {
     "gatewayUnresponsive": "The Hermes gateway isn’t responding.",

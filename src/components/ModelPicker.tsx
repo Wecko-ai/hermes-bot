@@ -9,7 +9,6 @@ import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { AUTO_FREE_MODEL_SENTINEL, AUTO_FREE_PICKER_OPTION, AUTO_MODEL_SENTINEL, AUTO_PICKER_OPTION } from '../lib/auto-router'
-import { CHEF_QWEN_PICKER_OPTION, isChefQwenModel } from '../lib/chef-qwen'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
 import { ViewEmpty } from './ViewEmpty'
 
@@ -56,7 +55,9 @@ export function groupModels(options: ModelOption[]) {
     group.models.push(option)
     map.set(brand.group, group)
   })
-  return [...map.values()]
+  const groups = [...map.values()]
+  // Local servers first: Inkling / oMLX / Ollama must stay visible without scrolling past cloud catalogues.
+  return [...groups.filter((group) => group.local), ...groups.filter((group) => !group.local)]
 }
 
 export function ProviderTile({ group }: { group: ProviderGroup }) {
@@ -93,7 +94,25 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const revealedRef = useRef(false)
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties | undefined>(undefined)
   useEffect(() => inputRef.current?.focus(), [])
+  useLayoutEffect(() => {
+    if (typeof document?.querySelector !== 'function' || typeof window === 'undefined') return
+    const position = () => {
+      const trigger = document.querySelector('[data-model-trigger="true"]')
+      if (!trigger || typeof trigger.getBoundingClientRect !== 'function') { setAnchorStyle(undefined); return }
+      const rect = trigger.getBoundingClientRect()
+      const right = Math.max(16, window.innerWidth - rect.right)
+      const spaceBelow = window.innerHeight - rect.bottom - 16
+      const top = spaceBelow >= 260 ? rect.bottom + 8 : Math.max(16, window.innerHeight - 380)
+      const maxHeight = Math.min(560, Math.max(240, window.innerHeight - top - 16))
+      setAnchorStyle({ position: 'fixed', right, top, bottom: 'auto', maxHeight })
+    }
+    position()
+    if (typeof window.addEventListener !== 'function') return
+    window.addEventListener('resize', position)
+    return () => window.removeEventListener('resize', position)
+  }, [])
 
   const searching = query.trim().length > 0
 
@@ -188,7 +207,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
   return (
     <>
       <button className="model-picker-scrim" aria-label={t('models.closePicker')} onClick={onClose} />
-      <div className="model-picker" role="dialog" aria-label={t('models.choose')}>
+      <div className="model-picker" style={anchorStyle} role="dialog" aria-label={t('models.choose')}>
         <div className="model-picker-search">
           <Search size={15} />
           <input
@@ -210,37 +229,37 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
         <div className="model-picker-list" id="model-picker-list" ref={listRef}>
           {loading && options.length === 0 && <div className="model-picker-skeleton" aria-label={t('models.loading')}><span /><span /><span /><span /></div>}
           {autoEnabled && !searching && (
-            <button
-              type="button"
-              className={`model-option is-auto ${current === AUTO_MODEL_SENTINEL ? 'is-current' : ''}`}
-              data-row="model:auto"
-              onClick={() => choose(AUTO_PICKER_OPTION)}
-            >
-              <span className="model-option-label">{t('models.auto')}</span>
-              <span className="model-option-meta">{t('models.autoHint')}</span>
-            </button>
-          )}
-          {autoEnabled && !searching && (
-            <button
-              type="button"
-              className={`model-option is-auto ${current === AUTO_FREE_MODEL_SENTINEL ? 'is-current' : ''}`}
-              data-row="model:auto-free"
-              onClick={() => choose(AUTO_FREE_PICKER_OPTION)}
-            >
-              <span className="model-option-label">{t('models.autoFree')}</span>
-              <span className="model-option-meta">{t('models.autoFreeHint')}</span>
-            </button>
-          )}
-          {!searching && (
-            <button
-              type="button"
-              className={`model-option is-auto ${isChefQwenModel(current) ? 'is-current' : ''}`}
-              data-row="model:chef-qwen"
-              onClick={() => choose(CHEF_QWEN_PICKER_OPTION)}
-            >
-              <span className="model-option-label">{t('models.chefQwen')}</span>
-              <span className="model-option-meta">{t('models.chefQwenHint')}</span>
-            </button>
+            <section className="model-group is-open" data-model-group="hermesbot">
+              <div className="model-group-head" aria-hidden="true">
+                <ChevronRight className="model-group-chevron" size={14} />
+                <span className="model-group-tile is-local" style={{ '--tile-hue': 262 } as CSSProperties}>H</span>
+                <span className="model-group-name">{t('models.hermesGroup')}</span>
+              </div>
+              <div className="model-group-body">
+                <div className="model-group-inner">
+                  <button
+                    type="button"
+                    className={`model-option is-auto ${current === AUTO_MODEL_SENTINEL ? 'is-current' : ''}`}
+                    data-row="model:auto"
+                    onClick={() => choose(AUTO_PICKER_OPTION)}
+                  >
+                    <span className="model-option-label">{t('models.auto')}</span>
+                    <span className="model-option-meta">{t('models.autoHint')}</span>
+                    {current === AUTO_MODEL_SENTINEL && <Check className="model-option-check" size={15} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`model-option is-auto ${current === AUTO_FREE_MODEL_SENTINEL ? 'is-current' : ''}`}
+                    data-row="model:auto-free"
+                    onClick={() => choose(AUTO_FREE_PICKER_OPTION)}
+                  >
+                    <span className="model-option-label">{t('models.autoFree')}</span>
+                    <span className="model-option-meta">{t('models.autoFreeHint')}</span>
+                    {current === AUTO_FREE_MODEL_SENTINEL && <Check className="model-option-check" size={15} />}
+                  </button>
+                </div>
+              </div>
+            </section>
           )}
           {freeMode && <p className="model-picker-note">{t('models.freeModeOn')}</p>}
           {error && <p className="model-picker-note is-error">{error}</p>}

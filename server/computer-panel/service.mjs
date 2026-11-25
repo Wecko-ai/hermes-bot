@@ -5,7 +5,9 @@ import {
   cdpTargetForBot,
   driverForBot,
   normalizeBotSlug,
+  listPages,
   resolveCdpOrigin,
+  teamForBot,
 } from './chrome.mjs'
 import { hubForOrigin, resetScreencastHubs } from './hub.mjs'
 
@@ -79,6 +81,37 @@ export function createComputerPanelService(options = {}) {
     return { ok: true }
   }
 
+  /** The tabs of the bot's team Chrome, the one on screen marked. */
+  async function pagesForBot(bot) {
+    const slug = normalizeBotSlug(bot)
+    if (!slug) throw new ComputerPanelError('invalid_request', 400)
+    const origin = await originForBot(slug)
+    const hub = hubForOrigin(origin)
+    const pages = await listPages(origin)
+    const current = hub.currentTargetId
+    const team = cdpOverride ? null : teamForBot(teams, slug)
+    return {
+      team: team ? team.label : '',
+      following: !hub.manualTargetId,
+      pages: pages.map((page) => ({
+        id: String(page.id || ''),
+        title: String(page.title || '').slice(0, 200),
+        url: String(page.url || '').slice(0, 500),
+        current: Boolean(current) && page.id === current,
+      })).filter((page) => page.id),
+    }
+  }
+
+  async function selectPage(bot, targetId) {
+    const slug = normalizeBotSlug(bot)
+    if (!slug) throw new ComputerPanelError('invalid_request', 400)
+    const origin = await originForBot(slug)
+    const id = String(targetId || '')
+    if (id && !(await listPages(origin)).some((page) => page.id === id)) throw new ComputerPanelError('unknown_tab', 404)
+    await hubForOrigin(origin).selectTarget(id)
+    return pagesForBot(slug)
+  }
+
   function controlFlag(bot) {
     const slug = normalizeBotSlug(bot)
     if (!slug) return { userControlled: false }
@@ -98,6 +131,8 @@ export function createComputerPanelService(options = {}) {
     attachStream,
     setTakeover,
     forwardInput,
+    pagesForBot,
+    selectPage,
     controlFlag,
     steerTexts: { capture: STEER_CAPTURE, release: STEER_RELEASE },
     reset: resetScreencastHubs,

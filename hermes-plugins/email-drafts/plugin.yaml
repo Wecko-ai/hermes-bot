@@ -1,0 +1,120 @@
+manifest_version: 2
+api_version: 1
+name: email-drafts
+version: 1.0.1
+description: Bots write email as drafts; you send them from a card in the HermesBot chat (through himalaya by default, or Gmail or SMTP), with per-bot rules
+requires_hermes: ">=0.23.0"
+author: Thomas Bekkers (hermes-bot-kit), adapted for HermesBot
+license: MIT
+homepage: https://github.com/thomasbek3/hermes-bot-kit
+tags: [email, drafts, approval, himalaya, gmail, smtp, hermesbot]
+provides_tools:
+  - email_draft_create
+  - email_draft_update
+  - email_draft_status
+# himalaya (the default sender) is the CLI already configured on the bot's machine
+# (~/.config/himalaya); the plugin never reads its credentials.
+# The Gmail sender's client is the user's own Google Cloud "Desktop app" OAuth client.
+# Hermes runs the sign-in (`hermes auth add email-drafts:google`), stores and
+# refreshes the grant, and attaches it to requests made through
+# credentialed_provider_request. gmail.send is the only scope: the plugin can
+# send mail as the signed-in account and cannot read the mailbox.
+optional_env:
+  - name: EMAIL_DRAFTS_GOOGLE_CLIENT_ID
+    description: "Client ID of your own Google Cloud OAuth client (Desktop app) for Gmail sending"
+    url: "https://console.cloud.google.com/apis/credentials"
+  - name: EMAIL_DRAFTS_GOOGLE_CLIENT_SECRET
+    description: "Client secret of that OAuth client"
+    secret: true
+  - name: EMAIL_DRAFTS_SMTP_PASSWORD
+    description: "SMTP password (or app password) when the sender is smtp"
+    secret: true
+oauth:
+  - id: google
+    authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+    token_url: https://oauth2.googleapis.com/token
+    scopes:
+      - https://www.googleapis.com/auth/gmail.send
+    client_id_env: EMAIL_DRAFTS_GOOGLE_CLIENT_ID
+    client_secret_env: EMAIL_DRAFTS_GOOGLE_CLIENT_SECRET
+    hosts: [gmail.googleapis.com]
+    authorize_params: {access_type: offline, prompt: consent}
+config_schema:
+  sender:
+    type: str
+    choices: [himalaya, gmail, smtp]
+    default: himalaya
+    label: "Send with"
+    description: "himalaya (default): the himalaya CLI configured on the bot's machine (HermesBot's mail engine). gmail: the Google account signed in with `hermes auth add email-drafts:google`. smtp: the server below."
+  from_address:
+    type: str
+    default: ""
+    label: "From address"
+    description: "The address drafts are sent from. With himalaya it must be an address the himalaya account may send as. With gmail, the signed-in account or one of its verified send-as addresses."
+  from_name:
+    type: str
+    default: ""
+    label: "From name"
+    description: "Display name shown to recipients (optional)."
+  signature:
+    type: str
+    default: ""
+    label: "Signature"
+    description: "Plain-text signature added under the body of every email this bot sends. Use \\n for new lines."
+  attachment_dirs:
+    type: list
+    default: []
+    label: "Extra attachment folders"
+    description: "Absolute folders whose files may be attached, besides the bot's working directory (which never counts when it is your home folder)."
+  himalaya_account:
+    type: str
+    default: ""
+    label: "himalaya account"
+    description: "Default himalaya account in ~/.config/himalaya/config.toml (see `himalaya account list`). Empty: himalaya's default account. Overridden when the draft's From matches another allowed account."
+  himalaya_accounts:
+    type: list
+    default: []
+    label: "Allowed himalaya accounts"
+    description: "Account names this bot may send from. The draft's From address selects the matching account. Empty: any account in the himalaya config whose email matches From, otherwise the default account."
+  himalaya_sent_folder:
+    type: str
+    default: ""
+    label: "Save a copy to"
+    description: "Mailbox name or role for a copy of each sent mail (e.g. Sent). Empty: no copy (right for an SMTP-only account)."
+  himalaya_cli:
+    type: str
+    default: ""
+    label: "himalaya path"
+    description: "Absolute path of the himalaya CLI. Empty: himalaya on PATH, then /opt/homebrew/bin and /usr/local/bin."
+  google_client_id:
+    type: secret
+    env: EMAIL_DRAFTS_GOOGLE_CLIENT_ID
+    label: "Google OAuth client ID"
+    description: "Your own Google Cloud OAuth client (type Desktop app) for Gmail. Then run `hermes auth add email-drafts:google` once."
+  google_client_secret:
+    type: secret
+    env: EMAIL_DRAFTS_GOOGLE_CLIENT_SECRET
+    label: "Google OAuth client secret"
+  smtp_host:
+    type: str
+    default: ""
+    label: "SMTP host"
+  smtp_port:
+    type: int
+    default: 587
+    label: "SMTP port"
+  smtp_security:
+    type: str
+    choices: [starttls, ssl]
+    default: starttls
+    label: "SMTP security"
+    description: "starttls (port 587) or ssl (port 465). Plain-text SMTP is not offered."
+  smtp_username:
+    type: str
+    default: ""
+    label: "SMTP username"
+  smtp_password:
+    type: secret
+    env: EMAIL_DRAFTS_SMTP_PASSWORD
+    label: "SMTP password"
+    description: "Stored by Hermes like a provider key; read with the profile's secret scope."

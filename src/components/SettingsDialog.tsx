@@ -194,7 +194,6 @@ function ChatTab({ localModels, bots, demo, compactionContext, client, connected
       <Row label={t('settings.dictationLanguage')} hint={t('settings.dictationLanguageHint')}>
         <Segments<DictationLanguage> label={t('settings.dictationLanguage')} value={settings.dictationLanguage} options={[{ id: 'interface', label: t('settings.dictationLanguageOptions.interface') }, { id: 'fr', label: t('settings.languageOptions.fr') }, { id: 'en', label: t('settings.languageOptions.en') }]} onChange={(dictationLanguage) => updateSettings({ dictationLanguage })} />
       </Row>
-      <Toggle label={t('settings.showUsage')} hint={t('settings.showUsageHint')} checked={settings.showUsage} onChange={(showUsage) => updateSettings({ showUsage })} />
       {autoRouter?.enabled && (
         <Toggle
           label={t('settings.autoModel')}

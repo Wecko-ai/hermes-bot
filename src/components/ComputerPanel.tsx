@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Monitor } from 'lucide-react'
+import { Maximize2, Minimize2, Monitor } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { ViewEmpty } from './ViewEmpty'
 import type { Bot } from '../types'
 import {
+  loadComputerPages,
+  loadRemoteMac,
+  selectComputerPage,
+  setRemoteMacControl,
   sendComputerInput,
   setComputerTakeover,
   subscribeComputerPanel,
   type ComputerPanelMeta,
+  type ComputerPanelPages,
+  type RemoteMac,
 } from '../lib/computer-panel'
 import { cdpKeyModifiers } from '../lib/cdp-modifiers'
 
@@ -18,13 +24,104 @@ interface ComputerPanelProps {
 
 const emptyMeta: ComputerPanelMeta = { state: 'idle', url: '', title: '', driver: '', userControlled: false }
 
-export function ComputerPanel({ bot, onSteer }: ComputerPanelProps) {
+/** A Mac the bot drives over SSH (remote-cua): take over / hand back. Hidden for a bot without one. */
+function RemoteMacSection({ bot, onSteer }: ComputerPanelProps) {
+  const { t } = useTranslation()
+  const [remote, setRemote] = useState<RemoteMac | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let stopped = false
+    setRemote(null)
+    const read = () => loadRemoteMac(bot.slug).then((next) => { if (!stopped) setRemote(next) }).catch(() => undefined)
+    void read()
+    const timer = window.setInterval(read, 5_000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [bot.slug])
+  if (!remote?.configured || !remote.machine) return null
+  const human = remote.lease.holder === 'human'
+  const other = human && !remote.mine
+  const change = async (active: boolean) => {
+    setBusy(true)
+    setError('')
+    try {
+      const next = await setRemoteMacControl(bot.slug, active, !active && other ? { epoch: remote.lease.epoch } : undefined)
+      setRemote(next)
+      if (next.error) setError(t(`computerPanel.remote.errors.${next.error}`, { defaultValue: t('computerPanel.remote.errors.other') }))
+      else if (onSteer && next.steerText) await onSteer(next.steerText).catch(() => undefined)
+    } catch {
+      setError(t('computerPanel.remote.errors.other'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const state = other ? t('computerPanel.remote.heldElsewhere') : human ? t('computerPanel.remote.youHave') : t('computerPanel.remote.botHas')
+  return (
+    <section className="details-section computer-remote" aria-label={t('computerPanel.remote.heading')}>
+      <div className="details-section-heading"><span>{t('computerPanel.remote.heading')}</span></div>
+      <p className="computer-remote-machine">{remote.machine.user}@{remote.machine.host}</p>
+      <p className={`computer-remote-state${human ? ' is-human' : ''}`} role="status">{state}</p>
+      {error && <p className="computer-remote-error" role="alert">{error}</p>}
+      <div className="computer-panel-actions">
+        <button type="button" className={human ? 'secondary' : 'primary'} disabled={busy} onClick={() => void change(!human)}>
+          {other ? t('computerPanel.remote.forceBack') : human ? t('computerPanel.giveBack') : t('computerPanel.takeOver')}
+        </button>
+      </div>
+      <p className="readonly-note">{t('computerPanel.remote.hint')}</p>
+    </section>
+  )
+}
+
+export function ComputerPanel(props: ComputerPanelProps) {
+  return (
+    <>
+      <ChromePanel {...props} />
+      <RemoteMacSection {...props} />
+    </>
+  )
+}
+
+function ChromePanel({ bot, onSteer }: ComputerPanelProps) {
   const { t } = useTranslation()
   const [meta, setMeta] = useState<ComputerPanelMeta>(emptyMeta)
   const [frame, setFrame] = useState('')
   const [busy, setBusy] = useState(false)
   const viewRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef('')
+  const [pages, setPages] = useState<ComputerPanelPages>({ team: '', following: true, pages: [] })
+  const [expanded, setExpanded] = useState(false)
+  // Closing the panel (or switching bot) while in control hands the browser back to the bot.
+  const controlRef = useRef({ slug: bot.slug, controlled: false, onSteer })
+  controlRef.current = { slug: bot.slug, controlled: meta.userControlled, onSteer }
+  useEffect(() => () => {
+    const { slug, controlled, onSteer: steer } = controlRef.current
+    if (!controlled) return
+    void setComputerTakeover(slug, false).then((result) => (steer && result.steerText ? steer(result.steerText) : undefined)).catch(() => undefined)
+  }, [bot.slug])
+
+  // The team Chrome's tabs, refreshed while the view is live.
+  const live = meta.state === 'live'
+  useEffect(() => {
+    let stopped = false
+    const read = () => loadComputerPages(bot.slug).then((next) => { if (!stopped) setPages(next) }).catch(() => undefined)
+    void read()
+    if (!live) return () => { stopped = true }
+    const timer = window.setInterval(read, 5_000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [bot.slug, live])
+  const pickPage = async (targetId: string) => {
+    setFrame('')
+    frameRef.current = ''
+    const next = await selectComputerPage(bot.slug, targetId).catch(() => null)
+    if (next) setPages(next)
+  }
+
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !meta.userControlled) setExpanded(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded, meta.userControlled])
 
   useEffect(() => {
     setMeta(emptyMeta)
@@ -106,8 +203,13 @@ export function ComputerPanel({ bot, onSteer }: ComputerPanelProps) {
     : t('computerPanel.noDriver')
 
   return (
-    <section className="details-section computer-panel">
-      <div className="details-section-heading"><span>{t('computerPanel.heading')}</span></div>
+    <section className={`details-section computer-panel${expanded ? ' is-expanded' : ''}`} aria-label={t('computerPanel.heading')}>
+      <div className="details-section-heading computer-panel-heading">
+        <span>{pages.team ? t('computerPanel.headingTeam', { team: pages.team }) : t('computerPanel.heading')}</span>
+        <button type="button" className="plain-icon" aria-label={expanded ? t('computerPanel.collapse') : t('computerPanel.expand')} title={expanded ? t('computerPanel.collapse') : t('computerPanel.expand')} onClick={() => setExpanded(!expanded)}>
+          {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
+      </div>
       {meta.userControlled && <p className="computer-panel-banner" role="status">{t('computerPanel.userControlBanner')}</p>}
       <div
         className={`computer-panel-view ${meta.userControlled ? 'is-controlled' : ''} ${meta.state === 'live' ? 'is-live' : 'is-idle'}`}
@@ -129,6 +231,15 @@ export function ComputerPanel({ bot, onSteer }: ComputerPanelProps) {
             />
           )}
       </div>
+      {pages.pages.length > 1 && (
+        <label className="computer-panel-tabs">
+          <span>{t('computerPanel.tab')}</span>
+          <select value={pages.following ? '' : (pages.pages.find((page) => page.current)?.id ?? '')} onChange={(event) => void pickPage(event.target.value)}>
+            <option value="">{t('computerPanel.followBot')}</option>
+            {pages.pages.map((page) => <option key={page.id} value={page.id}>{page.title || page.url || page.id}</option>)}
+          </select>
+        </label>
+      )}
       <div className="computer-panel-meta">
         <p className="computer-panel-title" title={meta.title}>{meta.title || '—'}</p>
         <p className="computer-panel-url" title={meta.url}>{meta.url || '—'}</p>

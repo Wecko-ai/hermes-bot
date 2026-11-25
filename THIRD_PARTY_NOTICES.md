@@ -21,6 +21,10 @@ The optional generic plugins in `hermes-plugins/` use the free sources below. No
 - **[Trafilatura](https://github.com/adbar/trafilatura)** as an optional, use-when-installed page extractor (not bundled; see its package for the license terms).
 - Google Maps appears only as plain `https://www.google.com/maps/...` directions links produced by the plugin. There is no Google API client, no data exchange and no paid Google integration; "Google Maps" is a trademark of Google.
 
+## Hermes Bot Kit (MIT)
+
+`hermes-plugins/email-drafts`, `hermes-plugins/texting-style` and `hermes-plugins/remote-cua` come from [Hermes Bot Kit](https://github.com/thomasbek3/hermes-bot-kit) by Thomas Bekkers (release v2026.11.24.1), MIT License, full text in `hermes-plugins/LICENSE-hermes-bot-kit` and in each plugin's `LICENSE`. Each plugin's `NOTICE.md` lists what was changed for HermesBot (himalaya sender instead of Composio, named-profile installers with a dry run by default). The email draft cards, the Chrome tab picker and the remote Mac take-over in the app are HermesBot code written against those plugins' contracts. The kit's desktop plugins (computer-viewer, noVNC bundle, HD streaming agents) are not included.
+
 ## Presentation film and README images
 
 The film in `docs/readme/hermesbot-film.mp4` and the images in `docs/readme/` were made for this project. The film's music and voice were generated with ElevenLabs. The lettering uses the Outfit and JetBrains Mono typefaces (SIL Open Font License 1.1), rendered into the images. The provider logos shown in them are those listed under "Provider logos" above.

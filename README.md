@@ -20,12 +20,43 @@ It is an independent project, not affiliated with Nous Research. Status: early (
 
 <p align="center">
   <a href="https://x.com/i/status/2120164337008709910">Watch the film</a> ·
+  <a href="#delegate">Delegate</a> ·
   <a href="#install-with-your-agent">Install with your agent</a> ·
   <a href="#try-it-without-hermes">Try the demo</a> ·
   <a href="#connect-it-to-hermes">Connect it to Hermes</a> ·
   <a href="#security">Security</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
+
+
+## Delegate
+
+**A cloud model plans and reviews. A local model does the work.**
+
+Delegate is a per-chat switch in the session block of the right-hand panel, next to the model picker. When it is on, the model already chosen for that chat (for example Kimi K2.8) plans the work and reviews the result; a local worker, [Inkling 2 Mini](https://thinkingmachines.ai/news/inkling-2-mini/) by Thinking Machines, served by [Splash](https://github.com/incoai/splash) from Inco on Apple silicon, runs the tools. The cloud model never does the work itself. If the worker is down, the session stops, so a job is not silently finished in the cloud.
+
+This keeps the heavy part of a turn cheaper, private (it stays on your Mac) and fast: about 100 tokens/s on an M5 Pro, measured on 25 November 2026. After 15 minutes without a request, Splash releases the weights from memory; the next request reloads them in about 3.5 seconds (also measured that day). The weights take about 17 GB; the KV cache is about 98 KB per token, so a 128K context needs about 30 GB of free unified memory in total.
+
+The switch is built into HermesBot. It works in builds that include the chef-worker plugin; **that plugin is not part of this public repository**. Without it, the switch is visible and marked unavailable.
+
+### How to enable
+
+1. Install [Splash](https://github.com/incoai/splash) 1.7.2 or later (Inkling 2 Mini support) on an Apple silicon Mac, then serve the model:
+
+```bash
+brew install incoai/tap/splash
+splash serve --model unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_M --max-context 128K --idle-release 15m --port 8099
+```
+
+HermesBot looks for Splash at `http://127.0.0.1:8099` by default (`SPLASH_ORIGIN` or `splashOrigin`). Leave that terminal open; the first start downloads the model.
+
+2. In a chat, open the right-hand panel and turn **Delegate** on. Pick the cloud model that should plan and review; Inkling 2 Mini does the work.
+
+### Requirements
+
+- Apple silicon (Splash itself needs an M3 or newer, on a recent macOS).
+- About 30 GB of free unified memory at a 128K context (weights ≈ 17 GB, plus the KV cache).
+- A HermesBot build with the chef-worker plugin, and Splash running as above.
 
 ## Install with your agent
 
@@ -157,7 +188,8 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 - **Voice mode.** The button next to the microphone opens a voice conversation with the bot. In hands-free mode (the default) just speak; otherwise hold Talk (or Enter), speak, release. The bot answers out loud with a voice of your Mac, with captions, while a HUD around its avatar moves with the voice. Recognition and voices stay on the Mac (macOS speech recognition, `AVSpeechSynthesizer`); no audio goes through HermesBot's page or server. The bot is asked for a short spoken answer for that turn only; a question with choices can be answered by its number, an approval only on screen. Voices and rate in Settings > Conversations.
 - **Caveman mode.** One switch in Settings > Conversations: every bot answers you in few words, with the same facts. It is a note read with each message you send, not a change to the bots' profiles. What a bot writes elsewhere (files, code, emails, posts, messages to other bots) keeps its normal style.
 - **Context compaction.** Settings > Conversations: Auto leaves Hermes in charge, Manual lets you set the limit as a share of the model's window. In Manual, a small window above the input warns you at 90% of your limit (Compact now or Later), and sending is blocked at 100% until you compact. Saving the setting writes only the two compaction keys of each bot's profile, after keeping their previous values to restore. Hermes's own automatic compactions show in the status line.
-- **Model picker.** Change the model for one conversation. The bot's profile is never rewritten. Before switching, HermesBot asks Hermes whether that provider can serve the bot; a provider with no usable key is marked "No key". Models get readable names ("Gemini Flash 3.5") and, when LLM Stats data is available, their general score and up to two usage tips (agentic, coding, reasoning). The server can read `LLM_STATS_API_KEY`, a trusted private `llmStats.keyCommand` (an argument array run without a shell), or the macOS Keychain, fetches at most one top-50 response a day, and can merge an optional local snapshot set by `HERMESBOT_LLM_STATS_SNAPSHOT`. Data by [LLM Stats](https://llm-stats.com/).
+- **Delegate.** A per-chat switch in the session block of the right-hand panel: the chat's cloud model plans and reviews; a local Inkling 2 Mini worker, served by Splash, does the tool work. Needs a HermesBot build with the chef-worker plugin (not in this repository); otherwise the switch is visible and marked unavailable. If the worker is down, the session stops.
+- **Model picker.** Change the model for one conversation, from the session block of the right-hand panel (alongside the context controls). The bot's profile is never rewritten. Local models (Splash / Inkling, oMLX, Ollama) stay in a Local LLM group at the top of the list; Inkling 2 Mini is offered even when the Hermes catalogue omitted Splash. Before switching, HermesBot asks Hermes whether that provider can serve the bot; a provider with no usable key is marked "No key". Models get readable names ("Gemini Flash 3.5") and, when LLM Stats data is available, their general score and up to two usage tips (agentic, coding, reasoning). The server can read `LLM_STATS_API_KEY`, a trusted private `llmStats.keyCommand` (an argument array run without a shell), or the macOS Keychain, fetches at most one top-50 response a day, and can merge an optional local snapshot set by `HERMESBOT_LLM_STATS_SNAPSHOT`. Data by [LLM Stats](https://llm-stats.com/).
 - **Usage.** Context, tokens, cache, calls and speed for the conversation, and 30 days of tokens per day and per model.
 - **Routines.** The scheduled jobs of each bot, read-only.
 - **Credential prompt.** When a bot needs to log in to a site through the Hermes vault, a dialog asks you for the login or the code. The bot never sees the password.
@@ -281,3 +313,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Changes are listed in [CHANGELOG.md](CHA
 MIT License, see [LICENSE](LICENSE). Third-party work is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 HermesBot is an independent project: it is not affiliated with, endorsed by or connected to Nous Research or any provider named in the app. Some behaviors, such as `MEDIA:` lines and the note added for an `@mention`, follow Hermes Desktop.
+
+[Inkling 2 Mini](https://thinkingmachines.ai/news/inkling-2-mini/) is published by Thinking Machines. [Splash](https://github.com/incoai/splash) is the local inference engine by Inco that serves it on Apple silicon.

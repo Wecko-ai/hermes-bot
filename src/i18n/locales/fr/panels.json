@@ -27,6 +27,18 @@
       "model": "Modèle",
       "conversation": "Conversation",
       "permanentChat": "Bot Chat permanent"
+    },
+    "session": {
+      "model": "Modèle",
+      "compact": "Compacter",
+      "compactionAuto": "Compaction auto",
+      "compactionManual": "Limite · {{percent}} %",
+      "compactionSettings": "Réglages de compaction",
+      "oyakata": "Delegate",
+      "oyakataOff": "Le modèle du chat planifie et relit ; l’ouvrier local {{worker}} fait le travail.",
+      "oyakataOn": "{{chef}} planifie et relit · {{worker}} fait le travail",
+      "oyakataUnavailable": "Indisponible : plugin chef-worker absent sur ce bot",
+      "oyakataFailed": "Delegate n’a pas pu changer : {{error}}"
     }
   },
   "routines": {
@@ -465,6 +477,7 @@
     "profile": "Profil",
     "noKey": "Sans clé",
     "paid": "Payant",
+    "hermesGroup": "HermesBot",
     "auto": "Auto",
     "autoHint": "Un modèle par envoi (classifieur local)",
     "autoLabel": "Auto",
@@ -493,8 +506,7 @@
     "autoFree": "Auto gratuit",
     "autoFreeHint": "Modèles gratuits seulement, sans quota d’abonnement",
     "autoFreeLabel": "Auto gratuit",
-    "chefQwen": "Chef Qwen",
-    "chefQwenHint": "Grok 4.7 dirige, Qwen 27B local fait le travail"
+    "oyakata": "Delegate"
   },
   "providers": {},
   "serverRequest": {
@@ -619,7 +631,27 @@
     "takeOver": "Prendre la main",
     "giveBack": "Rendre la main",
     "userControlBanner": "Vous avez la main — le bot est invité à suspendre l’automation.",
-    "hint": "Pour un CAPTCHA ou une vérif humaine, prenez la main ici plutôt que de fermer l’onglet du bot."
+    "hint": "Pour un CAPTCHA ou une vérif humaine, prenez la main ici plutôt que de fermer l’onglet du bot.",
+    "headingTeam": "Chrome de l’équipe {{team}}",
+    "tab": "Onglet",
+    "followBot": "Suivre le bot",
+    "expand": "Agrandir",
+    "collapse": "Réduire",
+    "remote": {
+      "heading": "Mac distant",
+      "botHas": "Le bot a la main (computer_use par SSH).",
+      "youHave": "Tu as la main : computer_use est suspendu pour ce bot.",
+      "heldElsewhere": "Pris par un autre poste.",
+      "forceBack": "Rendre la main (forcer)",
+      "hint": "Pour agir sur ce Mac, utilise Partage d’écran ou le Mac lui-même ; ici tu suspends le bot.",
+      "errors": {
+        "held_by_other_viewer": "Un autre poste a déjà la main.",
+        "not_holder": "Ce n’est pas toi qui as la main.",
+        "stale_force": "La main a changé entre-temps ; rien n’a été rendu.",
+        "not_configured": "Ce bot n’a pas de Mac distant configuré.",
+        "other": "Action impossible pour le moment."
+      }
+    }
   },
   "hermes": {
     "gatewayUnresponsive": "La gateway Hermes ne répond pas.",

@@ -34,11 +34,7 @@ async function mount(onSend: (...args: unknown[]) => boolean | Promise<boolean>)
       onSend: onSend as never,
       onStop: () => undefined,
       onNotice: () => undefined,
-      modelLabel: 'local',
       onOpenModels: () => undefined,
-      usage: null,
-      showUsage: false,
-      onToggleUsage: () => undefined,
     }))
   })
   const field = () => fieldByLabel(container, 'Message à Alpha')
@@ -51,6 +47,15 @@ async function mount(onSend: (...args: unknown[]) => boolean | Promise<boolean>)
 }
 
 describe('composer send button', () => {
+  it('does not render model selector or usage controls in the composer', async () => {
+    const view = await mount(() => true)
+    expect(view.container.querySelector('.model-chip')).toBeNull()
+    expect(view.container.querySelector('.usage-toggle')).toBeNull()
+    expect(view.container.querySelector('.usage-readout')).toBeNull()
+    expect(view.container.querySelector('.composer-status')).toBeNull()
+    await view.unmount()
+  })
+
   it('stays hidden while the field is empty or only whitespace', async () => {
     const view = await mount(() => true)
     expect(sendButton(view.container)).toBeNull()

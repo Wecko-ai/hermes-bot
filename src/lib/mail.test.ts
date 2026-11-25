@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../types'
-import { APPROVED_MAIL_INSTRUCTION, approvedMailIds, approvedMailPrompt, canSendMail, mailDigest, parseMailBlock, withoutMailInstruction, type MailDraft } from './mail'
+import { APPROVED_MAIL_INSTRUCTION, approvedMailIds, approvedMailPrompt, canSendMail, hoistMailFences, mailDigest, parseMailBlock, withoutMailInstruction, type MailDraft } from './mail'
 
 const block = ['Id: m1', 'Draft-Id: 42', 'From: Bot <bot@exemple.test>', 'To: a@exemple.test', 'Cc:', 'Subject: Re: Bonjour', 'Reply-Label: « Bonjour » de A', 'In-Reply-To: <m@exemple.test>', 'References: <root@exemple.test> <m@exemple.test>', 'Constructor: rien', '', 'Ligne 1', '', 'Ligne 2', ''].join('\n')
 const draft = parseMailBlock(block) as MailDraft
@@ -62,5 +62,31 @@ describe('brouillon de mail', () => {
     expect([...approvedMailIds([message()])]).toEqual(['m1'])
     expect([...approvedMailIds([message({ failed: true })])]).toEqual([])
     expect([...approvedMailIds([message({ role: 'assistant' })])]).toEqual([])
+  })
+})
+
+describe('hoistMailFences', () => {
+  const inner = ['````hermes-mail', 'Id: sefrax-dec1', 'Draft-Id: 221', 'From: Alex Rivera <alex@example.com>', 'To: Sefrax Team <contact@sefrax.com>', 'Cc:', 'Subject: Re: Want to buy a slot for my link', 'Reply-Label: Anton (Sefrax), confirmation du 1er decembre', 'In-Reply-To: <m1@exemple.test>', 'References: <m0@exemple.test> <m1@exemple.test>', '', 'Hi Anton,', '', 'Confirmed: we start on December 1, 2026.', '', 'Best,', 'Alex', '````'].join('\n')
+
+  it('lève un bloc hermes-mail enveloppé dans une clôture text (cas Alex)', () => {
+    const wrapped = ['Voici le mail, carte pour validation :', '', '````text', inner, '````', '````'].join('\n')
+    const hoisted = hoistMailFences(wrapped)
+    expect(hoisted).toContain('````hermes-mail\nId: sefrax-dec1')
+    expect(hoisted).not.toContain('````text')
+    expect(hoisted.split('````').length - 1).toBe(2)
+    expect(parseMailBlock(hoisted.slice(hoisted.indexOf('Id:')))).toMatchObject({ id: 'sefrax-dec1', draftId: '221', from: 'Alex Rivera <alex@example.com>' })
+  })
+
+  it('lève aussi le wrapper à cinq accents graves de l’exemple de la skill', () => {
+    const wrapped = ['`````text', inner, '`````'].join('\n')
+    const hoisted = hoistMailFences(wrapped)
+    expect(hoisted.startsWith('````hermes-mail\n')).toBe(true)
+    expect(hoisted).not.toContain('`````text')
+    expect(parseMailBlock(hoisted.slice(hoisted.indexOf('Id:')))?.id).toBe('sefrax-dec1')
+  })
+
+  it('laisse intact un bloc hermes-mail déjà au premier niveau', () => {
+    const intro = 'Carte pour validation :\n\n'
+    expect(hoistMailFences(intro + inner)).toBe(intro + inner)
   })
 })

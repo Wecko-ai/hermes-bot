@@ -338,5 +338,45 @@
       "ended": "Ended"
     },
     "duration": { "s": "{{s}} s", "m": "{{m}} min {{s}} s", "h": "{{h}} h {{m}} min" }
+  },
+  "emailDraft": {
+    "dockLabel": "Email drafts",
+    "pendingBadge_one": "{{count}} draft waiting",
+    "pendingBadge_other": "{{count}} drafts waiting",
+    "title": "Email from {{name}}",
+    "cardLabel": "Email draft: {{subject}}",
+    "subject": "Subject",
+    "noSubject": "(no subject)",
+    "inReplyTo": "In reply to",
+    "bcc": "Bcc",
+    "signature": "Signature",
+    "attachments": "Attachments",
+    "pending": "Not sent · waiting for you",
+    "pendingCron": "Not sent · from a scheduled run",
+    "sending": "Sending…",
+    "failed": "Not sent",
+    "retry": "Retry",
+    "deliveryUnknown": "Delivery unknown: check your Sent folder",
+    "sent": "Sent at {{time}}: {{subject}}, to {{to}}",
+    "sentAuto": "Sent automatically at {{time}} (allowed recipient): {{subject}}",
+    "discarded": "Draft discarded: {{subject}}",
+    "modeApproval": "Needs approval",
+    "modeAllow": "Allowed recipients",
+    "modeDisabled": "Drafts off",
+    "rulesFor": "Email rules for {{name}}",
+    "allow": "Allow {{to}}",
+    "allowHint": "Their next drafts send without asking",
+    "allowSaveFirst": "Send or undo the To edit first",
+    "needsApproval": "Needs approval",
+    "disable": "Turn off drafts for {{name}}",
+    "manage": "Manage rules",
+    "remove": "Remove",
+    "noneAllowed": "No allowed recipient.",
+    "backToApproval": "Back to: needs approval",
+    "modeLine": {
+      "approval": "Every email from {{name}} waits for your Send.",
+      "allow": "Emails from {{name}} whose recipients are all below send by themselves; the rest wait for your Send.",
+      "disabled": "{{name}} cannot draft emails."
+    }
   }
 }

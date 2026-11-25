@@ -15,6 +15,25 @@ export class ScreencastHub {
     this.meta = { url: '', title: '', driver: '', state: 'idle', userControlled: false }
     this.takeover = new Map()
     this.preferredTargetId = ''
+    // A tab the user picked in the panel wins over the driver's tab until it closes or is cleared.
+    this.manualTargetId = ''
+  }
+
+  /** The CDP target the screencast shows now ('' when idle). */
+  get currentTargetId() {
+    return this.session?.page?.id || ''
+  }
+
+  /** Watch another tab of this Chrome (viewer only: the tab is not brought to the front). '' = follow the driver. */
+  async selectTarget(targetId) {
+    const next = String(targetId || '').trim()
+    if (next === this.manualTargetId && (!next || next === this.currentTargetId)) return
+    this.manualTargetId = next
+    if (this.session) {
+      await this.session.stop().catch(() => undefined)
+      this.session = null
+    }
+    if (this.hasListeners()) await this.ensureSession().catch(() => undefined)
   }
 
   setPreferredTarget(targetId) {
@@ -97,7 +116,7 @@ export class ScreencastHub {
         },
       })
       try {
-        await session.start(this.preferredTargetId)
+        await session.start(this.manualTargetId || this.preferredTargetId)
         this.session = session
       } catch (error) {
         if (error instanceof ComputerPanelError && error.code === 'chrome_idle') {

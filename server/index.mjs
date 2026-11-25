@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { browserTurnCommand, readBrowserTurns } from './browser-turn.mjs'
+import { createRemoteCua } from './remote-cua.mjs'
 import { createComputerPanelService } from './computer-panel/service.mjs'
 import { ComputerPanelError } from './computer-panel/errors.mjs'
 import configModule from './config.cjs'
@@ -70,6 +71,10 @@ const HERMES_ORIGIN = CONFIG.gatewayOrigin
 const HERMES_BROWSER_ORIGIN = CONFIG.browserOrigin
 const BROWSER_TURN_COMMAND = browserTurnCommand(CONFIG.browserTurn)
 const CHROME_TEAMS_FILE = process.env.HERMESBOT_CHROME_TEAMS || path.join(os.homedir(), '.config', 'chrome-teams.json')
+// Take over / hand back for a Mac a bot drives over SSH (hermes-plugins/remote-cua): the plugin's own lease.
+const remoteCua = createRemoteCua({ hermesRoot: CONFIG.hermesHome })
+const REMOTE_STEER_TAKE = '[HermesBot] The user took control of the remote Mac you drive with computer_use. Do not use computer_use until they hand it back; computer_use is refused with human_has_control meanwhile.'
+const REMOTE_STEER_RELEASE = '[HermesBot] The user handed the remote Mac back. Take a fresh screenshot before you click or type: the screen may have changed.'
 const computerPanel = createComputerPanelService({
   enabled: CONFIG.computerPanel.enabled,
   chromeTeamsFile: CHROME_TEAMS_FILE,
@@ -1991,6 +1996,45 @@ async function handleComputerPanelInput(request, response) {
   }
 }
 
+async function handleComputerPanelPages(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  if (request.method === 'GET') {
+    const slug = computerPanelSlug(url)
+    if (!slug) return json(response, 400, { error: 'invalid_request' })
+    try { return json(response, 200, await computerPanel.pagesForBot(slug)) } catch (error) { return handleComputerPanelError(response, error) }
+  }
+  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+  let body
+  try { body = await bodyJson(request, 1024) } catch { return json(response, 400, { error: 'invalid_request' }) }
+  const slug = computerPanelSlug(new URL(`http://local/?bot=${encodeURIComponent(String(body.bot || ''))}`))
+  if (!slug || typeof body.targetId !== 'string' || body.targetId.length > 128) return json(response, 400, { error: 'invalid_request' })
+  try { return json(response, 200, await computerPanel.selectPage(slug, body.targetId)) } catch (error) { return handleComputerPanelError(response, error) }
+}
+
+async function handleComputerPanelRemote(request, response, url) {
+  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
+  if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
+  try {
+    if (request.method === 'GET') {
+      const slug = computerPanelSlug(url)
+      if (!slug) return json(response, 400, { error: 'invalid_request' })
+      return json(response, 200, { bot: slug, ...(await remoteCua.status(slug)) })
+    }
+    if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
+    let body
+    try { body = await bodyJson(request, 1024) } catch { return json(response, 400, { error: 'invalid_request' }) }
+    const slug = computerPanelSlug(new URL(`http://local/?bot=${encodeURIComponent(String(body.bot || ''))}`))
+    if (!slug || typeof body.active !== 'boolean') return json(response, 400, { error: 'invalid_request' })
+    const result = await remoteCua.setControl(slug, body.active, { force: body.force === true, epoch: Number.isInteger(body.epoch) ? body.epoch : null })
+    const steerText = result.ok ? (body.active ? REMOTE_STEER_TAKE : REMOTE_STEER_RELEASE) : ''
+    return json(response, result.ok ? 200 : 409, { bot: slug, ...result, steerText })
+  } catch (error) {
+    const status = Number.isInteger(error?.status) ? error.status : 502
+    return json(response, status, { error: error?.message || 'remote_cua_unavailable' })
+  }
+}
+
 async function handleComputerPanelControl(request, response, url) {
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   if (!computerPanel.enabled) return json(response, 404, { error: 'not_found' })
@@ -2308,6 +2352,12 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/computer-panel/input' && request.method === 'POST') {
       return await handleComputerPanelInput(request, response)
+    }
+    if (url.pathname === '/api/computer-panel/remote' && (request.method === 'GET' || request.method === 'POST')) {
+      return await handleComputerPanelRemote(request, response, url)
+    }
+    if (url.pathname === '/api/computer-panel/pages' && (request.method === 'GET' || request.method === 'POST')) {
+      return await handleComputerPanelPages(request, response, url)
     }
     if (url.pathname === '/api/computer-panel/control' && request.method === 'GET') {
       return await handleComputerPanelControl(request, response, url)

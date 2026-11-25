@@ -338,5 +338,45 @@
       "ended": "Fini"
     },
     "duration": { "s": "{{s}} s", "m": "{{m}} min {{s}} s", "h": "{{h}} h {{m}} min" }
+  },
+  "emailDraft": {
+    "dockLabel": "Brouillons d’e-mail",
+    "pendingBadge_one": "{{count}} brouillon en attente",
+    "pendingBadge_other": "{{count}} brouillons en attente",
+    "title": "E-mail de {{name}}",
+    "cardLabel": "Brouillon d’e-mail : {{subject}}",
+    "subject": "Objet",
+    "noSubject": "(sans objet)",
+    "inReplyTo": "En réponse à",
+    "bcc": "Cci",
+    "signature": "Signature",
+    "attachments": "Pièces jointes",
+    "pending": "Pas envoyé · attend ton accord",
+    "pendingCron": "Pas envoyé · tâche planifiée",
+    "sending": "Envoi…",
+    "failed": "Pas envoyé",
+    "retry": "Réessayer",
+    "deliveryUnknown": "Envoi incertain : vérifie le dossier Envoyés",
+    "sent": "Envoyé à {{time}} : {{subject}}, à {{to}}",
+    "sentAuto": "Envoyé automatiquement à {{time}} (destinataire autorisé) : {{subject}}",
+    "discarded": "Brouillon écarté : {{subject}}",
+    "modeApproval": "Approbation requise",
+    "modeAllow": "Destinataires autorisés",
+    "modeDisabled": "Brouillons désactivés",
+    "rulesFor": "Règles e-mail de {{name}}",
+    "allow": "Autoriser {{to}}",
+    "allowHint": "Ses prochains brouillons partiront sans demander",
+    "allowSaveFirst": "Envoie ou annule d’abord la modification du champ À",
+    "needsApproval": "Approbation requise",
+    "disable": "Désactiver les brouillons pour {{name}}",
+    "manage": "Gérer les règles",
+    "remove": "Retirer",
+    "noneAllowed": "Aucun destinataire autorisé.",
+    "backToApproval": "Revenir à : approbation requise",
+    "modeLine": {
+      "approval": "Chaque e-mail de {{name}} attend ton clic sur Envoyer.",
+      "allow": "Les e-mails de {{name}} dont tous les destinataires sont ci-dessous partent seuls ; les autres attendent ton clic.",
+      "disabled": "{{name}} ne peut pas écrire de brouillon."
+    }
   }
 }

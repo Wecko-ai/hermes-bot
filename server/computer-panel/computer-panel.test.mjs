@@ -166,6 +166,32 @@ describe('computer panel screencast', () => {
     detach()
   })
 
+  it('lists the team Chrome tabs and watches the one picked, then follows the bot again', async () => {
+    await startFakeChrome({
+      pageList: (port) => [
+        { id: 'one', type: 'page', url: 'https://a.test/', title: 'A', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/one` },
+        { id: 'two', type: 'page', url: 'https://b.test/', title: 'B', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/two` },
+      ],
+    })
+    const service = createComputerPanelService({ enabled: true, cdpOrigin: `http://127.0.0.1:${cdpPort}`, chromeTeams: null })
+    const hub = hubForOrigin(`http://127.0.0.1:${cdpPort}`)
+    const detach = hub.attach('orion', () => {})
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(hub.session?.page?.id).toBe('one')
+    let listed = await service.pagesForBot('orion')
+    expect(listed.following).toBe(true)
+    expect(listed.pages.map((page) => [page.id, page.current])).toEqual([['one', true], ['two', false]])
+    listed = await service.selectPage('orion', 'two')
+    expect(hub.session?.page?.id).toBe('two')
+    expect(listed.following).toBe(false)
+    expect(listed.pages.find((page) => page.current)?.id).toBe('two')
+    await expect(service.selectPage('orion', 'gone')).rejects.toMatchObject({ code: 'unknown_tab' })
+    listed = await service.selectPage('orion', '')
+    expect(listed.following).toBe(true)
+    expect(hub.session?.page?.id).toBe('one')
+    detach()
+  })
+
   it('reports idle Chrome when no tab is available', async () => {
     await startFakeChrome({ pages: false })
     const service = createComputerPanelService({

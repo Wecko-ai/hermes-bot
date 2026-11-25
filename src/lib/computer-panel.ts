@@ -59,3 +59,68 @@ export async function sendComputerInput(bot: string, payload: Record<string, unk
     throw new Error(typeof body.error === 'string' ? body.error : 'input_failed')
   }
 }
+export interface ComputerPanelPage { id: string; title: string; url: string; current: boolean }
+export interface ComputerPanelPages { team: string; following: boolean; pages: ComputerPanelPage[] }
+
+const asPages = (body: unknown): ComputerPanelPages => {
+  const raw = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const pages = Array.isArray(raw.pages) ? raw.pages : []
+  return {
+    team: typeof raw.team === 'string' ? raw.team : '',
+    following: raw.following !== false,
+    pages: pages.filter((page): page is Record<string, unknown> => Boolean(page) && typeof page === 'object')
+      .map((page) => ({ id: String(page.id || ''), title: String(page.title || ''), url: String(page.url || ''), current: page.current === true }))
+      .filter((page) => page.id),
+  }
+}
+
+/** The tabs of the bot's team Chrome. */
+export async function loadComputerPages(bot: string): Promise<ComputerPanelPages> {
+  const response = await fetch(`/api/computer-panel/pages?bot=${encodeURIComponent(bot)}`, { credentials: 'same-origin' })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'pages_failed')
+  return asPages(body)
+}
+
+/** Watch another tab (viewer only, the tab is not brought to the front); '' follows the bot again. */
+export async function selectComputerPage(bot: string, targetId: string): Promise<ComputerPanelPages> {
+  const response = await fetch('/api/computer-panel/pages', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bot, targetId }),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'select_failed')
+  return asPages(body)
+}
+
+/** A Mac the bot drives over SSH with the remote-cua plugin (a remote Mac): who has control. */
+export interface RemoteMac {
+  configured: boolean
+  installed: boolean
+  machine: { host: string; user: string; os: string } | null
+  lease: { holder: 'agent' | 'human'; viewer: string | null; since: number; epoch: number }
+  mine: boolean
+  error?: string
+  steerText?: string
+}
+
+export async function loadRemoteMac(bot: string): Promise<RemoteMac | null> {
+  const response = await fetch(`/api/computer-panel/remote?bot=${encodeURIComponent(bot)}`, { credentials: 'same-origin' })
+  if (!response.ok) return null
+  return response.json() as Promise<RemoteMac>
+}
+
+/** Take over (`active`) or hand back. A hand back left by another viewer needs `force` with the epoch seen. */
+export async function setRemoteMacControl(bot: string, active: boolean, force?: { epoch: number }): Promise<RemoteMac> {
+  const response = await fetch('/api/computer-panel/remote', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bot, active, ...(force ? { force: true, epoch: force.epoch } : {}) }),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (response.status !== 200 && response.status !== 409) throw new Error(typeof body.error === 'string' ? body.error : 'remote_failed')
+  return body as RemoteMac
+}

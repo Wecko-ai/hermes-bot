@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, GripVertical, Plus, RefreshCw, Search, Settings, User, Users, UsersRound, X } from 'lucide-react'
+import { Bell, Check, CheckCheck, ChevronDown, ChevronRight, Eye, EyeOff, GripVertical, Mail, Plus, RefreshCw, Search, Settings, User, Users, UsersRound, X } from 'lucide-react'
 import type { Bot } from '../types'
 import type { Room } from '../lib/rooms'
 import { BotContextMenu } from './BotContextMenu'
@@ -42,6 +42,8 @@ interface SidebarProps {
   onReconnect: () => void
   onLogout: () => void
   workSummaries: Record<string, WorkSummary>
+  /** Pending email drafts per bot (email-drafts plugin), for the row mark. */
+  draftCounts?: Record<string, number>
   mobileOpen: boolean
   onCloseMobile: () => void
   onSelect: (bot: Bot) => void
@@ -68,7 +70,7 @@ interface SidebarProps {
   onPrefetch?: (slug: string) => void
 }
 
-export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice, onEditBot, onOpenTeam, onPrefetch }: SidebarProps) {
+export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, roomPreviews, roomWorking, connected, reconnecting, onReconnect, onLogout, workSummaries, draftCounts, mobileOpen, onCloseMobile, onSelect, onSelectRoom, canRoomRename, canRoomDisband, onRoomRename, onRoomDelete, onRoomStop, onNewBot, onNewRoom, onOpenSettings, canManage, onBotAction, onNotice, onEditBot, onOpenTeam, onPrefetch }: SidebarProps) {
   const { t } = useTranslation()
   const { activitySort, showHidden, pinnedBots } = useSettings()
   const roomCache = useRoomStore((state) => state.cache)
@@ -359,7 +361,18 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                         {phase === 'done' && <span className="bot-row-status is-done"><Check size={12} strokeWidth={2.6} />{statusLabel(bot.status)}</span>}
                         {(bot.status === 'waiting' || bot.status === 'blocked') && <span className={`bot-row-status is-${bot.status}`}><span className="status-dot" aria-hidden="true" />{statusLabel(bot.status)}</span>}
                         {phase === 'idle' && bot.status !== 'waiting' && bot.status !== 'blocked' && <span className="bot-row-preview">{cleanPreview(bot.preview) || bot.role}</span>}
-                        {bot.unread > 0 && <span className="unread-badge">{bot.unread > 9 ? '9+' : bot.unread}</span>}
+                        {((draftCounts?.[bot.slug] ?? 0) > 0 || bot.unread > 0) && (
+                          <span className="bot-row-flags">
+                            {(draftCounts?.[bot.slug] ?? 0) > 0 && (
+                              <span className="draft-badge" title={t('emailDraft.pendingBadge', { count: draftCounts![bot.slug] })}>
+                                <Mail size={12} aria-hidden="true" />
+                                <span className="visually-hidden">{t('emailDraft.pendingBadge', { count: draftCounts![bot.slug] })}</span>
+                                {draftCounts![bot.slug] > 1 && <span>{draftCounts![bot.slug] > 9 ? '9+' : draftCounts![bot.slug]}</span>}
+                              </span>
+                            )}
+                            {bot.unread > 0 && <span className="unread-badge">{bot.unread > 9 ? '9+' : bot.unread}</span>}
+                          </span>
+                        )}
                       </span>
                     </span>
                   </button>
