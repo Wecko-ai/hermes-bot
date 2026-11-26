@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAutoRouter } from './decide.mjs'
 import {
-  createProviderQuotaStore, exhaustionFromSignal, isQuotaSignal, limitSpec, modelQuotaId, publicError, quotaProviderId,
+  classifyUpstreamError, createProviderQuotaStore, exhaustionFromSignal, isQuotaSignal, isTransientFallbackSignal, limitSpec, modelQuotaId, publicError, quotaProviderId,
 } from './provider-quota.mjs'
 
 const roots = []
@@ -459,5 +459,45 @@ describe('auto-router skips exhausted providers', () => {
     expect(file.providers.nvidia.models['glm-5.3'].exhaustedUntil).toBe('2026-11-25T03:00:00.000Z')
     expect(file.providers['openrouter-free'].exhaustedUntil).toBeNull()
     expect(file.providers['openrouter-free'].models['ernie-5.5-flash-preview:free'].exhaustedUntil).toBe('2026-11-24T03:10:00.000Z')
+  })
+  for (const message of [
+    'Cursor Connect error internal: Cursor blob capacity is exhausted; the blob was not stored.',
+    'upstream_server_error: Cursor requested unknown Responses tool: ocx_client_tool_search',
+  ]) {
+    it(`is transient_fallback, never a quota signal: ${message.slice(0, 60)}...`, async () => {
+      const dir = await temp()
+      const now = new Date('2026-11-26T10:00:00.000Z')
+      const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+      expect(isQuotaSignal(502, message)).toBe(false)
+      expect(isTransientFallbackSignal(502, message)).toBe(true)
+      expect(classifyUpstreamError(502, message)).toBe('transient_fallback')
+      const recorded = await store.noteErrors({
+        table: {},
+        errors: [{ provider: 'cursor', model: 'cursor/grok-4.7', status: 502, message }],
+      })
+      expect(recorded).toBe(false)
+      const view = await store.snapshot()
+      expect(store.blocked(view, {}, { provider: 'cursor', model: 'cursor/grok-4.7' }, 0)).toBe(false)
+      const file = JSON.parse(await fs.readFile(store.file, 'utf8'))
+      expect(file.providers?.cursor?.exhaustedUntil ?? null).toBeNull()
+    })
+  }
+
+  it('blocks kimi-coding on a weekly quota limit', async () => {
+    const dir = await temp()
+    const now = new Date('2026-11-26T10:00:00.000Z')
+    const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+    const recorded = await store.noteErrors({
+      table: {},
+      errors: [{
+        provider: 'kimi-coding',
+        model: 'kimi-for-coding',
+        status: 429,
+        message: "exceeded_current_quota_error: You've reached your weekly (7-day) usage limit",
+      }],
+    })
+    expect(recorded).toBe(true)
+    const view = await store.snapshot()
+    expect(store.blocked(view, {}, { provider: 'kimi-coding', model: 'kimi-for-coding' }, 0)).toBe(true)
   })
 })

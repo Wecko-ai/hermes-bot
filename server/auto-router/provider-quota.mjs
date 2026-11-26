@@ -89,6 +89,19 @@ const UPSTREAM_MODEL_RATE_TEXT = /temporarily rate-limited upstream/i
 /** Per-model caps. A shared window ("weekly", "per day") stays on the provider. */
 const MODEL_QUOTA_TEXT = /resource limit exceeded|plan limit|insufficient credits|temporarily rate-limited upstream|end of life|no longer available|model .* gone/i
 const QUOTA_TEXT = /429|402|410|quota|rate limit|too many requests|usage limit|resource limit exceeded|plan limit|insufficient credits|weekly|\b7[- ]day\b|end of life|no longer available/i
+/** Cursor transient fallback errors (blob capacity, ocx tool search) are not quota exhaustion. */
+export const CURSOR_TRANSIENT_FALLBACK_TEXT = /blob capacity(?: is exhausted)?|ocx_client_tool_search/i
+
+export function isTransientFallbackSignal(status, message) {
+  return CURSOR_TRANSIENT_FALLBACK_TEXT.test(String(message || ''))
+}
+
+/** Classify an upstream error: quota exhaustion, a transient fallback signal, or nothing. */
+export function classifyUpstreamError(status, message) {
+  if (isTransientFallbackSignal(status, message)) return 'transient_fallback'
+  if (isQuotaSignal(status, message)) return 'quota'
+  return 'none'
+}
 
 /** Leaf model id (`cursor/claude-opus-5-5` and `cursor/cursor/claude-opus-5-5` → `claude-opus-5-5`). */
 export function modelQuotaId(model) {
@@ -295,6 +308,7 @@ function isoInText(text, now = null) {
 }
 
 export function isQuotaSignal(status, message) {
+  if (CURSOR_TRANSIENT_FALLBACK_TEXT.test(String(message || ''))) return false
   const code = Number(status)
   if (code === 429 || code === 402 || code === 410) return true
   // 400/403/500 count only when the body is a quota or retired-model error.

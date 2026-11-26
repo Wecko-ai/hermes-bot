@@ -3,7 +3,7 @@ import { estimateTokens } from './classifier.mjs'
 import { loadTriageConfig, publicTriage, resolveCategory, weightsForDifficulty } from './triage.mjs'
 import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
-import { createProviderQuotaStore, isQuotaSignal } from './provider-quota.mjs'
+import { createProviderQuotaStore, isQuotaSignal, classifyUpstreamError, quotaProviderId, quotaTarget } from './provider-quota.mjs'
 import { freePickReason, rankFreeCandidates, resolveDailyQuota } from './quota.mjs'
 import { allowedByCandidateRules, allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates, tableEntry } from './scorer.mjs'
 
@@ -126,6 +126,32 @@ export function createAutoRouter(deps) {
 
   async function decide(body) {
     const text = typeof body.text === 'string' ? body.text : ''
+    // Transient fallback signals (Cursor blob capacity, ocx_client_tool_search) skip that provider
+    // for this turn only; persisted quota stays untouched.
+    const transientSkip = new Set()
+    if (Array.isArray(body.turnErrors)) {
+      for (const hint of body.turnErrors) {
+        if (classifyUpstreamError(hint?.status, hint?.message) !== 'transient_fallback') continue
+        const targeted = quotaTarget(hint?.provider, hint?.model)
+        if (targeted.provider) transientSkip.add(targeted.provider)
+        const targetedId = quotaProviderId(targeted.provider, targeted.model)
+        if (targetedId) transientSkip.add(targetedId)
+      }
+    }
+    if (Array.isArray(body.excludeProviders)) {
+      for (const provider of body.excludeProviders) {
+        if (typeof provider === 'string' && provider) transientSkip.add(provider)
+      }
+    }
+    if (transientSkip.size) {
+      const expanded = new Set()
+      for (const provider of transientSkip) {
+        expanded.add(provider)
+        expanded.add(quotaProviderId(provider, ''))
+      }
+      transientSkip.clear()
+      for (const provider of expanded) transientSkip.add(provider)
+    }
     const imageCount = Number(body.imageCount) || 0
     const contextUsed = Number(body.contextUsed) || 0
     const contextMax = Number(body.contextMax) || 0
@@ -159,12 +185,18 @@ export function createAutoRouter(deps) {
 
     const usage = await quotaStore.snapshot()
     const skippedExhausted = []
+    const skippedTransient = []
     const candidates = eligible.filter((row) => {
+      if (transientSkip.has(row.provider) || transientSkip.has(quotaProviderId(row.provider, row.model))) {
+        skippedTransient.push(row.provider)
+        return false
+      }
       const block = quotaStore.blockDetail(usage, table, row, tokens)
       if (!block) return true
       skippedExhausted.push({ ...block, fullId: row.fullModel })
       return false
     })
+
     if (!candidates.length) {
       return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
@@ -227,7 +259,10 @@ export function createAutoRouter(deps) {
     }
     if (!picked) return { ok: false, error: 'quota_exhausted', category, mode, tokenEstimate: tokens, triage: triagePublic }
     const skipNote = exhaustionNote(skippedExhausted, picked.chosen)
-    if (skipNote) picked = { ...picked, reason: `${picked.reason}; ${skipNote}` }
+    const uniqTransient = [...new Set(skippedTransient)]
+    const transientNote = uniqTransient.length ? `skipped transient ${uniqTransient.join(', ')}` : ''
+    const notes = [skipNote, transientNote].filter(Boolean)
+    if (notes.length) picked = { ...picked, reason: `${picked.reason}; ${notes.join('; ')}` }
 
     const chosenWindow = sizing.candidates.find((row) => row.fullModel === picked.chosen)?.contextWindow || 0
     return {

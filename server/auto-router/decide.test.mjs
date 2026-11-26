@@ -290,4 +290,92 @@ describe('auto-router decide', () => {
     expect(timedOut.chosen).toBe('demo/other')
     expect(timedOut.triage.source).toBe('local-timeout')
   })
+  it('skips Cursor transient signals for the turn only and never persists quota', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.95 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/z-ai/glm-5.3-flash': { quality: { coding: 0.8 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor'] })
+    const models = [
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'nvidia', model: 'z-ai/glm-5.3-flash' },
+    ]
+    const blob = 'Cursor Connect error internal: Cursor blob capacity is exhausted; the blob was not stored.'
+    const decision = await router.decide({
+      text: 'Fix the bug in server/index.mjs',
+      models,
+      turnErrors: [{ provider: 'custom', model: 'cursor/grok-4.7', status: 502, message: blob }],
+    })
+    expect(decision.ok).toBe(true)
+    expect(decision.chosen).not.toContain('cursor')
+    expect(decision.chosen).toBe('nvidia/z-ai/glm-5.3-flash')
+    let file = null
+    try {
+      file = JSON.parse(await fs.readFile(path.join(dir, 'provider-quota.json'), 'utf8'))
+    } catch { file = null }
+    expect(file?.providers?.cursor?.exhaustedUntil ?? null).toBeNull()
+  })
+
+  it('skips Cursor on the ocx_client_tool_search transient signal for the turn only', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.95 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/z-ai/glm-5.3-flash': { quality: { coding: 0.8 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['cursor'] })
+    const models = [
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'nvidia', model: 'z-ai/glm-5.3-flash' },
+    ]
+    const decision = await router.decide({
+      text: 'Fix the bug in server/index.mjs',
+      models,
+      turnErrors: [{ provider: 'cursor', model: 'cursor/grok-4.7', status: 502, message: 'upstream_server_error: Cursor requested unknown Responses tool: ocx_client_tool_search' }],
+    })
+    expect(decision.ok).toBe(true)
+    expect(decision.chosen).not.toContain('cursor')
+    expect(decision.chosen).toBe('nvidia/z-ai/glm-5.3-flash')
+  })
+
+  it('skips kimi-coding after a weekly quota limit in chosen and fallbacks', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-decide-'))
+    roots.push(dir)
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'kimi-coding/kimi-for-coding': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok-4.7': { quality: { coding: 0.9 }, costPerMToken: { in: 0, out: 0 } },
+        'nvidia/z-ai/glm-5.3-flash': { quality: { coding: 0.8 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: ['kimi-coding', 'cursor'] })
+    await router.recordLoggedUsage({
+      mode: 'auto',
+      chosen: 'kimi-coding/kimi-for-coding',
+      fallbacks: [],
+    }, [{
+      provider: 'kimi-coding',
+      model: 'kimi-for-coding',
+      status: 429,
+      message: "exceeded_current_quota_error: You've reached your weekly (7-day) usage limit",
+    }])
+    const models = [
+      { provider: 'kimi-coding', model: 'kimi-for-coding' },
+      { provider: 'cursor', model: 'cursor/grok-4.7' },
+      { provider: 'nvidia', model: 'z-ai/glm-5.3-flash' },
+    ]
+    const decision = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
+    expect(decision.ok).toBe(true)
+    expect(decision.chosen).not.toContain('kimi-coding')
+    for (const row of decision.fallbacks || []) expect(row.fullId || row.model).not.toContain('kimi-coding')
+  })
 })
