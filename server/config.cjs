@@ -73,7 +73,7 @@ function origin(value) {
   }
 }
 
-/** This desktop build talks to a gateway and to Ollama on this machine. A remote origin needs an explicit opt-in. */
+/** This desktop build talks to a gateway and to local model servers on this machine. A remote origin needs an explicit opt-in. */
 function isLoopbackOrigin(value) {
   try {
     // Node reports an IPv6 hostname with the brackets (`[::1]`).
@@ -161,6 +161,17 @@ function merge(...layers) {
   return result
 }
 
+function botBudgets(value) {
+  const targets = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return targets
+  for (const [key, raw] of Object.entries(value)) {
+    const id = String(key).trim()
+    const tokens = Number(raw)
+    if (id && Number.isFinite(tokens) && tokens > 0) targets[id] = Math.floor(tokens)
+  }
+  return targets
+}
+
 function loadConfig({ env = process.env, platform = process.platform, home = os.homedir(), root = ROOT } = {}) {
   const dataDir = dataDirectory(env, platform, home)
   const privateDir = path.join(root, 'private')
@@ -170,7 +181,6 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     readJson(env.HERMESBOT_CONFIG || path.join(dataDir, 'config.json')),
   )
   const ui = raw.ui && typeof raw.ui === 'object' ? raw.ui : {}
-  const localChat = raw.localChat && typeof raw.localChat === 'object' ? raw.localChat : {}
   const browserTurn = raw.browserTurn && typeof raw.browserTurn === 'object' ? raw.browserTurn : {}
   const computerPanel = raw.computerPanel && typeof raw.computerPanel === 'object' ? raw.computerPanel : {}
   const llmStats = raw.llmStats && typeof raw.llmStats === 'object' ? raw.llmStats : {}
@@ -204,13 +214,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
     // Origin header sent to the gateway. A gateway behind a reverse proxy may only trust its public address.
     browserOrigin: origin(env.HERMES_BROWSER_ORIGIN) || origin(raw.browserOrigin) || gatewayOrigin,
     sshHost: SSH_HOST.test(sshHost) ? sshHost : '',
-    ollamaOrigin: pinnedOrigin(env.OLLAMA_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.ollamaOrigin, allowRemoteGateway) || 'http://127.0.0.1:11434',
     omlxOrigin: pinnedOrigin(env.OMLX_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.omlxOrigin, allowRemoteGateway) || 'http://127.0.0.1:8000',
-    splashOrigin: pinnedOrigin(env.SPLASH_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.splashOrigin, allowRemoteGateway) || 'http://127.0.0.1:8099',
-    localChat: {
-      model: text(env.HERMESBOT_LOCAL_MODEL) || text(localChat.model),
-      name: text(localChat.name, 64),
-    },
+    splashOrigin: pinnedOrigin(env.SPLASH_ORIGIN, allowRemoteGateway) || pinnedOrigin(raw.splashOrigin, allowRemoteGateway) || 'http://127.0.0.1:8098',
     // Optional shared-Chrome arbiter. `command` prints one `tour[team] : <profile>` line per busy browser.
     browserTurn: {
       command: env.BROWSER_TOUR_COMMAND ? command([env.BROWSER_TOUR_COMMAND, 'statut']) : command(browserTurn.command),
@@ -309,6 +314,8 @@ function loadConfig({ env = process.env, platform = process.platform, home = os.
         .find((value) => path.isAbsolute(value)) || '',
       tablePath: [text(env.HERMESBOT_AUTO_ROUTER_TABLE, 4096), text(autoRouter.tablePath, 4096)]
         .find((value) => path.isAbsolute(value)) || '',
+      /** Soft daily token targets per bot id, from the (private) config. Empty by default: every bot gets the generic target. */
+      botBudgets: botBudgets(autoRouter.botBudgets),
     },
   }
 }

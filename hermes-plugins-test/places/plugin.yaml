@@ -1,0 +1,11 @@
+name: places
+version: "0.1.0"
+description: "Find nearby places (cafes, pharmacies, parks, ...) from OpenStreetMap with an Overture fallback, pedestrian routing and a shared hermes-places JSON contract. No API keys, no paid services."
+author: "hermes-plugins"
+kind: standalone
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - places_nearby
+  - places_doctor

@@ -13,7 +13,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = path.join(ROOT, 'docs', 'readme')
 const PORT = 4362
 const VAULT_PORT = 4363
-const UNUSED_PORT = 4364 // nothing listens here: Hermes and Ollama stay unreachable on purpose
+const UNUSED_PORT = 4364 // nothing listens here: Hermes stays unreachable on purpose
 const BASE = `http://127.0.0.1:${PORT}`
 const VIEWPORT = { width: 1280, height: 800 }
 // Detail views are cropped around the element(s) they show, so they read at 1:1 in the README
@@ -46,7 +46,6 @@ try {
       PORT: String(PORT),
       BROWSER_VAULT_PORT: String(VAULT_PORT),
       HERMES_ORIGIN: `http://127.0.0.1:${UNUSED_PORT}`,
-      OLLAMA_ORIGIN: `http://127.0.0.1:${UNUSED_PORT}`,
       HERMESBOT_NO_PRIVATE: '1',
       HERMESBOT_CONFIG: configFile,
       HERMESBOT_ANIMATIONS: path.join(sandbox, 'animations'),
@@ -225,16 +224,6 @@ try {
         targets: [task, chat.locator('article.message', { has: page.locator('.message-delivery') }), chat.locator('.working-row'), chat.locator('.composer-wrap')],
         pad: { x: 0, y: PAD },
       }
-    }],
-    ['ui-local', async () => {
-      await narrowChat(660)
-      await openBot('local:ollama')
-      const chat = page.locator('main.local-chat:not([hidden])')
-      await chat.waitFor({ timeout: 3_000 })
-      await chat.locator('.message-assistant').nth(1).waitFor({ timeout: 3_000 })
-      await settle()
-      // The whole local chat panel: its header names the model, then the messages and the composer.
-      return { targets: [chat], pad: 0, maxWidth: 760 }
     }],
   ]
 

@@ -334,6 +334,50 @@ describe('auto-router skips exhausted providers', () => {
     expect(second.candidates.map((row) => row.model)).not.toContain('kimi-coding/k3.1-pro')
   })
 
+  it('clears provider exhaustion after a successful use, and leaves other models exhausted', async () => {
+    const dir = await temp()
+    let now = new Date('2026-11-26T03:00:00.000Z')
+    const store = createProviderQuotaStore(dir, { now: () => now, host: 'host-a' })
+    await store.noteErrors({
+      table: {},
+      errors: [
+        { provider: 'kimi-coding', model: 'kimi-for-coding', status: 429, message: 'weekly (7-day) usage limit' },
+        { provider: 'kimi-coding', model: 'k3.1-pro', status: 429, message: 'resource limit exceeded' },
+      ],
+    })
+    const before = JSON.parse(await fs.readFile(store.file, 'utf8')).providers.kimi
+    expect(before.exhaustedUntil).toBe('2026-11-30T00:00:00.000Z')
+    expect(before.models['k3.1-pro'].exhaustedUntil).toBeTruthy()
+    const siblingUntil = before.models['k3.1-pro'].exhaustedUntil
+    const view = await store.snapshot()
+    expect(store.blocked(view, {}, { provider: 'kimi-coding', model: 'kimi-for-coding' }, 0)).toBe(true)
+
+    now = new Date('2026-11-26T03:05:00.000Z')
+    expect(await store.recordUse(pick('kimi-coding', 'kimi-for-coding'))).toBe(true)
+    const after = JSON.parse(await fs.readFile(store.file, 'utf8')).providers.kimi
+    expect(after.exhaustedUntil).toBeNull()
+    expect(after.models['k3.1-pro'].exhaustedUntil).toBe(siblingUntil)
+    const afterView = await store.snapshot()
+    expect(store.blocked(afterView, {}, { provider: 'kimi-coding', model: 'kimi-for-coding' }, 0)).toBe(false)
+    expect(store.blocked(afterView, {}, { provider: 'kimi-coding', model: 'k3.1-pro' }, 0)).toBe(true)
+
+    const tablePath = path.join(dir, 'table.json')
+    await fs.writeFile(tablePath, JSON.stringify({
+      models: {
+        'kimi-coding/kimi-for-coding': { quality: { coding: 0.99 }, costPerMToken: { in: 0, out: 0 } },
+        'cursor/cursor/grok': { quality: { coding: 0.5 }, costPerMToken: { in: 0, out: 0 } },
+      },
+    }))
+    const router = createAutoRouter({ tablePath, logDir: dir, subscriptions: [] })
+    const models = [
+      { provider: 'kimi-coding', model: 'kimi-for-coding' },
+      { provider: 'cursor', model: 'cursor/grok' },
+    ]
+    const decision = await router.decide({ text: 'Fix the bug in server/index.mjs', models })
+    expect(decision.chosen).toBe('kimi-coding/kimi-for-coding')
+    expect(decision.reason).not.toMatch(/provider kimi exhausted/)
+  })
+
   it('skips exhausted cursor models and keeps composer-2.5', async () => {
     const dir = await temp()
     let now = new Date('2026-11-23T12:00:00.000Z')

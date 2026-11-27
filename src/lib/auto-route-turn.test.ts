@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ModelOption } from '../types'
 import { decideAutoRoute } from './auto-router'
 import type { ActiveChat, HermesClient } from './hermes'
-import { beginAutoRoutedTurn, submitAutoTurn, type AutoTurnTrack, type RoutedTurnPlan, isRetryableTurnComplete, turnFallbackError } from './auto-route-turn'
+import { beginAutoRoutedTurn, submitAutoTurn, type AutoTurnTrack, type RoutedTurnPlan, isPluginBlockedTurn, isRetryableTurnComplete, turnFallbackError } from './auto-route-turn'
 
 vi.mock('./auto-router', async () => {
   const actual = await vi.importActual<typeof import('./auto-router')>('./auto-router')
@@ -27,6 +27,17 @@ describe('auto route in-turn errors', () => {
     expect(isRetryableTurnComplete({ status: 'error', text: 'every provider in the fallback chain kept failing over' })).toBe(true)
     expect(isRetryableTurnComplete({ status: 'complete', text: 'ok' })).toBe(false)
     expect(isRetryableTurnComplete({ status: 'error', text: 'provider unavailable' })).toBe(true)
+    expect(isPluginBlockedTurn({ status: 'complete', turn_exit_reason: 'blocked_by_plugin_pre_llm_call', text: 'Budget Gemini API atteint' })).toBe(true)
+    expect(isRetryableTurnComplete({
+      status: 'complete',
+      turn_exit_reason: 'blocked_by_plugin_pre_llm_call',
+      text: 'Budget Gemini API atteint (10.70 $ / 9.90 $ ce mois) : gemini/gemini-4-hydrogen bloqué. billing hard limit, payment required. Passer sur un autre modèle.',
+    })).toBe(true)
+    expect(isRetryableTurnComplete({
+      status: 'complete',
+      text: 'Budget Gemini API atteint (10.70 $ / 9.90 $ ce mois) : gemini/gemini-4-hydrogen bloqué. billing hard limit, payment required.',
+    })).toBe(true)
+    expect(isRetryableTurnComplete({ status: 'complete', text: 'On peut parler du budget marketing du trimestre.' })).toBe(false)
   })
 
   it('formats fallback error labels', () => {
@@ -267,5 +278,72 @@ describe('auto routed submit', () => {
     expect(begun.plan.fellBack).toBe(true)
     expect(begun.plan.badge.reason).toBe('router_down')
     expect(begun.chat).toBe(chat)
+  })
+})
+
+describe('auto route switch failures', () => {
+  const hydrogenChat: ActiveChat = { ...chat, model: 'gemini-4-hydrogen' }
+  const catalog: ModelOption[] = [
+    { provider: 'gemini', model: 'gemini-4-hydrogen', providerName: 'Gemini' },
+    { provider: 'kimi-coding', model: 'kimi-for-coding', providerName: 'Kimi' },
+    { provider: 'cursor', model: 'grok-4.7', providerName: 'Cursor' },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(decideAutoRoute).mockReset()
+    vi.mocked(decideAutoRoute).mockResolvedValue({
+      ok: true,
+      mode: 'auto',
+      category: 'writing',
+      chosen: 'cursor/grok-4.7',
+      provider: 'cursor',
+      model: 'grok-4.7',
+      reason: 'Best 0.90 quality for category, quota headroom 100%',
+      fallbacks: [
+        { provider: 'kimi-coding', model: 'kimi-for-coding', fullId: 'kimi-coding/kimi-for-coding', label: 'Kimi K2.8', score: 0.9 },
+      ],
+    })
+  })
+
+  it('tries the router fallback when the chosen model cannot be applied', async () => {
+    const request = vi.fn(async (_method: string, params?: Record<string, unknown>) => {
+      const payload = params?.payload as { model?: string } | undefined
+      if (payload?.model === 'grok-4.7') throw new Error('model_resolution_failed')
+      return { revision: 8, execution_generation: 3 }
+    })
+    const begun = await beginAutoRoutedTurn({
+      client: fakeClient(request),
+      chat: hydrogenChat,
+      text: 'hello',
+      imageCount: 0,
+      usage: null,
+      modelOptions: catalog,
+      mode: 'auto',
+      onModelApplied: () => undefined,
+    })
+    expect(begun.plan.fellBack).toBeFalsy()
+    expect(begun.chat.model).toBe('kimi-for-coding')
+    expect(begun.plan.badge.chosen).toBe('kimi-coding/kimi-for-coding')
+    expect(begun.plan.badge.reason).toBe('Fallback after model_resolution_failed')
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('stays on the session model only after every routed switch fails', async () => {
+    const request = vi.fn(async () => { throw new Error('model_resolution_failed') })
+    const begun = await beginAutoRoutedTurn({
+      client: fakeClient(request),
+      chat: hydrogenChat,
+      text: 'hello',
+      imageCount: 0,
+      usage: null,
+      modelOptions: catalog,
+      mode: 'auto',
+      onModelApplied: () => undefined,
+    })
+    expect(begun.plan.fellBack).toBe(true)
+    expect(begun.plan.badge.reason).toBe('model_resolution_failed')
+    expect(begun.plan.badge.chosen).toBe('gemini/gemini-4-hydrogen')
+    expect(begun.chat).toBe(hydrogenChat)
+    expect(request).toHaveBeenCalledTimes(2)
   })
 })

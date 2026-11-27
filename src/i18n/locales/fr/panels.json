@@ -34,11 +34,26 @@
       "compactionAuto": "Compaction auto",
       "compactionManual": "Limite · {{percent}} %",
       "compactionSettings": "Réglages de compaction",
-      "oyakata": "Delegate",
-      "oyakataOff": "Le modèle du chat planifie et relit ; l’ouvrier local {{worker}} fait le travail.",
-      "oyakataOn": "{{chef}} planifie et relit · {{worker}} fait le travail",
-      "oyakataUnavailable": "Indisponible : plugin chef-worker absent sur ce bot",
-      "oyakataFailed": "Delegate n’a pas pu changer : {{error}}"
+      "delegate": "Delegate",
+      "delegateOff": "Le modèle du chat planifie et relit ; l’ouvrier local {{worker}} fait le travail.",
+      "delegateOn": "{{chef}} planifie et relit · {{worker}} fait le travail",
+      "delegateUnavailable": "Indisponible : plugin chef-worker absent sur ce bot",
+      "delegateFailed": "Delegate n’a pas pu changer : {{error}}",
+      "liveLabel": "En cours",
+      "livePending": "…",
+      "liveRoleChef": "chef",
+      "liveRoleWorker": "ouvrier",
+      "liveRoleVision": "vision",
+      "liveRoleFallback": "secours",
+      "liveRoleNormalAfterDown": "mode normal",
+      "liveMissionRunning": "{{worker}} · mission en cours (slot {{slot}})",
+      "liveMissionRunningTimed": "{{worker}} · mission en cours (slot {{slot}} · {{seconds}} s)",
+      "liveRetry": "tentative {{attempt}}/{{max}}",
+      "liveWorkerContext": "Ouvrier · {{readout}}",
+      "delegateLocalDisabled": "Désactivé : ce chat utilise déjà un modèle local.",
+      "delegateWorkerDownNormal": "Ouvrier injoignable — ce tour tourne en mode normal.",
+      "delegateWorkerOffline": "Ouvrier local hors ligne",
+      "delegateWorkerReady": "Ouvrier local prêt"
     }
   },
   "routines": {
@@ -370,8 +385,6 @@
       "activity": "Activité"
     },
     "showHidden": "Afficher les bots cachés",
-    "localModel": "Modèle du chat local",
-    "localModelHint": "Ollama, sans outils",
     "freeMode": "Mode zéro frais",
     "freeModeHint": "Le sélecteur ne propose que ce qui ne coûte rien de plus : les modèles gratuits (Gemini avec une clé AI Studio sans facturation, NVIDIA, les modèles :free d’OpenRouter, les modèles locaux) et ceux de tes abonnements, marqués ci-dessous. Le modèle actuel d’un bot reste affiché, marqué Payant. Partagé par toutes les apps HermesBot quand la gateway l’enregistre ; un échec ne change rien.",
     "zeroSpendDisableConfirm": "Couper le mode zéro frais ? Des appels d’API payants pourront alors entraîner des frais.",
@@ -506,7 +519,7 @@
     "autoFree": "Auto gratuit",
     "autoFreeHint": "Modèles gratuits seulement, sans quota d’abonnement",
     "autoFreeLabel": "Auto gratuit",
-    "oyakata": "Delegate"
+    "delegate": "Delegate"
   },
   "providers": {},
   "serverRequest": {

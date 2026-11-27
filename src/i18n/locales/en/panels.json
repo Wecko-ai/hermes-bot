@@ -34,11 +34,26 @@
       "compactionAuto": "Auto compaction",
       "compactionManual": "Limit · {{percent}}%",
       "compactionSettings": "Compaction settings",
-      "oyakata": "Delegate",
-      "oyakataOff": "The chat’s model plans and reviews; a local {{worker}} worker does the work.",
-      "oyakataOn": "{{chef}} plans and reviews · {{worker}} does the work",
-      "oyakataUnavailable": "Unavailable: the chef-worker plugin is not on this bot",
-      "oyakataFailed": "Delegate could not change: {{error}}"
+      "delegate": "Delegate",
+      "delegateOff": "The chat’s model plans and reviews; a local {{worker}} worker does the work.",
+      "delegateOn": "{{chef}} plans and reviews · {{worker}} does the work",
+      "delegateUnavailable": "Unavailable: the chef-worker plugin is not on this bot",
+      "delegateFailed": "Delegate could not change: {{error}}",
+      "liveLabel": "Running",
+      "livePending": "…",
+      "liveRoleChef": "chef",
+      "liveRoleWorker": "worker",
+      "liveRoleVision": "vision",
+      "liveRoleFallback": "fallback",
+      "liveRoleNormalAfterDown": "normal mode",
+      "liveMissionRunning": "{{worker}} · mission running (slot {{slot}})",
+      "liveMissionRunningTimed": "{{worker}} · mission running (slot {{slot}} · {{seconds}}s)",
+      "liveRetry": "attempt {{attempt}}/{{max}}",
+      "liveWorkerContext": "Worker · {{readout}}",
+      "delegateLocalDisabled": "Off: this chat already uses a local model.",
+      "delegateWorkerDownNormal": "Worker unreachable — this turn runs in normal mode.",
+      "delegateWorkerOffline": "Local worker offline",
+      "delegateWorkerReady": "Local worker ready"
     }
   },
   "routines": {
@@ -370,8 +385,6 @@
       "activity": "Activity"
     },
     "showHidden": "Show hidden bots",
-    "localModel": "Local chat model",
-    "localModelHint": "Ollama, no tools",
     "freeMode": "Zero-spend mode",
     "freeModeHint": "The picker offers only what costs nothing more: free models (Gemini with an AI Studio key without billing, NVIDIA, OpenRouter’s :free models, local models) and your subscriptions’ models, marked below. A bot’s current model stays listed, marked Paid. Shared by every HermesBot app when the gateway saves it; a failed save changes nothing.",
     "zeroSpendDisableConfirm": "Turn off zero-spend mode? Paid API calls may then incur charges.",
@@ -506,7 +519,7 @@
     "autoFree": "Auto free",
     "autoFreeHint": "Free models only, no subscription quota",
     "autoFreeLabel": "Auto free",
-    "oyakata": "Delegate"
+    "delegate": "Delegate"
   },
   "providers": {},
   "serverRequest": {

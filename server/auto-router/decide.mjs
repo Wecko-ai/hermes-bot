@@ -5,6 +5,7 @@ import { filterByContext, nearContextLimit } from './context.mjs'
 import { latencyAverages, readRoutingLog } from './log.mjs'
 import { createProviderQuotaStore, isQuotaSignal, classifyUpstreamError, quotaProviderId, quotaTarget } from './provider-quota.mjs'
 import { freePickReason, rankFreeCandidates, resolveDailyQuota } from './quota.mjs'
+import { evaluateBotBudget } from './bot-budget.mjs'
 import { allowedByCandidateRules, allowedForSpend, isStrictlyFree, loadScoringTable, normalizeCandidate, pickModel, scoreCandidates, tableEntry } from './scorer.mjs'
 
 function quotaMap(rows) {
@@ -168,17 +169,22 @@ export function createAutoRouter(deps) {
     const category = triage.category
     const tokens = estimateTokens(text, contextUsed)
     const triagePublic = publicTriage(triage)
+    const budget = evaluateBotBudget({ botId: typeof body.bot === 'string' ? body.bot : '', dailyTokens: Number(body.dailyTokens) || 0, interactive: body.interactive === true, targets: deps.botBudgets })
 
     const rawCandidates = Array.isArray(body.models) ? body.models : []
     const mode = body.mode === 'auto-free' ? 'auto-free' : 'auto'
     const table = await loadTable()
     const policy = spendPolicy(body, deps.subscriptions || [], table)
     // Auto gratuit is decided here, never trusted from the window's `free` flags.
-    const eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
+    let eligible = rawCandidates.map(normalizeCandidate).filter(Boolean)
       .filter((row) => allowedByCandidateRules(row, table))
       // Hermes turns carry tools, and retired models are marked disabled: neither should route.
       .filter((row) => rowRoutable(table, row.fullModel))
       .filter((row) => (mode === 'auto-free' ? isStrictlyFree(row, table) : allowedForSpend(row, policy)))
+    if (budget.downgrade) {
+      const free = eligible.filter((row) => isStrictlyFree(row, table))
+      if (free.length) eligible = free
+    }
     if (!eligible.length) {
       return { ok: false, error: mode === 'auto-free' ? 'no_free_candidates' : 'no_candidates', category, mode, tokenEstimate: tokens, triage: triagePublic }
     }
@@ -268,6 +274,7 @@ export function createAutoRouter(deps) {
     return {
       ok: true,
       mode,
+      ...(budget.alert ? { budgetAlert: budget.level } : {}),
       category,
       triage: triagePublic,
       tokenEstimate: tokens,

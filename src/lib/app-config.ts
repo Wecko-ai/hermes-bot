@@ -44,7 +44,6 @@ export interface AppConfig {
   autoRouter?: { enabled: boolean; tableConfigured?: boolean; tablePath?: string }
   /** Bots with `<slug>-working.webp` and `<slug>-done.webp` animations. */
   animatedBots: string[]
-  localChat: { name: string }
   routines: { editable: boolean; eventTriggers: boolean }
   connectors: { enabled: boolean }
   computerPanel: { enabled: boolean }
@@ -58,7 +57,6 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   channels: { wizardWrites: false },
   ui: { defaultBot: '', sectionOrder: [], rosterOrder: {}, userInitial: '', userName: '', hiddenProviders: [], subscriptionProviders: [], zeroSpendDefault: false, contrastAvatars: [], voiceModeName: '', replyListenButton: false },
   animatedBots: [],
-  localChat: { name: '' },
   routines: { editable: true, eventTriggers: false },
   connectors: { enabled: true },
   computerPanel: { enabled: false },
@@ -91,7 +89,6 @@ function parseQuotas(value: unknown): UsageQuotaConfig[] {
 export function parseAppConfig(value: unknown): AppConfig {
   const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const ui = raw.ui && typeof raw.ui === 'object' ? raw.ui as Record<string, unknown> : {}
-  const localChat = raw.localChat && typeof raw.localChat === 'object' ? raw.localChat as Record<string, unknown> : {}
   const sharedMemory = raw.sharedMemory && typeof raw.sharedMemory === 'object' ? raw.sharedMemory as Record<string, unknown> : {}
   const computerPanel = raw.computerPanel && typeof raw.computerPanel === 'object' ? raw.computerPanel as Record<string, unknown> : {}
   const features = raw.features && typeof raw.features === 'object' ? raw.features as Record<string, unknown> : {}
@@ -137,7 +134,6 @@ export function parseAppConfig(value: unknown): AppConfig {
       }
     })(),
     animatedBots: strings(raw.animatedBots),
-    localChat: { name: text(localChat.name) },
     routines: {
       editable: !(raw.routines && typeof raw.routines === 'object' && (raw.routines as Record<string, unknown>).editable === false),
       eventTriggers: Boolean(raw.routines && typeof raw.routines === 'object' && (raw.routines as Record<string, unknown>).eventTriggers === true),

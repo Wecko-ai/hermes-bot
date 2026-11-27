@@ -1,0 +1,5 @@
+{"id": "rich-1", "name": "Cafe du Coin", "category": "cafe", "lat": 48.85703, "lon": 2.35153, "address": "12 Rue de la Lune, Paris", "wifi": true}
+{"id": "rich-2", "name": "Overture Only Roastery", "category": "cafe", "lat": 48.85690, "lon": 2.35100}
+{"id": "rich-3", "name": "Troisieme Vague", "category": "cafe", "lat": 48.85710, "lon": 2.35220, "wifi": false}
+{"id": "rich-4", "name": "Le Quatrieme Mur", "category": "cafe", "lat": 48.85680, "lon": 2.35200}
+{"id": "rich-5", "name": "Not A Cafe", "category": "pharmacy", "lat": 48.85700, "lon": 2.35100}

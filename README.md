@@ -152,13 +152,6 @@ Then open http://127.0.0.1:4330/?demo=1. The demo runs on fictional data and mak
 
 <b>Queue a message, or make it priority.</b> Queue runs after the current turn; Priority interrupts it, then the bot resumes.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/ui-local-dark.png" />
-  <img src="docs/readme/ui-local-light.png" width="760" alt="The local chat with a model installed in Ollama" />
-</picture>
-
-<b>A local model.</b> Chat with a model installed in Ollama: no Hermes, no tools.
-
 <table>
   <tr>
     <td width="50%" valign="top">
@@ -242,16 +235,14 @@ All settings are optional. Each one is an environment variable, or a key of `con
 | `HERMES_BROWSER_ORIGIN` | `browserOrigin` | same as the gateway | `Origin` header sent to the gateway, when it only trusts its public address behind a reverse proxy |
 | `HERMES_SSH_HOST` | `sshHost` | none | SSH host alias for the tunnel to a remote gateway |
 | `HERMES_HOME` | `hermesHome` | `~/.hermes` | Home of the Hermes on this Mac, for the sign-in without a password |
-| `OLLAMA_ORIGIN` | `ollamaOrigin` | `http://127.0.0.1:11434` | Ollama, for the local chat. Loopback only, like the gateway |
 | `HERMESBOT_ANIMATIONS` | `animationsDir` | `animations/` in the data folder | Folder of bot animations |
 | `PORT` | | `4330` | Port of the local server |
-| | `allowRemoteGateway` | `false` | `true` lets `gatewayOrigin` and `ollamaOrigin` point to another machine (your cookies and prompts then leave this Mac; prefer the SSH tunnel) |
+| | `allowRemoteGateway` | `false` | `true` lets `gatewayOrigin` point to another machine (your cookies and prompts then leave this Mac; prefer the SSH tunnel) |
 
 Interface preferences (`ui.defaultBot`, `ui.sectionOrder`, `ui.userInitial`…) only exist in `config.json`. `ui.subscriptionProviders` lists the providers you pay by a flat subscription (for example `anthropic` signed in with a Claude plan): the free mode (Settings > Models) keeps their models next to the free ones, as they cost nothing more.
 
 ## Optional extras
 
-- **Local chat.** With [Ollama](https://ollama.com) running, a "Local" entry in the roster chats with a model installed on your machine. Its header shows the exact model, switches between installed models, and loads or unloads the model from memory (a loaded model stays 30 minutes after the last message). Conversations are saved on your Mac, encrypted with the Keychain, and listed in a History menu. This chat never goes through Hermes and never gets tools.
 - **Bot animations.** Put `<profile>-working.webp` and `<profile>-done.webp` in the animations folder. The bot then plays the first while it works and the second when it finishes. Without them, bots keep a still avatar.
 - **Mail approval card.** With the skill in [skills/mail-approval/](skills/mail-approval/), a bot shows an email draft as a card you can edit before it goes out (the skill uses [himalaya](https://github.com/pimalaya/himalaya)). Only the fields you approved are sent; the skill's script refuses a mail that no longer matches them, or the same mail twice.
 - **Places.** With the generic plugin in [hermes-plugins/places/](hermes-plugins/places/), a bot can answer "what's near X" with up to 3 real places from OpenStreetMap (Overture Maps fallback), a walking distance that says when it is a route and when it is only a straight-line estimate, and a Google Maps walking-directions link. A fenced `hermes-places` block in a reply is rendered by the app as a native card (name, map link, distance, opening, features, photos served by the local media proxy). Ratings and reviews appear on the card only when the plugin sourced them from real data: they are never invented, and there is no paid Google integration — Google appears only as plain directions links. The plugin needs no API key and makes no change to Hermes itself.

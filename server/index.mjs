@@ -15,8 +15,6 @@ import configModule from './config.cjs'
 import { attachGatewayUpgrade } from './gateway-upgrade.mjs'
 import { DOCUMENT_TEXT_MAX_BYTES, IMAGE_MAX_BYTES, createByteCap, forwardRequestHeaders, isApiPath, readCappedText, relayLimitStatus, staticCacheControl } from './http-limits.mjs'
 import { createLocalGateway } from './local-gateway.mjs'
-import { LOCAL_HISTORY_LIMITS, createLocalChatHistory } from './local-chat-history.mjs'
-import { LOCAL_CHAT_IDLE, LOCAL_CHAT_KEEP, LOCAL_CHAT_OPTIONS, createLocalMemory } from './local-memory.mjs'
 import { createModelProbe } from './model-probe.mjs'
 import { createModelScores } from './model-scores.mjs'
 import { installProcessGuards } from './process-guards.mjs'
@@ -136,6 +134,7 @@ const autoRouter = CONFIG.autoRouter?.enabled
     tablePath: autoRouterTablePath,
     logDir: CONFIG.autoRouter.logDir || autoRouterPaths.logDir,
     subscriptions: CONFIG.ui.subscriptionProviders || [],
+    botBudgets: CONFIG.autoRouter.botBudgets,
     resolveQuotas: async () => autoRouterQuotaCache.quotas,
   })
   : null
@@ -1250,9 +1249,7 @@ async function relayFile(request, response, target, route, policyHeaders, maxByt
   })
 }
 
-// Isolated local chat, with Ollama or oMLX models installed on the machine. Only messages are sent,
-// never a tool: the model cannot execute anything.
-const OLLAMA_ORIGIN = CONFIG.ollamaOrigin
+// Local OpenAI-compatible servers (oMLX, Splash): installed models, listed for the model picker.
 const OMLX_ORIGIN = CONFIG.omlxOrigin
 const SPLASH_ORIGIN = CONFIG.splashOrigin
 const modelProbe = createModelProbe({ probes: CONFIG.modelProbes })
@@ -1274,91 +1271,9 @@ async function handleModelScores(request, response, url) {
   if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
   return json(response, 200, await modelScores.get())
 }
-const LOCAL_CHAT_MAX_BYTES = 4 * 1024 * 1024
-const OLLAMA_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
-let ollamaModelsCache = { at: 0, entries: null }
+const LOCAL_MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/
 let omlxModelsCache = { at: 0, entries: null }
 let splashModelsCache = { at: 0, entries: null }
-const localMemory = createLocalMemory()
-
-const byteCount = (value) => (Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
-const shortText = (value) => (typeof value === 'string' ? value.slice(0, 64) : '')
-
-function isLoopbackOrigin(originUrl) {
-  try {
-    const host = new URL(originUrl).hostname
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1'
-  } catch {
-    return false
-  }
-}
-
-/** Disk manifest fallback when Ollama's `/` responds `200` on loopback but `/api/tags` hangs. */
-async function ollamaDiskManifestEntries() {
-  if (!isLoopbackOrigin(OLLAMA_ORIGIN)) return null
-  try {
-    const alive = await fetch(`${OLLAMA_ORIGIN}/`, { signal: AbortSignal.timeout(1500) })
-    if (!alive.ok) return null
-  } catch {
-    return null
-  }
-  const modelsRoot = path.join(os.homedir(), '.ollama', 'models')
-  const roots = [
-    path.join(modelsRoot, 'manifests-v2', 'ollama.com', 'library'),
-    path.join(modelsRoot, 'manifests', 'registry.ollama.ai', 'library'),
-  ]
-  const seen = new Map()
-  for (const root of roots) {
-    let families
-    try { families = await readdir(root, { withFileTypes: true }) } catch { continue }
-    for (const family of families) {
-      if (!family.isDirectory()) continue
-      let tags
-      try { tags = await readdir(path.join(root, family.name)) } catch { continue }
-      for (const tag of tags) {
-        const name = `${family.name}:${tag}`
-        if (!OLLAMA_MODEL.test(name) || seen.has(name)) continue
-        let size = 0
-        try {
-          const manifest = JSON.parse(await readFile(path.join(root, family.name, tag), 'utf8'))
-          if (Array.isArray(manifest?.layers)) {
-            size = manifest.layers.reduce((sum, layer) => sum + byteCount(layer?.size), 0)
-          }
-        } catch { /* metadata optional */ }
-        seen.set(name, { name, size, parameters: '', quantization: '', family: 'ollama' })
-      }
-    }
-  }
-  return seen.size > 0 ? [...seen.values()] : []
-}
-
-/** Models installed in Ollama (`/api/tags`) with their details, cached for 30 s. `null`: Ollama does not answer. */
-async function ollamaModelEntries() {
-  if (ollamaModelsCache.entries && Date.now() - ollamaModelsCache.at < 30_000) return ollamaModelsCache.entries
-  try {
-    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/tags`, { signal: AbortSignal.timeout(2500) })
-    if (!upstream.ok) return null
-    const body = await upstream.json()
-    const entries = (Array.isArray(body?.models) ? body.models : [])
-      .filter((model) => typeof model?.name === 'string' && OLLAMA_MODEL.test(model.name))
-      .map((model) => ({
-        name: model.name,
-        size: byteCount(model.size),
-        parameters: shortText(model.details?.parameter_size),
-        quantization: shortText(model.details?.quantization_level),
-        family: shortText(model.details?.family),
-      }))
-    ollamaModelsCache = { at: Date.now(), entries }
-    return entries
-  } catch {
-    const fallback = await ollamaDiskManifestEntries()
-    if (fallback !== null) {
-      ollamaModelsCache = { at: Date.now(), entries: fallback }
-      return fallback
-    }
-    return null
-  }
-}
 
 /** Models served by a local OpenAI-compatible server (`/v1/models`), cached for 30 s. */
 async function openAiModelEntries(origin, family, cache) {
@@ -1368,7 +1283,7 @@ async function openAiModelEntries(origin, family, cache) {
     if (!upstream.ok) return null
     const body = await upstream.json()
     const entries = (Array.isArray(body?.data) ? body.data : [])
-      .filter((model) => typeof model?.id === 'string' && OLLAMA_MODEL.test(model.id))
+      .filter((model) => typeof model?.id === 'string' && LOCAL_MODEL_NAME.test(model.id))
       .map((model) => ({
         name: model.id,
         size: 0,
@@ -1392,16 +1307,6 @@ function splashModelEntries() {
   return openAiModelEntries(SPLASH_ORIGIN, 'splash', splashModelsCache)
 }
 
-async function ollamaModels() {
-  const entries = await ollamaModelEntries()
-  return entries && entries.map((entry) => entry.name)
-}
-
-async function omlxModels() {
-  const entries = await omlxModelEntries()
-  return entries && entries.map((entry) => entry.name)
-}
-
 async function handleOmlxModels(request, response) {
   if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
   const entries = await omlxModelEntries()
@@ -1414,73 +1319,6 @@ async function handleSplashModels(request, response) {
   return json(response, 200, { available: entries !== null, models: (entries || []).map((entry) => entry.name) })
 }
 
-async function handleOllamaModels(request, response) {
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  const entries = await ollamaModelEntries()
-  return json(response, 200, { available: entries !== null, models: (entries || []).map((entry) => entry.name) })
-}
-
-async function handleLocalModels(request, response) {
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  const [ollama, omlx] = await Promise.all([ollamaModelEntries(), omlxModelEntries()])
-  const merged = new Map()
-  for (const entry of ollama || []) merged.set(entry.name, entry)
-  for (const entry of omlx || []) {
-    if (!merged.has(entry.name)) merged.set(entry.name, entry)
-  }
-  const entries = [...merged.values()]
-  const details = Object.fromEntries(entries.map(({ name, ...detail }) => [name, detail]))
-  return json(response, 200, { available: ollama !== null || omlx !== null, models: entries.map((entry) => entry.name), details, defaultModel: CONFIG.localChat.model })
-}
-
-/** Models in memory now (Ollama `/api/ps` + oMLX `/admin/api/models`), never cached. */
-async function handleLocalStatus(request, response) {
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  const loaded = []
-  let available = false
-  try {
-    const upstream = await fetch(`${OLLAMA_ORIGIN}/api/ps`, { signal: AbortSignal.timeout(2500) })
-    if (upstream.ok) {
-      available = true
-      const body = await upstream.json()
-      for (const model of Array.isArray(body?.models) ? body.models : []) {
-        if (typeof model?.name !== 'string' || !OLLAMA_MODEL.test(model.name)) continue
-        loaded.push({
-          model: model.name,
-          size: byteCount(model.size),
-          vram: byteCount(model.size_vram),
-          expiresAt: typeof model.expires_at === 'string' && !Number.isNaN(Date.parse(model.expires_at)) ? new Date(model.expires_at).toISOString() : '',
-          context: Number.isInteger(model.context_length) && model.context_length > 0 ? model.context_length : 0,
-          kept: localMemory.keptModel(model.name),
-        })
-      }
-    }
-  } catch { /* Ollama offline */ }
-  try {
-    const omlxAdmin = await fetch(`${OMLX_ORIGIN}/admin/api/models`, { signal: AbortSignal.timeout(1500) })
-    if (omlxAdmin.ok) {
-      available = true
-      const body = await omlxAdmin.json()
-      for (const model of Array.isArray(body?.models) ? body.models : []) {
-        if (!model?.loaded || typeof model?.id !== 'string' || !OLLAMA_MODEL.test(model.id)) continue
-        loaded.push({
-          model: model.id,
-          size: byteCount(model.estimated_size),
-          vram: byteCount(model.actual_size || model.estimated_size),
-          expiresAt: '',
-          context: Number.isInteger(model.model_context_length) ? model.model_context_length : 0,
-          kept: false,
-        })
-      }
-    }
-  } catch { /* oMLX offline */ }
-  return json(response, 200, { available, loaded })
-}
-
-/**
- * Load (`keep_alive` 30 min) or unload (`keep_alive` 0) an installed model, without a prompt: Ollama only moves
- * the weights. An unload waits for a reply in progress, even another program’s, before freeing the memory.
- */
 /** Before a switch: does this model answer now? Only for the prefixes of `modelProbes`. */
 async function handleModelProbe(request, response) {
   if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
@@ -1490,172 +1328,6 @@ async function handleModelProbe(request, response) {
   const result = await modelProbe.check(body?.model)
   if (result.invalid) return json(response, 400, { error: 'invalid_model' })
   return json(response, 200, result)
-}
-
-async function handleLocalMemory(request, response, action) {
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  const body = await bodyJson(request)
-  const model = typeof body?.model === 'string' ? body.model : ''
-  const [installedOllama, installedOmlx] = await Promise.all([ollamaModels(), omlxModels()])
-  if (installedOllama === null && installedOmlx === null) return json(response, 503, { error: 'local_model_unreachable' })
-  const inOllama = Boolean(model && installedOllama?.includes(model))
-  const inOmlx = Boolean(model && !inOllama && installedOmlx?.includes(model))
-  if (!inOllama && !inOmlx) return json(response, 404, { error: 'local_model_missing' })
-  const controller = new AbortController()
-  const stop = () => { if (!response.writableFinished) controller.abort() }
-  response.on('close', stop)
-  try {
-    if (inOmlx) {
-      const upstream = await fetch(`${OMLX_ORIGIN}/v1/models/${encodeURIComponent(model)}/${action}`, {
-        method: 'POST',
-        signal: controller.signal,
-      })
-      if (!upstream.ok) return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
-      return json(response, 200, { ok: true })
-    }
-    await localMemory.run({ action, model, origin: OLLAMA_ORIGIN, signal: controller.signal })
-  } catch (error) {
-    if (response.destroyed || response.writableEnded) return
-    const status = Number.isInteger(error?.status) ? error.status : 503
-    const code = ['local_model_busy', 'local_model_missing', 'local_model_failed'].includes(error?.message)
-      ? error.message
-      : 'local_model_unreachable'
-    return json(response, status, { error: code })
-  } finally {
-    response.removeListener('close', stop)
-  }
-  if (response.destroyed || response.writableEnded) return
-  return json(response, 200, { ok: true })
-}
-
-function localChatMessages(body) {
-  if (!Array.isArray(body?.messages) || body.messages.length === 0 || body.messages.length > 400) return null
-  const messages = body.messages.map((message) => ({ role: message?.role, content: message?.content }))
-  return messages.every(({ role, content }) => (role === 'user' || role === 'assistant') && typeof content === 'string' && content) ? messages : null
-}
-
-async function handleOmlxLocalChat(requested, messages, response, controller) {
-  let upstream
-  try {
-    upstream = await fetch(`${OMLX_ORIGIN}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: requested, messages, stream: true }),
-      signal: controller.signal,
-    })
-  } catch {
-    return json(response, 503, { error: 'local_model_unreachable' })
-  }
-  if (!upstream.ok || !upstream.body) {
-    upstream.body?.cancel().catch(() => {})
-    return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
-  }
-  response.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-  const reader = upstream.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const rawLine of lines) {
-        const line = rawLine.trim()
-        if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
-        if (data === '[DONE]') {
-          response.write(`${JSON.stringify({ done: true })}\n`)
-          continue
-        }
-        try {
-          const parsed = JSON.parse(data)
-          const delta = parsed?.choices?.[0]?.delta
-          const content = typeof delta?.content === 'string' ? delta.content : ''
-          const thinking = typeof delta?.reasoning_content === 'string' ? delta.reasoning_content : ''
-          if (content || thinking) {
-            response.write(`${JSON.stringify({ message: { content, thinking }, done: false })}\n`)
-          }
-        } catch { /* ignore malformed SSE chunk */ }
-      }
-    }
-    if (!response.writableEnded) response.end()
-  } catch (error) {
-    if (!controller.signal.aborted) console.warn(`Chat local oMLX: ${error?.code || error?.name || 'stream_error'}`)
-    if (!response.writableEnded) response.end()
-  }
-}
-
-async function handleLocalChat(request, response) {
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  const body = await bodyJson(request, LOCAL_CHAT_MAX_BYTES)
-  const messages = localChatMessages(body)
-  if (!messages) return json(response, 400, { error: 'invalid_messages' })
-  // The requested model must be installed: the window can target nothing but a local model.
-  const requested = typeof body.model === 'string' && body.model ? body.model : CONFIG.localChat.model
-  const [installedOllama, installedOmlx] = await Promise.all([ollamaModels(), omlxModels()])
-  if (installedOllama === null && installedOmlx === null) return json(response, 503, { error: 'local_model_unreachable' })
-  const inOllama = Boolean(requested && installedOllama?.includes(requested))
-  const inOmlx = Boolean(requested && !inOllama && installedOmlx?.includes(requested))
-  if (!inOllama && !inOmlx) return json(response, 404, { error: 'local_model_missing' })
-  const controller = new AbortController()
-  response.on('close', () => { if (!response.writableFinished) controller.abort() })
-  if (inOmlx) return await handleOmlxLocalChat(requested, messages, response, controller)
-  // A model loaded with the button stays 30 minutes after this message.
-  const kept = localMemory.keptModel(requested)
-  if (kept) localMemory.touch(requested)
-  let upstream
-  try {
-    upstream = await fetch(`${OLLAMA_ORIGIN}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: requested, messages, stream: true, keep_alive: kept ? LOCAL_CHAT_KEEP : LOCAL_CHAT_IDLE, options: LOCAL_CHAT_OPTIONS }),
-      signal: controller.signal,
-    })
-  } catch {
-    return json(response, 503, { error: 'local_model_unreachable' })
-  }
-  if (!upstream.ok || !upstream.body) {
-    upstream.body?.cancel().catch(() => {})
-    return json(response, upstream.status === 404 ? 404 : 502, { error: upstream.status === 404 ? 'local_model_missing' : 'local_model_failed' })
-  }
-  response.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-  pipeline(Readable.fromWeb(upstream.body), response, (error) => {
-    if (error && !['ERR_STREAM_PREMATURE_CLOSE', 'ABORT_ERR'].includes(error.code) && error.name !== 'AbortError') console.warn(`Chat local: ${error.code || error.name || 'stream_error'}`)
-  })
-}
-
-// Saved conversations of the local chat: encrypted on this Mac by the app, never sent anywhere else.
-const localChatHistory = createLocalChatHistory(globalThis.__hermesBotLocalChatStore || null)
-const LOCAL_HISTORY_PATH = /^\/api\/local-chat\/history\/([A-Za-z0-9_-]{8,64})$/
-const HISTORY_ERRORS = {
-  invalid_conversation: 400, invalid_messages: 400, conversation_too_large: 413, history_full: 507,
-  history_unreadable: 503, history_unwritable: 503,
-}
-
-async function handleLocalHistory(request, response, url) {
-  // A real HermesBot session only: a Hermes cookie is checked by the gateway on proxied routes, never here, and
-  // any local process could send one to read the decrypted conversations.
-  if (!browserSession(request)) return json(response, 401, { error: 'unauthenticated' })
-  if (url.pathname === '/api/local-chat/history') {
-    if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' })
-    return json(response, 200, { persistent: localChatHistory.persistent, ...localChatHistory.list() })
-  }
-  const id = LOCAL_HISTORY_PATH.exec(url.pathname)?.[1]
-  if (!id) return json(response, 404, { error: 'not_found' })
-  if (request.method === 'GET') {
-    const conversation = localChatHistory.get(id)
-    return conversation ? json(response, 200, conversation) : json(response, 404, { error: 'conversation_missing' })
-  }
-  if (!LOCAL_ORIGINS.has(request.headers.origin)) return json(response, 403, { error: 'forbidden_origin' })
-  let error
-  if (request.method === 'PUT') error = localChatHistory.save(id, await bodyJson(request, LOCAL_HISTORY_LIMITS.conversationBytes + 65_536))
-  else if (request.method === 'DELETE') error = localChatHistory.remove(id)
-  else return json(response, 405, { error: 'method_not_allowed' })
-  return error ? json(response, HISTORY_ERRORS[error] || 400, { error }) : json(response, 200, { ok: true })
 }
 
 /** Call to the vault admin API. Service absent: 503 `vault_service_unavailable`. */
@@ -1902,7 +1574,6 @@ async function handleAppConfig(response) {
     channels: CONFIG.channels,
     ui: CONFIG.ui,
     animatedBots: await animatedBots(),
-    localChat: { name: CONFIG.localChat.name },
     routines: { editable: CONFIG.routines?.editable !== false, eventTriggers: CONFIG.routines?.eventTriggers === true },
     connectors: { enabled: CONFIG.connectors?.enabled !== false },
     sharedMemory: {
@@ -2308,29 +1979,11 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/document' && (request.method === 'GET' || request.method === 'HEAD')) {
       return await handleDocument(request, response, url)
     }
-    if (url.pathname === '/api/local-chat' && request.method === 'POST') {
-      return await handleLocalChat(request, response)
-    }
-    if (url.pathname === '/api/local-chat/models' && request.method === 'GET') {
-      return await handleLocalModels(request, response)
-    }
     if (url.pathname === '/api/omlx/models' && request.method === 'GET') {
       return await handleOmlxModels(request, response)
     }
     if (url.pathname === '/api/splash/models' && request.method === 'GET') {
       return await handleSplashModels(request, response)
-    }
-    if (url.pathname === '/api/ollama/models' && request.method === 'GET') {
-      return await handleOllamaModels(request, response)
-    }
-    if (url.pathname === '/api/local-chat/history' || url.pathname.startsWith('/api/local-chat/history/')) {
-      return await handleLocalHistory(request, response, url)
-    }
-    if (url.pathname === '/api/local-chat/status' && request.method === 'GET') {
-      return await handleLocalStatus(request, response)
-    }
-    if ((url.pathname === '/api/local-chat/load' || url.pathname === '/api/local-chat/unload') && request.method === 'POST') {
-      return await handleLocalMemory(request, response, url.pathname.endsWith('/load') ? 'load' : 'unload')
     }
     if (url.pathname === '/api/model-probe' && request.method === 'POST') {
       return await handleModelProbe(request, response)

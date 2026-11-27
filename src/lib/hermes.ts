@@ -12,6 +12,7 @@ import { i18n } from '../i18n'
 import { readModelMemory, withRememberedModels, writeModelMemory } from './model-memory'
 import { expandToolMessage } from './tool-transcript'
 import { isGatewayRevision, type HistorySync } from './replica'
+import { isStaleOmlxProvider } from './runtime-state'
 
 type Json = Record<string, unknown>
 type RpcEvent = {
@@ -814,17 +815,16 @@ const PLAN_MODELS: Record<string, string[]> = { 'kimi-coding': ['k3.1-pro'], ant
 export const DEFAULT_SPLASH_MODELS = ['Inkling-2-Mini-128K', 'Inkling-2-Mini-256K']
 
 const LOCAL_PROVIDER_SLUGS = new Set([
-  'omlx', 'custom:omlx', 'ollama', 'custom:ollama', 'splash', 'custom:splash',
+  'omlx', 'custom:omlx', 'splash', 'custom:splash',
   'splash-uncensored', 'custom:splash-uncensored',
 ])
 
 function isLocalProviderSlug(slug: string) {
-  return LOCAL_PROVIDER_SLUGS.has(slug) || /(?:^|:)(?:omlx|ollama|splash)(?:-|$)/i.test(slug)
+  return LOCAL_PROVIDER_SLUGS.has(slug) || /(?:^|:)(?:omlx|splash)(?:-|$)/i.test(slug)
 }
 
-function extraLocalModels(slug: string, omlxModels: string[], ollamaModels: string[], splashModels: string[]) {
+function extraLocalModels(slug: string, omlxModels: string[], splashModels: string[]) {
   if (slug === 'omlx' || slug === 'custom:omlx') return omlxModels
-  if (slug === 'ollama' || slug === 'custom:ollama') return ollamaModels
   if (slug === 'splash' || slug === 'custom:splash') return splashModels
   return []
 }
@@ -875,10 +875,9 @@ function pushProviderModels(
 }
 
 export async function loadModelOptions(client: HermesClient, profile: string, sessionId?: string): Promise<{ options: ModelOption[]; current: string }> {
-  const [result, omlxModels, ollamaModels, splashModels] = await Promise.all([
+  const [result, omlxModels, splashModels] = await Promise.all([
     client.request('model.options', { profile, ...(sessionId ? { session_id: sessionId } : {}) }),
     loadLocalEndpointModels('/api/omlx/models'),
-    loadLocalEndpointModels('/api/ollama/models'),
     loadLocalEndpointModels('/api/splash/models'),
   ])
   const options: ModelOption[] = []
@@ -898,12 +897,19 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
     const unavailable = new Set<string>((Array.isArray(provider.unavailable_models) ? provider.unavailable_models : []).filter((model: unknown): model is string => typeof model === 'string'))
     const pricing = asObject(provider.pricing)
     const listed = (Array.isArray(provider.models) ? provider.models : []).filter((model: unknown): model is string => typeof model === 'string' && !unavailable.has(model))
-    for (const model of extraLocalModels(slug, omlxModels, ollamaModels, splashModels)) {
+    for (const model of extraLocalModels(slug, omlxModels, splashModels)) {
       if (!unavailable.has(model) && !listed.includes(model)) listed.push(model)
     }
-    const kept = withRememberedModels(listed, memory[slug], now, unavailable)
-    const models = kept.models.filter((model) => rememberedModelBelongsToProvider(slug, model))
-    memory[slug] = kept.memory.filter(([model]) => rememberedModelBelongsToProvider(slug, model))
+    let models: string[]
+    if (local) {
+      // Local servers report their live /v1/models list; never revive retired local ids from 7-day OAuth memory.
+      models = listed.filter((model) => rememberedModelBelongsToProvider(slug, model))
+      delete memory[slug]
+    } else {
+      const kept = withRememberedModels(listed, memory[slug], now, unavailable)
+      models = kept.models.filter((model) => rememberedModelBelongsToProvider(slug, model))
+      memory[slug] = kept.memory.filter(([model]) => rememberedModelBelongsToProvider(slug, model))
+    }
     const name = asString(provider.name, slug)
     pushProviderModels(options, slug, name, models, pricing, PLAN_MODELS[slug] ?? [], unavailable)
   }
@@ -914,10 +920,7 @@ export async function loadModelOptions(client: HermesClient, profile: string, se
     pushProviderModels(options, 'splash', 'Inkling 2 Mini (Splash)', models, {})
   }
   if (!seenLocal.has('omlx') && omlxModels.length && !hiddenProviders.has('omlx') && !hiddenProviders.has('custom:omlx')) {
-    pushProviderModels(options, 'omlx', 'Qwen local (oMLX)', omlxModels, {})
-  }
-  if (!seenLocal.has('ollama') && ollamaModels.length && !hiddenProviders.has('ollama') && !hiddenProviders.has('custom:ollama')) {
-    pushProviderModels(options, 'ollama', 'Ollama (local)', ollamaModels, {})
+    pushProviderModels(options, 'omlx', 'oMLX (local)', omlxModels, {})
   }
   writeModelMemory(memory)
   return { options, current: asString(result?.model) }
@@ -1037,7 +1040,7 @@ export function parseUsage(value: unknown): Partial<SessionUsage> | null {
   const model = asString(usage.model)
   if (model) row.model = model
   const provider = asString(usage.provider)
-  if (provider) row.provider = provider
+  if (provider && !isStaleOmlxProvider(provider, model)) row.provider = provider
   const plan = asObject(usage.plan_gauge)
   if (typeof plan.used_bp === 'number') {
     row.plan = { label: asString(plan.label, i18n.t('hermes.planDefault')), usedPercent: plan.used_bp / 100, resetsAt: firstNumber(plan.resets_at_ms) ?? null }

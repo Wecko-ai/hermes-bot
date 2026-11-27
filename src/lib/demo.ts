@@ -52,15 +52,6 @@ const TEXTS = {
       ],
     },
     mail: { subject: 'Re: Invoice 2026-118', replyLabel: 'Invoice 2026-118 from the print shop', body: 'Hello,\n\nThank you for invoice 2026-118. We will pay it on Thursday, ahead of the due date.\n\nBest regards' },
-    local: {
-      messages: [
-        'Explain in two sentences what a vector database is.',
-        'A vector database stores data as lists of numbers, called embeddings, that capture its meaning. It returns the items closest to a query, so a search can match an idea and not only the exact words.',
-        'Give me an example.',
-        'Search your notes for “cheap flights”: you also find a note called “low-cost airfare”, because their embeddings are close.',
-      ],
-      answer: 'Visual demo mode: outside the demo, this chat talks to a model installed in Ollama.',
-    },
     work: { task: 'Fix the reconnection bug', note: 'Unit tests pass, starting the full run.', step: 'Runs a command' },
     room: {
       name: 'Launch room',
@@ -118,15 +109,6 @@ const TEXTS = {
       ],
     },
     mail: { subject: 'Re : Facture 2026-118', replyLabel: 'Facture 2026-118 de l’imprimerie', body: 'Bonjour,\n\nMerci pour la facture 2026-118. Nous la réglerons jeudi, avant l’échéance.\n\nBien cordialement' },
-    local: {
-      messages: [
-        'Explique en deux phrases ce qu’est une base de données vectorielle.',
-        'Une base de données vectorielle stocke les données sous forme de listes de nombres, appelées embeddings, qui en captent le sens. Elle renvoie les éléments les plus proches d’une requête : une recherche trouve ainsi une idée, pas seulement les mots exacts.',
-        'Donne-moi un exemple.',
-        'Cherche « vols pas chers » dans tes notes : tu trouves aussi une note intitulée « billets d’avion à petit prix », car leurs embeddings sont proches.',
-      ],
-      answer: 'Mode démo visuelle : hors démo, ce chat parle à un modèle installé dans Ollama.',
-    },
     work: { task: 'Corriger le bug de reconnexion', note: 'Les tests unitaires passent, je lance le parcours complet.', step: 'Lance une commande' },
     room: {
       name: 'Salon de lancement',
@@ -176,13 +158,8 @@ export interface DemoData {
   routines: Routine[]
   work: Record<string, WorkSummary>
   usageDetails: ReturnType<typeof usageDetails>
-  /** The local model chat: a fictional model, never called. */
-  local: { model: string; messages: ChatMessage[]; answer: string }
   room: DemoRoomData
 }
-
-/** The model shown by the local chat of the demo. */
-export const DEMO_LOCAL_MODEL = 'qwen3.8:27b'
 
 /** A draft in the format the mail card reads (`hermes-mail` block): it waits for approval, nothing is sent. */
 const mailBlock = (draft: { subject: string; replyLabel: string; body: string }) => [
@@ -302,9 +279,6 @@ export function demoData(language: DemoLanguage): DemoData {
       { id: 'demo-lyra-2', role: 'assistant', content: lyra[1], createdAt: ago(8) },
     ],
   }
-  const local = texts.local.messages.map((content, index): ChatMessage => ({
-    id: `demo-local-${index + 1}`, role: index % 2 ? 'assistant' : 'user', content, createdAt: ago(6 - index),
-  }))
   const roomBots = ['orion', 'iris', 'nova', 'sage'].map((slug) => bots.find((bot) => bot.slug === slug)!)
   const room = newDemoRoom(texts.room.name, roomBots, 'demo-launch-room')
   const roomEvents = demoRoomEvents(room, roomBots, language)
@@ -316,7 +290,6 @@ export function demoData(language: DemoLanguage): DemoData {
     routines,
     work: { orion: { task: texts.work.task, done: 2, total: 5, note: texts.work.note, step: texts.work.step } },
     usageDetails: usageDetails(texts.context),
-    local: { model: DEMO_LOCAL_MODEL, messages: local, answer: texts.local.answer },
     room: {
       room,
       events: roomEvents,

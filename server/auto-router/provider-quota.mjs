@@ -511,11 +511,16 @@ function mergeProvider(a, b, now) {
   const same = left.window === right.window && (left.window === 'none' || !aw || !bw || aw === bw)
   const newer = aw >= bw ? left : right
   const older = newer === left ? right : left
+  // A later lastUsedAt wins, including a successful use that cleared exhaustedUntil.
+  // On a tie, the longer remaining block is kept (two concurrent 429s).
   const statusFrom = (() => {
+    const au = Date.parse(left.lastUsedAt || '') || 0
+    const bu = Date.parse(right.lastUsedAt || '') || 0
+    if (au !== bu) return au > bu ? left : right
     const ae = Date.parse(liveUntil(left.exhaustedUntil, now) || '') || 0
     const be = Date.parse(liveUntil(right.exhaustedUntil, now) || '') || 0
     if (ae !== be) return ae > be ? left : right
-    return (Date.parse(left.lastUsedAt || '') || 0) >= (Date.parse(right.lastUsedAt || '') || 0) ? left : right
+    return left
   })()
   const record = {
     unit: newer.unit || older.unit,
@@ -524,7 +529,7 @@ function mergeProvider(a, b, now) {
     window: newer.window || older.window,
     windowStart: newer.windowStart || older.windowStart,
     resetAt: newer.resetAt ?? older.resetAt ?? null,
-    exhaustedUntil: liveUntil(laterIso(left.exhaustedUntil, right.exhaustedUntil), now),
+    exhaustedUntil: liveUntil(statusFrom.exhaustedUntil, now),
     lastStatus: statusFrom.lastStatus ?? null,
     lastError: statusFrom.lastError ?? null,
     lastUsedAt: laterIso(left.lastUsedAt, right.lastUsedAt),
@@ -614,6 +619,9 @@ function applyUse(state, spec, delta, now, pick) {
   record.used = num(record.used) + num(delta)
   record.requestsTotal = num(record.requestsTotal) + 1
   record.lastUsedAt = now.toISOString()
+  // A successful call means the provider-level window is not exhausted.
+  // Leave record.models alone: a sibling model's cooldown must stay in place.
+  record.exhaustedUntil = null
   if (spec.dayLimit != null) record.dayUsed = num(record.dayUsed) + 1
   if (spec.limit != null && record.used >= spec.limit && record.resetAt) {
     record.exhaustedUntil = laterIso(record.exhaustedUntil, record.resetAt)

@@ -25,7 +25,8 @@ import { isEntryActive, type SubagentEntry } from '../lib/subagent-history'
 import { SubagentHistory } from './SubagentHistory'
 import { ComputerPanel } from './ComputerPanel'
 import { ViewEmpty } from './ViewEmpty'
-import { formatUsage } from '../lib/model'
+import { chipModelLabel, formatUsage } from '../lib/model'
+import type { LiveRuntime } from '../lib/runtime-state'
 import type { CompactionMode, Guard } from '../lib/compaction'
 
 function cleanRoutineName(name: string, bot: Bot) {
@@ -59,18 +60,26 @@ interface DetailsPanelProps {
   sessionId?: string
   usage: SessionUsage | null
   /** Live context readout for the open chat (omits stale context right after a model switch). */
-  contextUsage?: SessionUsage | null
+  contextUsage?: (SessionUsage & { scope?: 'worker' | 'turn' }) | null
+  liveRuntime?: LiveRuntime | null
+  /** Effective model of the session, for the Usage tab (avoids a false positive when the chat changed models vs bot.model). */
+  sessionModel?: string
   modelLabel?: string
   modelPickerOpen?: boolean
   onOpenModels?: (query: string) => void
   /** Per-chat Delegate switch: the chat's model plans and reviews; the local worker does the work. */
-  oyakata?: {
+  delegate?: {
     on: boolean
     available: boolean
     busy: boolean
     chef: string
     worker: string
     error?: string
+    reason?: string
+    turnIsLocal?: boolean
+    workerUp?: boolean | null
+    workerError?: string
+    workerDownFallback?: boolean
     onToggle: (on: boolean) => void
   }
   compaction?: {
@@ -99,9 +108,26 @@ interface DetailsPanelProps {
   onOpenLibraryPage?: (page: LibraryPage) => void
 }
 
-export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, contextUsage, modelLabel, modelPickerOpen, onOpenModels, oyakata, compaction, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose, client, routinesEditable, connectorsEnabled, onReloadRoutines, computerPanelEnabled, onComputerSteer, onOpenLibraryPage }: DetailsPanelProps) {
-  const shownContext = contextUsage !== undefined ? contextUsage : usage
+export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadSubagentTail, tabRequest, loading, running, sessionId, usage, contextUsage, liveRuntime, sessionModel, modelLabel, modelPickerOpen, onOpenModels, delegate, compaction, loadUsageDetails, onOpenDocument, documents, railTab, onSelectRailTab, onCloseDocument, onReloadDocument, onClose, client, routinesEditable, connectorsEnabled, onReloadRoutines, computerPanelEnabled, onComputerSteer, onOpenLibraryPage }: DetailsPanelProps) {
   const { t } = useTranslation()
+  const shownContext = contextUsage !== undefined ? contextUsage : usage
+  const contextScope = (shownContext && 'scope' in shownContext) ? shownContext.scope : undefined
+  const usageText = contextScope === 'worker' ? t('details.session.liveWorkerContext', { readout: formatUsage(shownContext) }) : formatUsage(shownContext)
+  const delegateLocalOff = Boolean(delegate?.turnIsLocal || delegate?.reason === 'local_model')
+  const delegateWorkerDown = Boolean(delegate?.workerDownFallback)
+  const delegateDisabled = delegate ? (delegate.busy || delegateLocalOff || (!delegate.available && !delegate.on)) : false
+  const delegateChecked = delegateLocalOff ? false : Boolean(delegate?.on)
+  const showLive = Boolean(liveRuntime && (running || liveRuntime.pending || liveRuntime.role === 'normal_after_worker_down' || liveRuntime.role === 'fallback' || liveRuntime.role === 'vision' || liveRuntime.mission?.status === 'running' || (liveRuntime.model && chipModelLabel(liveRuntime.model) !== (modelLabel || chipModelLabel(bot.model)))))
+  const liveRoleLabel = (role: LiveRuntime['role']) => {
+    switch (role) {
+      case 'chef': return t('details.session.liveRoleChef')
+      case 'worker': return t('details.session.liveRoleWorker')
+      case 'vision': return t('details.session.liveRoleVision')
+      case 'fallback': return t('details.session.liveRoleFallback')
+      case 'normal_after_worker_down': return t('details.session.liveRoleNormalAfterDown')
+      default: return ''
+    }
+  }
   const { features, routines: routineConfig } = useAppConfig()
   const workText = avatarPhase(bot) === 'working' ? workLine(work, bot.workTitle) : ''
   const [tab, setTab] = useState<Tab>(() => tabRequest?.tab ?? 'routines')
@@ -203,35 +229,87 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
                 </button>
               </div>
             )}
-            {oyakata && (
-              <div className={`details-session-oyakata ${oyakata.on ? 'is-on' : ''}`}>
-                <div className="details-oyakata-text">
-                  <span className="details-session-label" id="details-oyakata-label">{t('details.session.oyakata')}</span>
-                  <span className="details-oyakata-hint" role={oyakata.error ? 'alert' : undefined}>
-                    {oyakata.error
-                      ? t('details.session.oyakataFailed', { error: oyakata.error })
-                      : !oyakata.available && !oyakata.on
-                        ? t('details.session.oyakataUnavailable')
-                        : oyakata.on
-                          ? t('details.session.oyakataOn', { chef: oyakata.chef, worker: oyakata.worker })
-                          : t('details.session.oyakataOff', { worker: oyakata.worker })}
+            {showLive && liveRuntime && (
+              <div className="details-session-live" role="status" aria-live="polite" data-runtime-role={liveRuntime.role}>
+                <div className="details-live-head">
+                  <span className="details-session-label">{t('details.session.liveLabel')}</span>
+                  <span className="details-live-value">
+                    <span className="details-live-model" title={liveRuntime.model || undefined}>
+                      {liveRuntime.pending
+                        ? t('details.session.livePending')
+                        : liveRuntime.model ? chipModelLabel(liveRuntime.model) : t('details.session.livePending')}
+                    </span>
+                    {!liveRuntime.pending && liveRoleLabel(liveRuntime.role) && (
+                      <span className={`details-live-badge ${liveRuntime.role === 'normal_after_worker_down' || liveRuntime.role === 'fallback' ? 'is-warning' : ''}`}>
+                        {liveRoleLabel(liveRuntime.role)}
+                      </span>
+                    )}
                   </span>
+                </div>
+                {!liveRuntime.pending && liveRuntime.attempt && liveRuntime.maxAttempts && liveRuntime.attempt > 1 && (
+                  <span className="details-live-retry">{t('details.session.liveRetry', { attempt: liveRuntime.attempt, max: liveRuntime.maxAttempts })}</span>
+                )}
+                {liveRuntime.mission && liveRuntime.mission.status === 'running' && (
+                  <span className="details-live-worker">
+                    {liveRuntime.mission.seconds && liveRuntime.mission.seconds > 0
+                      ? t('details.session.liveMissionRunningTimed', {
+                        worker: liveRuntime.mission.workerLabel || (liveRuntime.mission.workerModel ? chipModelLabel(liveRuntime.mission.workerModel) : delegate?.worker || 'Worker'),
+                        slot: liveRuntime.mission.slot,
+                        seconds: Math.round(liveRuntime.mission.seconds),
+                      })
+                      : t('details.session.liveMissionRunning', {
+                        worker: liveRuntime.mission.workerLabel || (liveRuntime.mission.workerModel ? chipModelLabel(liveRuntime.mission.workerModel) : delegate?.worker || 'Worker'),
+                        slot: liveRuntime.mission.slot,
+                      })}
+                  </span>
+                )}
+                {liveRuntime.missions && liveRuntime.missions.filter((m) => m.status === 'running' && m.id !== liveRuntime.mission?.id).map((extra) => (
+                  <span key={extra.id} className="details-live-worker">
+                    {t('details.session.liveMissionRunning', {
+                      worker: extra.workerLabel || (extra.workerModel ? chipModelLabel(extra.workerModel) : delegate?.worker || 'Worker'),
+                      slot: extra.slot,
+                    })}
+                  </span>
+                ))}
+              </div>
+            )}
+            {delegate && (
+              <div className={`details-session-delegate ${delegateChecked && !delegateWorkerDown ? 'is-on' : ''} ${delegateLocalOff ? 'is-local' : ''}`}>
+                <div className="details-delegate-text">
+                  <span className="details-session-label" id="details-delegate-label">{t('details.session.delegate')}</span>
+                  <span className={`details-delegate-hint ${delegateWorkerDown ? 'is-warning' : ''}`} role={delegate.error ? 'alert' : undefined}>
+                    {delegate.error
+                      ? t('details.session.delegateFailed', { error: delegate.error })
+                      : !delegate.available && !delegate.on
+                        ? t('details.session.delegateUnavailable')
+                        : delegateLocalOff
+                          ? t('details.session.delegateLocalDisabled')
+                          : delegateWorkerDown
+                            ? t('details.session.delegateWorkerDownNormal')
+                            : delegate.on
+                              ? t('details.session.delegateOn', { chef: delegate.chef, worker: delegate.worker })
+                              : t('details.session.delegateOff', { worker: delegate.worker })}
+                  </span>
+                  {delegate.available && !delegateLocalOff && !delegateWorkerDown && delegate.workerUp === false && (
+                    <span className="details-worker-health is-offline" title={delegate.workerError || undefined}><i aria-hidden="true" />{t('details.session.delegateWorkerOffline')}</span>
+                  )}
                 </div>
                 <input
                   className="settings-switch"
                   type="checkbox"
                   role="switch"
-                  aria-labelledby="details-oyakata-label"
-                  aria-checked={oyakata.on}
-                  checked={oyakata.on}
-                  disabled={oyakata.busy || (!oyakata.available && !oyakata.on)}
-                  onChange={(event) => oyakata.onToggle(event.target.checked)}
+                  aria-labelledby="details-delegate-label"
+                  aria-checked={delegateChecked}
+                  checked={delegateChecked}
+                  aria-disabled={delegateDisabled ? 'true' : undefined}
+                  disabled={delegateDisabled}
+                  onChange={(event) => delegate.onToggle(event.target.checked)}
                 />
               </div>
             )}
             <div className="details-session-context">
               <div className="details-context-head">
-                <span className="usage-readout" title={compaction?.tooltip || undefined}>{formatUsage(shownContext)}</span>
+                <span className="usage-readout" title={compaction?.tooltip || undefined}>{usageText}</span>
               </div>
               {shownContext && shownContext.contextMax > 0 && (
                 <div
@@ -356,7 +434,7 @@ export function DetailsPanel({ bot, work, routines, messages, subagents, onLoadS
 
         {tab === 'computer' && computerPanelEnabled && <ComputerPanel bot={bot} onSteer={onComputerSteer} />}
 
-        {tab === 'usage' && <UsageTab slug={bot.slug} sessionId={sessionId ?? bot.sessionId} configuredModel={bot.model} running={running} live={usage} load={loadUsageDetails} />}
+        {tab === 'usage' && <UsageTab slug={bot.slug} sessionId={sessionId ?? bot.sessionId} configuredModel={sessionModel || bot.model} running={running} live={usage} load={loadUsageDetails} />}
         {tab === 'library' && features.pagesLibrary && onOpenLibraryPage && <PagesLibraryPanel profile={bot.slug} onOpen={onOpenLibraryPage} />}
 
         {tab === 'about' && <section className="details-section about-section">

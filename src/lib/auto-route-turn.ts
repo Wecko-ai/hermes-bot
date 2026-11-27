@@ -44,7 +44,16 @@ function errorBits(value: unknown) {
   return [row.code, row.type, row.message, row.reason].filter((item) => typeof item === 'string').join(' ')
 }
 
+/** A pre-LLM plugin veto (quota/budget cap) is finalized as a normal complete turn. */
+export function isPluginBlockedTurn(payload: Record<string, unknown>) {
+  const reason = lower(typeof payload.turn_exit_reason === 'string' ? payload.turn_exit_reason : '')
+  if (reason.includes('blocked_by_plugin')) return true
+  const haystack = lower([errorBits(payload.error), typeof payload.text === 'string' ? payload.text : ''].join(' '))
+  return haystack.includes('billing hard limit')
+}
+
 export function isRetryableTurnComplete(payload: Record<string, unknown>) {
+  if (isPluginBlockedTurn(payload)) return true
   const status = typeof payload.status === 'string' ? payload.status : ''
   if (status !== 'error') return false
   const haystack = lower([errorBits(payload.error), typeof payload.text === 'string' ? payload.text : ''].join(' '))
@@ -238,16 +247,43 @@ export async function beginAutoRoutedTurn(input: {
     if (!plan.fellBack && plan.decision.needsCompaction && input.compactIfNeeded) await input.compactIfNeeded(input.chat)
     return { chat: input.chat, plan }
   }
-  try {
-    const applied = await applyRoutedModel(input.client, input.chat, plan.option)
+  const queue = [...plan.fallbackQueue]
+  let current = plan
+  let lastError: unknown
+  const tryApply = async (option: ModelOption, nextPlan: RoutedTurnPlan) => {
+    const applied = await applyRoutedModel(input.client, input.chat, option)
     input.onModelApplied(applied.chat)
-    if (plan.decision.needsCompaction && input.compactIfNeeded) await input.compactIfNeeded(applied.chat)
-    return { chat: applied.chat, plan }
-  } catch (error) {
-    const stayed = stayedOnSessionPlan(input.mode, input.chat, models, error)
-    input.onPlanned?.(stayed)
-    return { chat: input.chat, plan: stayed }
+    if (nextPlan.decision.needsCompaction && input.compactIfNeeded) await input.compactIfNeeded(applied.chat)
+    return { chat: applied.chat, plan: { ...nextPlan, option, fallbackQueue: queue } }
   }
+  try {
+    return await tryApply(current.option, current)
+  } catch (error) {
+    lastError = error
+  }
+  while (queue.length) {
+    const next = queue.shift()!
+    current = {
+      ...current,
+      option: next,
+      fallbackQueue: queue,
+      badge: {
+        ...current.badge,
+        chosen: `${next.provider}/${next.model}`,
+        label: fallbackLabel(current.decision, next),
+        reason: `Fallback after ${routeFailureReason(lastError)}`,
+      },
+    }
+    input.onPlanned?.(current)
+    try {
+      return await tryApply(next, current)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  const stayed = stayedOnSessionPlan(input.mode, input.chat, models, lastError ?? new Error('auto_route_failed'))
+  input.onPlanned?.(stayed)
+  return { chat: input.chat, plan: stayed }
 }
 
 export interface AutoTurnSubmit {

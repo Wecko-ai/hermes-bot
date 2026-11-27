@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process'
-import http from 'node:http'
 import net from 'node:net'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -16,28 +15,9 @@ describe('local routes require a real session', () => {
   let appPort
   let child
   let log = ''
-  let ollama
-  let generateAborted = false
-  let generateSeen = false
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hermesbot-http-'))
 
   beforeAll(async () => {
-    ollama = http.createServer((request, response) => {
-      if (request.url === '/api/tags') {
-        response.end(JSON.stringify({ models: [{ name: 'model:7b' }] }))
-        return
-      }
-      if (request.url === '/api/generate') {
-        generateSeen = true
-        request.on('aborted', () => { generateAborted = true })
-        request.on('close', () => { if (!response.writableEnded) generateAborted = true })
-        response.writeHead(200, { 'content-type': 'application/json' })
-        return
-      }
-      response.statusCode = 404
-      response.end('{}')
-    })
-    const ollamaPort = await listen(ollama)
     const preload = path.join(dir, 'preload.cjs')
     writeFileSync(preload, `globalThis.__hermesBotSessionPersistence = {
   load: () => ${JSON.stringify(JSON.stringify([{ id: SESSION_ID, kind: 'local', expiresAt: Date.now() + 86_400_000 }]))},
@@ -65,7 +45,6 @@ describe('local routes require a real session', () => {
         HERMESBOT_NO_PRIVATE: '1',
         HERMESBOT_CONFIG: path.join(dir, 'missing.json'),
         HERMES_ORIGIN: 'http://127.0.0.1:9',
-        OLLAMA_ORIGIN: `http://127.0.0.1:${ollamaPort}`,
         OMLX_ORIGIN: 'http://127.0.0.1:9',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -85,19 +64,13 @@ describe('local routes require a real session', () => {
 
   afterAll(async () => {
     child?.kill('SIGKILL')
-    if (ollama) await new Promise((resolve) => ollama.close(resolve))
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('rejects a forged hermes cookie on local chat and the browser turn', async () => {
+  it('rejects a forged hermes cookie on the model probe, the browser turn and the computer panel', async () => {
     const forged = { cookie: 'hermes_x=1', origin: `http://127.0.0.1:${appPort}` }
     const paths = [
-      ['/api/local-chat/models', 'GET'],
-      ['/api/local-chat/status', 'GET'],
-      ['/api/local-chat', 'POST'],
-      ['/api/local-chat/load', 'POST'],
       ['/api/model-probe', 'POST'],
-      ['/api/local-chat/unload', 'POST'],
       ['/api/browser-turn', 'GET'],
       ['/api/computer-panel/status?bot=orion', 'GET'],
       ['/api/computer-panel/stream?bot=orion', 'GET'],
@@ -129,27 +102,5 @@ describe('local routes require a real session', () => {
     for (const bad of [{ mode: 'x', gauge: 0.5, profiles: ['nova'] }, { mode: 'manual', gauge: 5, profiles: ['nova'] }, { mode: 'manual', gauge: 0.5, profiles: ['../x'] }]) {
       expect((await fetch(`${origin}/api/compaction`, { method: 'PUT', headers: { ...headers, origin }, body: JSON.stringify(bad) })).status).toBe(400)
     }
-  })
-
-  it('aborts an in-flight load when the client disconnects and refuses a second load', async () => {
-    const origin = `http://127.0.0.1:${appPort}`
-    const headers = {
-      origin,
-      cookie: `hermesbot_session=${SESSION_ID}`,
-      'content-type': 'application/json',
-    }
-    const body = JSON.stringify({ model: 'model:7b' })
-    const caller = new AbortController()
-    const first = fetch(`${origin}/api/local-chat/load`, { method: 'POST', headers, body, signal: caller.signal })
-    const deadline = Date.now() + 4000
-    while (!generateSeen && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(generateSeen).toBe(true)
-    const second = await fetch(`${origin}/api/local-chat/load`, { method: 'POST', headers, body })
-    expect(second.status).toBe(409)
-    caller.abort()
-    await first.catch(() => {})
-    const abortDeadline = Date.now() + 2000
-    while (!generateAborted && Date.now() < abortDeadline) await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(generateAborted).toBe(true)
   })
 })

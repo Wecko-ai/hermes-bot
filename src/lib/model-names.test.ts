@@ -102,3 +102,13 @@ describe('modelMatchKey', () => {
     expect(modelMatchKey('qwen3.8:27b')).toBe(modelMatchKey('qwen3-8-27b'.replace('3-8', '3.8')))
   })
 })
+
+describe('prettyModelName quantization suffixes', () => {
+  it('documents how retired quantization suffixes format if ever seen', () => {
+    // Local servers prune absent ids from picker memory; these are fallbacks.
+    expect(prettyModelName('kimi-for-coding')).toBe('Kimi K2.8 Preview')
+    expect(prettyModelName('Inkling-2-Mini-128K')).toBe('Inkling 2 Mini 128K')
+    expect(prettyModelName('Inkling-2-Mini-256K')).toBe('Inkling 2 Mini 256K')
+    expect(prettyModelName('Inkling-2-Mini-oQ4e-mtp')).toBe('Inkling 2 Mini Oq4e Mtp')
+  })
+})

@@ -149,4 +149,44 @@ describe('loadModelOptions local oMLX merge', () => {
     expect(kimi.map((item) => item.model)).not.toContain('cursor/grok-4.7')
     expect(kimi.map((item) => item.model)).toContain('kimi-for-coding')
   })
+
+  it('does not revive retired local ids from 7-day memory and purges the entry', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/splash/models')) {
+        return { ok: true, json: async () => ({ available: true, models: ['Inkling-2-Mini-128K'] }) }
+      }
+      return { ok: true, json: async () => ({ available: false, models: [] }) }
+    }))
+    const store: Record<string, string> = {
+      'hermesbot-model-memory': JSON.stringify({ 'custom:splash': [['Inkling-2-Mini-oQ4e-mtp', Date.now()]] }),
+    }
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value },
+      removeItem: (key: string) => { delete store[key] },
+      clear: () => { for (const key of Object.keys(store)) delete store[key] },
+    })
+    const client = {
+      request: vi.fn(async () => ({
+        model: 'Inkling-2-Mini-128K',
+        providers: [
+          { slug: 'custom:splash', name: 'Local Splash Server', authenticated: true, models: ['Inkling-2-Mini-128K'] },
+        ],
+      })),
+    } as unknown as HermesClient
+    const result = await loadModelOptions(client, 'demo-bot')
+    const splash = result.options.filter((item) => item.provider === 'custom:splash' || item.provider === 'splash')
+    expect(splash.map((item) => item.model)).toContain('Inkling-2-Mini-128K')
+    expect(splash.map((item) => item.model)).not.toContain('Inkling-2-Mini-oQ4e-mtp')
+    const memoryAfter = JSON.parse(store['hermesbot-model-memory'] ?? '{}')
+    expect(memoryAfter['custom:splash']).toBeUndefined()
+  })
+
+  it('omits provider for a stale omlx model in parseUsage', async () => {
+    const { parseUsage } = await import('./hermes')
+    const row = parseUsage({ model: 'kimi-for-coding', provider: 'omlx', context_used: 1000, context_max: 1048576 })
+    expect(row).not.toBeNull()
+    expect(row?.provider).toBeUndefined()
+  })
 })

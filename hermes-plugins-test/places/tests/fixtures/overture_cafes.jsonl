@@ -1,0 +1,6 @@
+{"id": "08f2fab2c1cafes001", "name": "Cafe du Coin", "category": "cafe", "lat": 48.85703, "lon": 2.35153, "address": "12 Rue de la Lune, Paris", "wifi": true}
+{"id": "08f2fab2c1cafes002", "name": "Overture Only Roastery", "category": "cafe", "lat": 48.85690, "lon": 2.35100, "address": "3 Rue des Petits Carreaux, Paris"}
+{"id": "08f2fab2c1other001", "name": "Not A Cafe", "category": "pharmacy", "lat": 48.85700, "lon": 2.35100}
+{"id": "08f2fab2c1broken002", "name": "Broken Record", "category": "cafe", "lat": "north", "lon": 2.35}
+not json at all
+{"id": "08f2fab2c1far0003", "name": "Far Away Cafe", "category": "cafe", "lat": 48.90000, "lon": 2.40000}

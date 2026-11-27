@@ -40,8 +40,6 @@ export interface AppSettings {
   hiddenModels: string[]
   /** Zero-spend mode: free and subscription models only. Local mirror of shared `zeroSpend`; also its legacy fallback. */
   freeMode: boolean
-  /** Ollama model of the local chat. Empty: the configuration's, else the first installed. */
-  localModel: string
   /** macOS notification when a bot finishes a turn or waits on an answer, unless its chat is in view. */
   notifications: boolean
   /** Voice mode: the voice of each language (identifier of a Mac voice). Empty: the system voice. */
@@ -94,7 +92,6 @@ export function parseSettings(saved: string | null, legacy: (key: string) => str
     pinnedBots: strings(value.pinnedBots),
     hiddenModels: strings(value.hiddenModels),
     freeMode: flag(value.freeMode, false),
-    localModel: typeof value.localModel === 'string' ? value.localModel : '',
     notifications: flag(value.notifications, true),
     voiceFr: typeof value.voiceFr === 'string' ? value.voiceFr.slice(0, 200) : '',
     voiceEn: typeof value.voiceEn === 'string' ? value.voiceEn.slice(0, 200) : '',

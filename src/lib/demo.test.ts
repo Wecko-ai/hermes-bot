@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEMO_LOCAL_MODEL, demoChat, demoData } from './demo'
+import { demoChat, demoData } from './demo'
 import { canSendMail, parseMailBlock } from './mail'
 import { findQuestions } from './questions'
 import { stepIds } from './turns'
@@ -10,7 +10,6 @@ const shape = (language: 'en' | 'fr') => {
   return {
     messages: ids(demo.messages),
     chats: Object.fromEntries(Object.entries(demo.chats).map(([slug, chat]) => [slug, ids(chat ?? [])])),
-    local: ids(demo.local.messages),
   }
 }
 
@@ -29,7 +28,7 @@ describe('demo data', () => {
       expect(demoChat(demo, 'nova')).toBe(demo.messages)
       expect(demoChat(demo, 'iris')).toBe(demo.messages)
       expect(demoChat(demo, 'sage')).toBe(demo.chats.sage)
-      const all = [...demo.messages, ...Object.values(demo.chats).flatMap((chat) => chat ?? []), ...demo.local.messages].map((message) => message.id)
+      const all = [...demo.messages, ...Object.values(demo.chats).flatMap((chat) => chat ?? [])].map((message) => message.id)
       expect(new Set(all).size).toBe(all.length)
     })
 
@@ -59,10 +58,5 @@ describe('demo data', () => {
       expect(stepIds(chat, true, 'orion').size).toBe(0)
     })
 
-    it('opens the local chat on a fictional model, with a fixed reply', () => {
-      expect(demo.local.model).toBe(DEMO_LOCAL_MODEL)
-      expect(demo.local.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
-      expect(demo.local.answer).toMatch(/Ollama/)
-    })
   })
 })

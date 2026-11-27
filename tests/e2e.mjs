@@ -32,8 +32,6 @@ const BROWSER_VAULT_SETTINGS = path.join(os.tmpdir(), `hermesbot-e2e-${process.p
 const BROWSER_SECRET = 'cdp-mot-de-passe-test-93842' // gitleaks:allow (fake test password)
 const BROWSER_CODE = '654321'
 rmSync(SAVED_LOGIN_FILE, { force: true })
-const LOCAL_HISTORY_FILE = `${SESSION_FILE}.local-chat`
-rmSync(LOCAL_HISTORY_FILE, { force: true })
 rmSync(BROWSER_VAULT_AUDIT, { force: true })
 rmSync(BROWSER_VAULT_SETTINGS, { force: true })
 const SCREENSHOTS = new URL('screenshots/', import.meta.url).pathname
@@ -66,7 +64,6 @@ writeFileSync(AUTO_ROUTER_TABLE, JSON.stringify({
 }))
 writeFileSync(TEST_CONFIG, JSON.stringify({
   ui: { defaultBot: 'nova', hiddenProviders: ['hidden-provider'], subscriptionProviders: ['kimi-coding'] },
-  localChat: { model: 'modele-local:7b', name: 'Modèle local' },
   modelProbes: { 'cursor/': `${E2E_GATEWAY_ORIGIN}/v1` },
   features: { usageGlobal: true, vaultWallet: true, pagesLibrary: true },
   computerPanel: { enabled: true, cdpOrigin: E2E_CDP_ORIGIN },
@@ -174,12 +171,6 @@ const holdReplies = (method) => {
   return () => { heldReplies.delete(method); release() }
 }
 let emptyRoster = false
-const localChatRequests = []
-let localModelMissing = false
-// Simulated Ollama memory: model → unload date, set by the chat and by /api/generate (Load, Unload).
-const fakeOllamaLoaded = new Map()
-const localGenerateRequests = []
-const fakeKeepAlive = (value) => (value === 0 ? 0 : value === '30m' ? 30 * 60_000 : 2 * 60_000)
 const fileAttachCalls = []
 const steerCalls = []
 const queuedPrompts = []
@@ -309,46 +300,6 @@ const mock = http.createServer((request, response) => {
   if (url.pathname === '/api/auth/ws-ticket') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ error: 'unauthenticated' })) }
     return response.end(JSON.stringify({ ticket: 'test-ticket', ttl_seconds: 30 }))
-  }
-  // Simulated Ollama: same server, no real model.
-  if (url.pathname === '/api/tags' && request.method === 'GET') {
-    const main = { name: 'modele-local:7b', size: 4.7e9, details: { parameter_size: '7.6B', quantization_level: 'Q4_K_M', family: 'qwen2' } }
-    return response.end(JSON.stringify({ models: localModelMissing ? [{ name: 'autre-local:1b' }] : [main, { name: 'autre-local:1b' }] }))
-  }
-  if (url.pathname === '/api/ps' && request.method === 'GET') {
-    const models = [...fakeOllamaLoaded].filter(([, until]) => until > Date.now())
-      .map(([name, until]) => ({ name, model: name, size: 4.7e9, size_vram: 4.7e9, expires_at: new Date(until).toISOString(), context_length: 32768 }))
-    return response.end(JSON.stringify({ models }))
-  }
-  if (url.pathname === '/api/generate' && request.method === 'POST') {
-    const chunks = []
-    request.on('data', (chunk) => chunks.push(chunk))
-    request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString())
-      localGenerateRequests.push(body)
-      const keep = fakeKeepAlive(body.keep_alive)
-      if (keep) fakeOllamaLoaded.set(body.model, Date.now() + keep)
-      else fakeOllamaLoaded.delete(body.model)
-      response.end(JSON.stringify({ model: body.model, response: '', done: true, done_reason: keep ? 'load' : 'unload' }))
-    })
-    return
-  }
-  if (url.pathname === '/api/chat' && request.method === 'POST') {
-    const chunks = []
-    request.on('data', (chunk) => chunks.push(chunk))
-    request.on('end', () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString())
-      localChatRequests.push(body)
-      if (localModelMissing) { response.statusCode = 404; return response.end(JSON.stringify({ error: 'model not found' })) }
-      fakeOllamaLoaded.set(body.model, Date.now() + fakeKeepAlive(body.keep_alive))
-      response.setHeader('Content-Type', 'application/x-ndjson')
-      const write = (message, done = false) => response.write(`${JSON.stringify({ message: { role: 'assistant', ...message }, done })}\n`)
-      setTimeout(() => write({ content: '<think>je réfléchis' }), 30)
-      setTimeout(() => write({ content: '</think>Réponse ' }), 60)
-      setTimeout(() => write({ content: 'du modèle local.' }), 90)
-      setTimeout(() => { write({ content: '' }, true); response.end() }, 130)
-    })
-    return
   }
   if (url.pathname === '/api/analytics/usage') {
     if (!authenticated) { response.statusCode = 401; return response.end(JSON.stringify({ detail: 'Unauthorized' })) }
@@ -485,8 +436,8 @@ let promptCalls = 0
 const emailDrafts = {}
 const emailDraftRules = {}
 const emailDraftCalls = []
-const oyakataSessions = {}
-const oyakataCalls = []
+const delegateSessions = {}
+const delegateCalls = []
 let autoRouteFailOnce = false
 // New bot (the "+" of the sidebar): `profiles.create` as Hermes answers it, the lazy Bot Chat it gets, its first turn.
 const createCalls = []
@@ -924,12 +875,25 @@ wss.on('connection', (socket) => {
       return reply({ key, value: key === 'approvals.mode' ? 'smart' : '' })
     }
     // chef-worker plugin RPC: the per-chat Delegate toggle (the chat's model plans and reviews, Inkling works).
-    if (frame.method === 'plugin.chef-worker.oyakata.get' || frame.method === 'plugin.chef-worker.oyakata.set'
-      || frame.method === 'plugin.chef-worker.delegate.get' || frame.method === 'plugin.chef-worker.delegate.set') {
-      const { profile = '', session_id: sessionId = '', enabled } = frame.params || {}
-      oyakataCalls.push({ method: frame.method, profile, session_id: sessionId, enabled })
-      if (frame.method.endsWith('.set')) oyakataSessions[sessionId] = Boolean(enabled)
-      return reply({ session_id: sessionId, enabled: Boolean(oyakataSessions[sessionId]), worker: { model: 'Inkling-2-Mini-128K', label: 'Inkling 2 Mini Splash' }, default_chef: 'cursor/grok-4.7' })
+    if (frame.method === 'plugin.chef-worker.delegate.get' || frame.method === 'plugin.chef-worker.delegate.set') {
+      const { profile = '', session_id: sessionId = '', enabled, model = '', provider = '' } = frame.params || {}
+      delegateCalls.push({ method: frame.method, profile, session_id: sessionId, enabled, model, provider })
+      if (frame.method.endsWith('.set')) delegateSessions[sessionId] = Boolean(enabled)
+      const isLocal = /inkling|omlx|ollama|lmstudio/i.test(String(model)) || /^(?:custom:)?(?:splash|omlx|ollama|lmstudio)/i.test(String(provider))
+      const on = isLocal ? false : Boolean(delegateSessions[sessionId])
+      return reply({
+        session_id: sessionId,
+        enabled: on,
+        source: isLocal ? 'local-override' : (on ? 'chat' : 'off'),
+        reason: isLocal ? 'local_model' : (on ? 'explicit' : 'off'),
+        turn_model: String(model || ''),
+        turn_provider: String(provider || ''),
+        turn_is_local: isLocal,
+        worker_up: true,
+        worker_error: '',
+        worker: { model: 'Inkling-2-Mini-128K', label: 'Inkling 2 Mini Splash', context_max: 131072 },
+        default_chef: 'cursor/grok-4.7',
+      })
     }
     // email-drafts plugin RPC (hermes-plugins/email-drafts): the drafts live here, a send is only recorded.
     if (frame.method === 'plugin.email-drafts.api') {
@@ -1414,7 +1378,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
@@ -1546,7 +1510,7 @@ try {
   releaseResume()
   await page.locator('.chat-loading').waitFor({ state: 'detached', timeout: 15_000 })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
-  if (await page.locator('.bot-row').count() !== 3) throw new Error('Le roster doit montrer Nova, Orion et le chat local, sans les profils système.')
+  if (await page.locator('.bot-row').count() !== 2) throw new Error('Le roster doit montrer Nova et Orion, sans les profils système.')
   await page.getByText('Je suis ton bot Hermes de test.').waitFor()
   // The right-hand panel stays closed after login and after switching bots; only its toggle opens it.
   if (await page.locator('.details-panel').count()) throw new Error('Le panneau de droite doit rester fermé après la connexion.')
@@ -3579,30 +3543,42 @@ try {
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
 
-  // Delegate (formerly Oyakata): a per-chat toggle in the session block of the right panel, no longer a model of the picker.
+  // Delegate (formerly Delegate): a per-chat toggle in the session block of the right panel, no longer a model of the picker.
   if (!(await page.locator('.details-panel').isVisible())) await page.getByRole('button', { name: 'Afficher les détails du bot' }).click()
   await page.locator('.details-panel [data-model-trigger="true"]').click()
   await page.locator('.model-option').first().waitFor({ timeout: 5_000 })
-  if (await page.locator('[data-row="model:oyakata"]').count()) throw new Error('Delegate ne doit plus être un modèle du sélecteur.')
+  if (await page.locator('[data-row="model:delegate"]').count()) throw new Error('Delegate ne doit plus être un modèle du sélecteur.')
   await page.getByRole('textbox', { name: 'Rechercher un modèle' }).press('Escape')
-  const oyakataRow = page.locator('.details-panel .details-session-oyakata')
-  await oyakataRow.waitFor({ timeout: 5_000 })
-  const oyakataSwitch = oyakataRow.getByRole('switch', { name: 'Delegate' })
-  await oyakataRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
-  if (await oyakataSwitch.isChecked()) throw new Error('Delegate doit être éteint par défaut.')
-  const mutationsBeforeOyakata = modelMutations.length
-  await oyakataSwitch.click()
-  await oyakataRow.getByText('Sonnet 5.5 planifie et relit · Inkling 2 Mini Splash fait le travail').waitFor({ timeout: 3_000 })
-  if (!(await oyakataSwitch.isChecked())) throw new Error('Delegate ne s’allume pas.')
-  const oyakataOn = oyakataCalls.filter((call) => call.method === 'plugin.chef-worker.oyakata.set')
-  if (oyakataOn.length !== 1 || oyakataOn[0].enabled !== true || oyakataOn[0].profile !== 'orion' || !oyakataOn[0].session_id) throw new Error(`Bascule Delegate inattendue : ${JSON.stringify(oyakataCalls)}`)
-  if (modelMutations.length !== mutationsBeforeOyakata) throw new Error('Allumer Delegate ne doit pas changer le modèle du chat (il devient le chef).')
+  const delegateRow = page.locator('.details-panel .details-session-delegate')
+  await delegateRow.waitFor({ timeout: 5_000 })
+  const delegateSwitch = delegateRow.getByRole('switch', { name: 'Delegate' })
+  await delegateRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
+  if (await delegateSwitch.isChecked()) throw new Error('Delegate doit être éteint par défaut.')
+  const mutationsBeforeDelegate = modelMutations.length
+  await delegateSwitch.click()
+  await delegateRow.getByText('Sonnet 5.5 planifie et relit · Inkling 2 Mini Splash fait le travail').waitFor({ timeout: 3_000 })
+  if (!(await delegateSwitch.isChecked())) throw new Error('Delegate ne s’allume pas.')
+  const delegateOn = delegateCalls.filter((call) => call.method === 'plugin.chef-worker.delegate.set')
+  if (delegateOn.length !== 1 || delegateOn[0].enabled !== true || delegateOn[0].profile !== 'orion' || !delegateOn[0].session_id) throw new Error(`Bascule Delegate inattendue : ${JSON.stringify(delegateCalls)}`)
+  if (modelMutations.length !== mutationsBeforeDelegate) throw new Error('Allumer Delegate ne doit pas changer le modèle du chat (il devient le chef).')
   await page.locator('.model-chip').getByText('Sonnet 5.5').waitFor({ timeout: 3_000 })
   await delay(250)
-  await page.screenshot({ path: `${SCREENSHOTS}oyakata-toggle.png` })
-  await oyakataSwitch.click()
-  await oyakataRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
-  if (oyakataSessions[oyakataOn[0].session_id] !== false) throw new Error('Delegate ne s’éteint pas côté plugin.')
+  await page.screenshot({ path: `${SCREENSHOTS}delegate-toggle.png` })
+  if (!delegateOn[0].model || !delegateOn[0].provider) throw new Error(`Delegate envoi sans modèle/provider : ${JSON.stringify(delegateOn[0])}`)
+  const delegateSessionId = delegateOn[0].session_id
+  broadcast(event(delegateSessionId, 'runtime.now', { role: 'normal_after_worker_down', model: 'kimi-for-coding', provider: 'kimi-coding', context_used: 272000, context_max: 1048576, tps: 80, reason: 'worker_down_normal' }))
+  await page.locator('.details-panel .details-session-live').getByText('Kimi K2.8 Preview').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .details-delegate-hint.is-warning').getByText('Ouvrier injoignable').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .details-session .usage-readout').getByText('1M').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .details-session .usage-readout').getByText('80 tok/s').waitFor({ timeout: 5_000 })
+  broadcast(event(delegateSessionId, 'runtime.now', { role: 'worker', model: 'kimi-for-coding', provider: 'kimi-coding', mission: { id: 'e2e-m1', slot: 0, status: 'running', seconds: 8, worker_model: 'Inkling-2-Mini-128K', worker_label: 'Inkling 2 Mini Splash', context_used: 24000, context_max: 131072, tps: 90 } }))
+  await page.locator('.details-panel .details-live-worker').getByText('Inkling 2 Mini Splash').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .details-live-worker').getByText('slot 0').waitFor({ timeout: 5_000 })
+  await page.locator('.details-panel .details-session .usage-readout').getByText('131k').waitFor({ timeout: 5_000 })
+  broadcast(event(delegateSessionId, 'runtime.now', { role: 'chef', model: 'claude-sonnet-5-5', provider: 'anthropic', mission: null }))
+  await delegateSwitch.click()
+  await delegateRow.getByText('Le modèle du chat planifie et relit ; l’ouvrier local Inkling 2 Mini Splash fait le travail.').waitFor({ timeout: 3_000 })
+  if (delegateSessions[delegateOn[0].session_id] !== false) throw new Error('Delegate ne s’éteint pas côté plugin.')
 
   autoRouteFailOnce = true
   const promptsBeforeAuto = promptCalls
@@ -4421,12 +4397,6 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.locator('[data-bot=nova]').waitFor({ timeout: 15_000 })
   profiles.splice(profiles.indexOf(atlasProfile), 1)
-  // The local chat is not a Hermes profile: no bot menu.
-  await page.locator(`[data-bot="local:ollama"]`).click({ button: 'right' })
-  await delay(200)
-  if (await page.locator('.bot-menu').count()) throw new Error('Le chat local a un menu de bot.')
-  await page.keyboard.press('Escape')
-
   // Standing by: no turn, but a subagent and background processes still running. Profile-wide first
   // (`subagent.roster`), then the open conversation's own reads (`process.list`, `subagent.list`) and events.
   await page.locator('[data-bot=nova]').click()
@@ -4593,7 +4563,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,
@@ -4627,145 +4597,6 @@ try {
   await page.locator('[data-bot=orion]').getByText('Pilote le Chrome partagé').waitFor()
   rmSync(BROWSER_TOUR_OWNER_FILE, { force: true })
 
-  // Isolated local chat: installed model only, no tools, no request to Hermes.
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat`, { method: 'POST', headers: { Origin: `${E2E_APP_ORIGIN}`, 'Content-Type': 'application/json' }, body: '{"messages":[{"role":"user","content":"x"}]}' })).status !== 401) throw new Error('/api/local-chat répond sans session.')
-  await page.locator('[data-bot="local:ollama"]').click()
-  const localBox = page.getByRole('textbox', { name: 'Message à Modèle local' })
-  await localBox.waitFor({ timeout: 3_000 })
-  if (await page.getByRole('button', { name: 'Ajouter des fichiers' }).count()) throw new Error('Le chat local ne doit pas accepter de fichiers.')
-  if (await page.getByRole('radio', { name: 'BRAIN', exact: true }).count()) throw new Error('Le chat local ne doit pas avoir de modes.')
-  if (await page.locator('.details-panel').count()) throw new Error('Pas de panneau de bot pour le chat local.')
-  const promptsBeforeLocal = promptCalls
-  await localBox.fill('Bonjour local')
-  await localBox.press('Enter')
-  await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 5_000 })
-  if (await page.locator('.local-chat').getByText('je réfléchis').count()) throw new Error('Le raisonnement du modèle est affiché.')
-  const localRequest = localChatRequests.at(-1)
-  if (localRequest.model !== 'modele-local:7b' || 'tools' in localRequest || localRequest.messages.length !== 1 || localRequest.messages[0].content !== 'Bonjour local') throw new Error(`Requête locale : ${JSON.stringify(localRequest)}`)
-  if (promptCalls !== promptsBeforeLocal) throw new Error('Le chat local a lancé un tour Hermes.')
-  await page.screenshot({ path: `${SCREENSHOTS}local-chat.png` })
-  const smuggled = await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'autre-local:1b', tools: [{ type: 'function' }], messages: [{ role: 'user', content: 'x', tools: [1] }] }) })).text())
-  const smuggledRequest = localChatRequests.at(-1)
-  if (!smuggled || smuggledRequest.model !== 'autre-local:1b' || 'tools' in smuggledRequest || 'tools' in smuggledRequest.messages[0]) throw new Error('Le serveur a laissé passer autre chose que les messages.')
-  const requestsBeforeUnknown = localChatRequests.length
-  if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe', messages: [{ role: 'user', content: 'x' }] }) })).status) !== 404 || localChatRequests.length !== requestsBeforeUnknown) throw new Error('Un modèle non installé a été demandé à Ollama.')
-  if (await page.evaluate(async () => (await fetch('/api/local-chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'system', content: 'x' }] }) })).status) !== 400) throw new Error('Rôle system accepté.')
-  // Switching to another bot keeps the local conversation.
-  await page.locator('[data-bot=nova]').click()
-  await page.locator('[data-bot=nova].is-selected').waitFor({ timeout: 3_000 })
-  await page.getByRole('textbox', { name: 'Message à Nova' }).waitFor({ timeout: 3_000 })
-  await page.locator('[data-bot="local:ollama"]').click()
-  await page.locator('.local-chat .message-assistant').getByText('Réponse du modèle local.').waitFor({ timeout: 2_000 })
-  // Exact model and memory: the chat leaves the model in memory 2 min, Unload frees it, Load keeps it 30 min.
-  fakeOllamaLoaded.delete('autre-local:1b') // left by the request with another model above
-  const localStatus = page.locator('.local-chat .chat-status')
-  const modelChip = page.locator('.local-model-chip')
-  await modelChip.getByText('modele-local:7b', { exact: true }).waitFor({ timeout: 3_000 })
-  if (localChatRequests.at(-1).keep_alive !== '2m') throw new Error(`Chat local sans le délai court : ${JSON.stringify(localChatRequests.at(-1))}`)
-  await localStatus.getByText(/^En mémoire · 4,7 Go · jusqu’à \d{2}:\d{2}$/).waitFor({ timeout: 5_000 })
-  await page.getByRole('button', { name: 'Décharger', exact: true }).click()
-  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
-  const unloadRequest = localGenerateRequests.at(-1)
-  if (unloadRequest.model !== 'modele-local:7b' || unloadRequest.keep_alive !== 0 || 'prompt' in unloadRequest) throw new Error(`Déchargement : ${JSON.stringify(unloadRequest)}`)
-  await page.getByRole('button', { name: 'Charger', exact: true }).click()
-  await localStatus.getByText(/^En mémoire · 4,7 Go · jusqu’à/).waitFor({ timeout: 5_000 })
-  const loadRequest = localGenerateRequests.at(-1)
-  if (loadRequest.model !== 'modele-local:7b' || loadRequest.keep_alive !== '30m' || loadRequest.options?.num_ctx !== 32768 || 'prompt' in loadRequest || 'messages' in loadRequest) throw new Error(`Chargement : ${JSON.stringify(loadRequest)}`)
-  await localBox.fill('Après chargement')
-  await localBox.press('Enter')
-  await page.locator('.local-chat .message-assistant').nth(1).waitFor({ timeout: 5_000 })
-  if (localChatRequests.at(-1).keep_alive !== '30m') throw new Error('Un modèle chargé au bouton doit rester 30 min après le message.')
-  // The menu: installed models with their details and memory; another model takes its own name.
-  await modelChip.click()
-  const modelMenu = page.getByRole('menu', { name: 'Modèles installés dans Ollama' })
-  await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).getByText('En mémoire').waitFor({ timeout: 3_000 })
-  await modelMenu.getByText('7.6B · Q4_K_M · 4,7 Go').waitFor()
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.local-model-popover')).opacity === '1')
-  await page.screenshot({ path: `${SCREENSHOTS}local-model-menu.png` })
-  if (await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).getAttribute('aria-checked') !== 'true') throw new Error('Le modèle actuel n’est pas coché.')
-  await modelMenu.getByRole('menuitemradio', { name: /autre-local:1b/ }).click()
-  const otherBox = page.getByRole('textbox', { name: 'Message à autre-local 1b' })
-  await otherBox.waitFor({ timeout: 3_000 })
-  await modelChip.getByText('autre-local:1b', { exact: true }).waitFor()
-  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
-  if (await page.locator('.local-chat .message-assistant').count() !== 2) throw new Error('Changer de modèle a effacé la conversation locale.')
-  await otherBox.fill('Et toi ?')
-  await otherBox.press('Enter')
-  await page.locator('.local-chat .message-assistant').nth(2).waitFor({ timeout: 5_000 })
-  const otherRequest = localChatRequests.at(-1)
-  if (otherRequest.model !== 'autre-local:1b' || otherRequest.keep_alive !== '2m' || otherRequest.messages.length !== 5) throw new Error(`Requête après changement de modèle : ${JSON.stringify(otherRequest)}`)
-  // Load and unload: the page’s origin, a session and an installed model only, nothing sent otherwise.
-  const generatesBefore = localGenerateRequests.length
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/load`, { method: 'POST', headers: { Origin: `${E2E_APP_ORIGIN}`, 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 401) throw new Error('/api/local-chat/load répond sans session.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/unload`, { method: 'POST', headers: { Origin: 'https://exemple.test', 'Content-Type': 'application/json' }, body: '{"model":"modele-local:7b"}' })).status !== 403) throw new Error('/api/local-chat/unload accepte une autre origine.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/status`)).status !== 401) throw new Error('/api/local-chat/status répond sans session.')
-  if (await page.evaluate(async () => (await fetch('/api/local-chat/load', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'pas-installe' }) })).status) !== 404) throw new Error('Chargement d’un modèle non installé.')
-  if (localGenerateRequests.length !== generatesBefore) throw new Error('Une demande refusée est partie vers Ollama.')
-  // Back to the configured model and its name; nothing left in memory.
-  await modelChip.click()
-  await modelMenu.getByRole('menuitemradio', { name: /modele-local:7b/ }).click()
-  await localBox.waitFor({ timeout: 3_000 })
-  await page.getByRole('button', { name: 'Décharger', exact: true }).click()
-  await localStatus.getByText('Pas en mémoire', { exact: true }).waitFor({ timeout: 5_000 })
-  fakeOllamaLoaded.clear()
-  // Missing model: clear message, no crash.
-  localModelMissing = true
-  await localBox.fill('Encore')
-  await localBox.press('Enter')
-  await page.locator('.toast').getByText('pas encore installé').waitFor({ timeout: 5_000 })
-  localModelMissing = false
-  await page.locator('.toast button').click()
-  // Saved conversations: each exchange is written (encrypted in the app, in clear text in this test), even a failed one.
-  const savedHistory = await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())
-  const firstSaved = savedHistory.conversations?.[0]
-  if (savedHistory.conversations?.length !== 1 || firstSaved.title !== 'Bonjour local' || firstSaved.count !== 7 || firstSaved.model !== 'modele-local:7b') throw new Error(`Historique local : ${JSON.stringify(savedHistory)}`)
-  if (!readFileSync(LOCAL_HISTORY_FILE, 'utf8').includes('Après chargement')) throw new Error('La conversation locale n’est pas écrite sur disque.')
-  await page.getByRole('button', { name: 'Nouvelle conversation', exact: true }).click()
-  if (await page.locator('.local-chat .message-assistant').count()) throw new Error('Nouvelle conversation locale non vide.')
-  await localBox.fill('Deuxième conversation')
-  await localBox.press('Enter')
-  await page.locator('.local-chat .message-assistant').first().waitFor({ timeout: 5_000 })
-  if (localChatRequests.at(-1).messages.length !== 1) throw new Error('La nouvelle conversation a reçu l’ancienne.')
-  const historyButton = page.getByRole('button', { name: 'Historique des conversations' })
-  const historyMenu = page.getByRole('menu', { name: 'Conversations enregistrées' })
-  await historyButton.click()
-  await historyMenu.getByRole('menuitemradio', { name: /Deuxième conversation/ }).waitFor({ timeout: 5_000 })
-  const historyRows = await historyMenu.getByRole('menuitemradio').allTextContents()
-  if (historyRows.length !== 2 || !historyRows[0].includes('Deuxième conversation') || !historyRows[1].includes('7 messages')) throw new Error(`Liste de l’historique : ${JSON.stringify(historyRows)}`)
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.local-history-popover')).opacity === '1')
-  await page.screenshot({ path: `${SCREENSHOTS}local-history.png` })
-  await historyMenu.getByRole('menuitemradio', { name: /Bonjour local/ }).click()
-  await page.locator('.local-chat .message-user').getByText('Après chargement').waitFor({ timeout: 3_000 })
-  if (await page.locator('.local-chat .message-assistant').count() !== 3) throw new Error('Conversation locale mal rouverte.')
-  // Another message goes into the reopened conversation, with its history.
-  await localBox.fill('On reprend')
-  await localBox.press('Enter')
-  await page.locator('.local-chat .message-assistant').nth(3).waitFor({ timeout: 5_000 })
-  if (localChatRequests.at(-1).messages.length !== 8) throw new Error(`Reprise de conversation : ${localChatRequests.at(-1).messages.length} messages envoyés.`)
-  // The app opened again: the last conversation comes back.
-  await page.waitForFunction(async () => (await (await fetch('/api/local-chat/history')).json()).conversations[0]?.count === 9, null, { timeout: 5_000, polling: 100 })
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.locator('[data-bot="local:ollama"]').click()
-  await page.locator('.local-chat .message-user').getByText('On reprend').waitFor({ timeout: 5_000 })
-  // Delete: a second click confirms; deleting the open conversation starts a new one.
-  await historyButton.click()
-  await historyMenu.locator('.local-history-item', { hasText: 'Bonjour local' }).getByRole('button', { name: 'Supprimer la conversation' }).click()
-  if ((await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())).conversations.length !== 2) throw new Error('Une conversation a été supprimée sans confirmation.')
-  await historyMenu.getByRole('button', { name: 'Supprimer ?' }).click()
-  await page.locator('.local-chat .message-user').first().waitFor({ state: 'detached', timeout: 3_000 })
-  const afterDelete = await page.evaluate(async () => (await fetch('/api/local-chat/history')).json())
-  if (afterDelete.conversations.length !== 1 || afterDelete.conversations[0].title !== 'Deuxième conversation') throw new Error(`Suppression : ${JSON.stringify(afterDelete)}`)
-  // The routes: a session, the page's origin, and messages of the local chat only.
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history`)).status !== 401) throw new Error('/api/local-chat/history répond sans session.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié ouvre l’historique local.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${afterDelete.conversations[0].id}`, { headers: { Cookie: 'hermes_session=fabrique' } })).status !== 401) throw new Error('Un cookie Hermes non vérifié lit une conversation locale.')
-  const historyId = afterDelete.conversations[0].id
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: `${E2E_APP_ORIGIN}` } })).status !== 401) throw new Error('Suppression sans session.')
-  if ((await fetch(`${E2E_APP_ORIGIN}/api/local-chat/history/${historyId}`, { method: 'DELETE', headers: { Origin: 'https://exemple.test' } })).status !== 403) throw new Error('Suppression depuis une autre origine.')
-  const historyStatus = (id, body) => page.evaluate(async ([id, body]) => (await fetch(`/api/local-chat/history/${id}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, [id, body])
-  if (await historyStatus('court', { messages: [{ id: 'm', role: 'user', content: 'x' }] }) !== 404) throw new Error('Identifiant de conversation invalide accepté.')
-  if (await historyStatus('local-conversation-test', { messages: [{ id: 'm', role: 'system', content: 'x' }] }) !== 400) throw new Error('Rôle system accepté dans l’historique.')
-  await page.evaluate(async (id) => fetch(`/api/local-chat/history/${id}`, { method: 'DELETE', credentials: 'same-origin' }), historyId)
   await page.locator('[data-bot=nova]').click()
 
   // A truly empty list keeps its message once loading is done.
@@ -4918,7 +4749,7 @@ try {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
-      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN, OLLAMA_ORIGIN: E2E_GATEWAY_ORIGIN,
+      NODE_ENV: 'development', PORT: E2E_PORT, HOME: TEST_DATA, HERMES_ORIGIN: E2E_GATEWAY_ORIGIN,
       BROWSER_VAULT_PORT: E2E_VAULT_PORT, HERMESBOT_VAULT_TOKEN_FILE: BROWSER_VAULT_TOKEN,
       BROWSER_TOUR_COMMAND: BROWSER_TOUR_FIXTURE, BROWSER_TOUR_OWNER_FILE,
       NODE_OPTIONS: `--require ${new URL('persistence-hook.cjs', import.meta.url).pathname}`,

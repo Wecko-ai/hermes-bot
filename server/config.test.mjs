@@ -29,8 +29,7 @@ describe('configuration locale', () => {
     expect(config.videoRoots.some((root) => root.startsWith('/Volumes/'))).toBe(false)
     expect(config.browserOrigin).toBe('http://127.0.0.1:9120')
     expect(config.sshHost).toBe('')
-    expect(config.ollamaOrigin).toBe('http://127.0.0.1:11434')
-    expect(config.localChat.model).toBe('')
+    expect(config.omlxOrigin).toBe('http://127.0.0.1:8000')
     expect(config.browserTurn.command).toBeNull()
     expect(config.computerPanel).toEqual({ enabled: false, cdpOrigin: '' })
     expect(config.llmStats).toEqual({ snapshotPath: '', keyCommand: null })
@@ -107,31 +106,31 @@ describe('configuration locale', () => {
     expect(config.browserTurn).toEqual({ command: ['/tmp/fixture.cjs', 'statut'], user: '', remoteCommand: null })
   })
 
-  it('keeps a gateway or Ollama origin on this machine unless remote access is opted in', () => {
+  it('keeps a gateway or oMLX origin on this machine unless remote access is opted in', () => {
     const remote = {
       gatewayOrigin: 'https://example.invalid',
-      ollamaOrigin: 'http://203.0.113.5:11434',
+      omlxOrigin: 'http://203.0.113.5:8000',
     }
     const { root, home } = fixture({ userConfig: remote })
     const blocked = loadConfig({ env: { HERMES_ORIGIN: 'http://203.0.113.5:9120' }, platform: 'darwin', home, root })
     expect(blocked.gatewayOrigin).toBe('http://127.0.0.1:9120')
-    expect(blocked.ollamaOrigin).toBe('http://127.0.0.1:11434')
+    expect(blocked.omlxOrigin).toBe('http://127.0.0.1:8000')
 
-    const loopbackFixture = fixture({ userConfig: { gatewayOrigin: 'http://[::1]:9120', ollamaOrigin: 'http://localhost:11434', browserOrigin: 'https://example.invalid' } })
+    const loopbackFixture = fixture({ userConfig: { gatewayOrigin: 'http://[::1]:9120', omlxOrigin: 'http://localhost:8000', browserOrigin: 'https://example.invalid' } })
     const loopback = loadConfig({ env: {}, platform: 'darwin', home: loopbackFixture.home, root: loopbackFixture.root })
     expect(loopback.gatewayOrigin).toBe('http://[::1]:9120')
-    expect(loopback.ollamaOrigin).toBe('http://localhost:11434')
+    expect(loopback.omlxOrigin).toBe('http://localhost:8000')
     expect(loopback.browserOrigin).toBe('https://example.invalid')
 
     const allowedFixture = fixture({ userConfig: { allowRemoteGateway: true } })
     const allowed = loadConfig({
-      env: { HERMES_ORIGIN: 'http://203.0.113.5:9120', OLLAMA_ORIGIN: 'https://ollama.example' },
+      env: { HERMES_ORIGIN: 'http://203.0.113.5:9120', OMLX_ORIGIN: 'https://omlx.example' },
       platform: 'darwin',
       home: allowedFixture.home,
       root: allowedFixture.root,
     })
     expect(allowed.gatewayOrigin).toBe('http://203.0.113.5:9120')
-    expect(allowed.ollamaOrigin).toBe('https://ollama.example')
+    expect(allowed.omlxOrigin).toBe('https://omlx.example')
 
     const notABooleanFixture = fixture({ userConfig: { allowRemoteGateway: 'true', gatewayOrigin: 'http://203.0.113.5:9120' } })
     const notABoolean = loadConfig({ env: {}, platform: 'darwin', home: notABooleanFixture.home, root: notABooleanFixture.root })

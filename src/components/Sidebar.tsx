@@ -18,7 +18,6 @@ import { applyRosterOrder, reorderBotsInSection, reorderSections, saveUiLayout }
 import { backgroundSummary } from '../lib/background'
 import { botActionError, type BotAction } from '../lib/bot-actions'
 import { contextMenuPoint, isContextMenuKey } from '../lib/a11y-focus'
-import { LOCAL_CHAT_SLUG } from '../lib/local-chat'
 import { roomRowAvatarStatus } from '../lib/room-row'
 import { useRoomStore, type RoomSupport } from '../store/rooms'
 import { botSections, LOCAL_SECTION_NAME, rosterGroups, UNASSIGNED_SECTION_NAME } from '../lib/roster-groups'
@@ -324,9 +323,9 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                     key={bot.slug}
                     data-bot={bot.slug}
                     style={{ '--avatar-color': avatarColor(bot) } as CSSProperties}
-                    draggable={!activitySort && bot.slug !== LOCAL_CHAT_SLUG}
+                    draggable={!activitySort}
                     onDragStart={() => { dragRef.current = { kind: 'bot', key: section || key, slug: bot.slug } }}
-                    onDragOver={(event) => { if (!activitySort && bot.slug !== LOCAL_CHAT_SLUG) event.preventDefault() }}
+                    onDragOver={(event) => { if (!activitySort) event.preventDefault() }}
                     onDrop={(event) => {
                       event.preventDefault()
                       const drag = dragRef.current
@@ -342,10 +341,10 @@ export function Sidebar({ bots, rooms, selected, selectedRoomId, roomSupport, ro
                     onMouseEnter={() => onPrefetch?.(bot.slug)}
                     onClick={() => onSelect(bot)}
                     // The local chat is not a Hermes profile: nothing to pin, move, rename or delete.
-                    onContextMenu={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => openMenu(event, bot)}
-                    onKeyDown={bot.slug === LOCAL_CHAT_SLUG ? undefined : (event) => { if (isContextMenuKey(event.key, event.shiftKey)) openMenu(event, bot, true) }}
-                    aria-haspopup={bot.slug === LOCAL_CHAT_SLUG ? undefined : 'menu'}
-                    aria-expanded={bot.slug === LOCAL_CHAT_SLUG ? undefined : menu?.slug === bot.slug}
+                    onContextMenu={(event) => openMenu(event, bot)}
+                    onKeyDown={(event) => { if (isContextMenuKey(event.key, event.shiftKey)) openMenu(event, bot, true) }}
+                    aria-haspopup="menu"
+                    aria-expanded={menu?.slug === bot.slug}
                     aria-current={selected === bot.slug ? 'page' : undefined}
                     title={standby || undefined}
                   >

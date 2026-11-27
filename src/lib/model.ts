@@ -3,7 +3,7 @@ import { i18n } from '../i18n'
 import { DOTTED_PREFIX, prettyModelName } from './model-names'
 
 export function modelLabel(model: string) {
-  if (/^hermesbot[:/](oyakata|chef-qwen)$/i.test(model.trim())) return 'Delegate'
+  if (/^hermesbot[:/](delegate|oyakata|chef-qwen)$/i.test(model.trim())) return 'Delegate'
   const name = (model.split('/').pop() || model).replace(DOTTED_PREFIX, '')
   // One or two digits for the version: `-20250514` is a date, `.1` a version.
   const claude = name.match(/^claude-([a-z]+)-(\d+)(?:[-.](\d{1,2})(?!\d))?/i)

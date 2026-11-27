@@ -18,7 +18,6 @@ import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
 import { mergeHiddenModels, saveHiddenModels, saveZeroSpend, syncSharedSettings } from '../lib/shared-settings'
 import type { LanguageChoice } from '../i18n'
-import { chooseLocalModel, loadLocalModels, type LocalModels } from '../lib/local-chat'
 import { sendTestNotification, type TestNotificationResult } from '../lib/notifications'
 import { createSpeechEngine, type SpeechVoice } from '../lib/speech-engines'
 import { CompactionSetting } from './CompactionSetting'
@@ -61,7 +60,6 @@ interface SettingsDialogProps {
   /** Bot names and the choice of bots allowed in the vault. */
   bots: Bot[]
   /** Local models already known (the visual demo): the Conversations tab then reads no list. */
-  localModels?: LocalModels | null
   /** Visual demo: no gateway to share the hidden models with, the save stays in this window. */
   demo?: boolean
   /** The open bot's model window and name: says what the compaction gauge means in tokens. */
@@ -177,15 +175,10 @@ function NotificationTest() {
   )
 }
 
-function ChatTab({ localModels, bots, demo, compactionContext, client, connected }: { localModels?: LocalModels | null; bots: Bot[]; demo: boolean; compactionContext?: SettingsDialogProps['compactionContext']; client?: HermesClient | null; connected: boolean }) {
+function ChatTab({ bots, demo, compactionContext, client, connected }: { bots: Bot[]; demo: boolean; compactionContext?: SettingsDialogProps['compactionContext']; client?: HermesClient | null; connected: boolean }) {
   const { t } = useTranslation()
   const settings = useSettings()
   const autoRouter = useAppConfig().autoRouter
-  const [loaded, setLoaded] = useState<LocalModels | null>(null)
-  // Models given by the app (the visual demo): Ollama is not asked.
-  useEffect(() => { if (localModels === undefined) void loadLocalModels().then(setLoaded) }, [localModels])
-  const local = localModels === undefined ? loaded : localModels
-  const localModel = chooseLocalModel(local, settings.localModel)
   return (
     <>
       <Row label={t('settings.sendWith')}>
@@ -231,13 +224,6 @@ function ChatTab({ localModels, bots, demo, compactionContext, client, connected
         <Segments<'groups' | 'activity'> label={t('settings.sortBots')} value={settings.activitySort ? 'activity' : 'groups'} options={[{ id: 'groups', label: t('settings.sortOptions.groups') }, { id: 'activity', label: t('settings.sortOptions.activity') }]} onChange={(sort) => updateSettings({ activitySort: sort === 'activity' })} />
       </Row>
       <Toggle label={t('settings.showHidden')} checked={settings.showHidden} onChange={(showHidden) => updateSettings({ showHidden })} />
-      {local?.available && local.models.length > 0 && (
-        <Row label={t('settings.localModel')} hint={t('settings.localModelHint')}>
-          <select className="settings-select" aria-label={t('settings.localModel')} value={localModel} onChange={(event) => updateSettings({ localModel: event.target.value })}>
-            {local.models.map((model) => <option key={model} value={model}>{model}</option>)}
-          </select>
-        </Row>
-      )}
       <ChatGuide />
     </>
   )
@@ -588,7 +574,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
           </header>
           <div className="settings-content">
             {tab === 'general' && <GeneralTab onChooseTheme={props.onChooseTheme} />}
-            {tab === 'chat' && <ChatTab localModels={props.localModels} bots={props.bots} demo={demo} compactionContext={props.compactionContext} client={props.client} connected={props.connected} />}
+            {tab === 'chat' && <ChatTab bots={props.bots} demo={demo} compactionContext={props.compactionContext} client={props.client} connected={props.connected} />}
             {tab === 'models' && <ModelsTab models={props.models} modelsLoading={props.modelsLoading} modelsError={props.modelsError} onLoadModels={props.onLoadModels} demo={demo} draft={modelsDraft} />}
             {tab === 'memory' && <MemorySetting />}
             {tab === 'skills' && <SkillsSetting bots={props.bots} client={props.client ?? null} />}

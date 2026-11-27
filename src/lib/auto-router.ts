@@ -2,7 +2,7 @@ import type { ModelOption } from '../types'
 import { getAppConfig } from './app-config'
 import { modelCost } from './free-models'
 import { getSettings } from './settings'
-import { isOyakataModel } from './oyakata'
+import { isDelegateModel } from './delegate'
 
 /** Conversation-only choice: routing runs before each send. */
 export const AUTO_MODEL_SENTINEL = 'hermesbot:auto'
@@ -34,9 +34,9 @@ export function pickerModelForSession(
   settings: { useAutoModel?: boolean; useAutoFreeModel?: boolean } = getSettings(),
   enabled = autoRouterEnabled(),
 ) {
-  if (isOyakataModel(sessionModel) && !isOyakataModel(pickerModel) && !isAutoModel(pickerModel)) return sessionModel || ''
+  if (isDelegateModel(sessionModel) && !isDelegateModel(pickerModel) && !isAutoModel(pickerModel)) return sessionModel || ''
   if (isAutoModel(pickerModel)) return pickerModel
-  if (pickerModel) return pickerModel
+  if (pickerModel) return sessionModel || pickerModel
   return defaultAutoPicker(settings, enabled) || sessionModel || ''
 }
 
