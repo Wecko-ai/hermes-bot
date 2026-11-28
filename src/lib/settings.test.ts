@@ -71,6 +71,9 @@ describe('modèles proposés', () => {
     expect(selectableModels(all, ['gemini:gemini-3.5-flash'], [], []).map((item) => item.model)).toEqual(['nvidia/nemotron-3-ultra-550b-a55b:free'])
     // The Anthropic subscription costs nothing more; the same model on OpenRouter is still paid.
     expect(selectableModels(all, [hiddenModelKey(options[1])], [], ['anthropic']).map(hiddenModelKey)).toEqual(['anthropic:claude-opus-5-5', 'anthropic:claude-haiku-5-5', 'openrouter:nvidia/nemotron-3-ultra-550b-a55b:free', 'gemini:gemini-3.5-flash'])
+    // The paid opt-in model (Hy4 Flash) stays selectable in free mode; any other paid OpenRouter model does not.
+    const paid = [option('tencent/hy4-flash', 'custom:openrouter-hermesbot'), option('tencent/hy4-flash', 'openrouter'), option('openai/gpt-5.5', 'openrouter')]
+    expect(selectableModels(paid, [], [], []).map(hiddenModelKey)).toEqual(['custom:openrouter-hermesbot:tencent/hy4-flash'])
     // Free mode off: everything not hidden.
     expect(selectableModels(all, [], [], undefined)).toHaveLength(all.length)
     expect(parseSettings('{"freeMode":true}').freeMode).toBe(true)

@@ -187,8 +187,106 @@ describe('splash-gate', () => {
     expect(bodies[1]).toBe('fresh') // fresh P1 > nothing... verify ordering below
     void 0
   })
-})
 
-describe('placeholder', () => {
-  it('noop', () => expect(true).toBe(true))
+  it('purges aborted queued clients without deadlocking subsequent requests', async () => {
+    const g = await makeGate()
+    upstream.state.held = true
+    const first = post(g.port, { headers: { 'x-splash-priority': 'P2' }, body: '{"id":1}' })
+    await waitFor(() => upstream.state.calls.length === 1)
+
+    // Queue a request whose client aborts while waiting
+    const aborted = new Promise((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: g.port, path: '/test', method: 'POST', headers: { 'content-type': 'application/json' } })
+      req.on('error', () => resolve('aborted'))
+      req.write('{"id":"ghost"}')
+      req.end()
+      setTimeout(() => req.destroy(), 30)
+    })
+    await aborted
+    await waitFor(async () => true)
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Queue a healthy follow-up request
+    const followUp = post(g.port, { headers: { 'x-splash-priority': 'P2' }, body: '{"id":2}' })
+    await new Promise((r) => setTimeout(r, 40))
+
+    upstream.state.held = false
+    upstream.releaseAll()
+    const [r1, r2] = await Promise.all([first, followUp])
+    expect(r1.status).toBe(200)
+    expect(r2.status).toBe(200)
+    // Ghost request never reached upstream and queue returned to 0
+    const ids = upstream.state.calls.map((c) => JSON.parse(c.body).id)
+    expect(ids).toEqual([1, 2])
+    const st = await get(g.port, '/gate/status')
+    expect(JSON.parse(st.body).queueTotal).toBe(0)
+  })
+
+  it('rejects excess queued requests with 503 queue_full when maxQueueSize is reached', async () => {
+    const g = await makeGate({ maxQueueSize: 1 })
+    upstream.state.held = true
+    const first = post(g.port, { body: '{"n":1}' })
+    await waitFor(() => upstream.state.calls.length === 1)
+    const queued = post(g.port, { body: '{"n":2}' })
+    await new Promise((r) => setTimeout(r, 40))
+    const rejected = await post(g.port, { body: '{"n":3}' })
+    expect(rejected.status).toBe(503)
+    expect(JSON.parse(rejected.body).error).toBe('queue_full')
+    const health = await get(g.port, '/gate/health')
+    expect(health.status).toBe(503)
+    upstream.state.held = false
+    upstream.releaseAll()
+    await Promise.all([first, queued])
+    const healthOk = await get(g.port, '/gate/health')
+    expect(healthOk.status).toBe(200)
+  })
+
+  it('times out a stalled upstream call and frees the gate for the next request', async () => {
+    const g = await makeGate({ upstreamTimeoutMs: 120 })
+    upstream.state.held = true
+    const stalled = await post(g.port, { body: '{"stalled":true}' })
+    expect(stalled.status).toBe(504)
+    expect(JSON.parse(stalled.body).error).toBe('upstream_timeout')
+    upstream.state.held = false
+    upstream.releaseAll()
+    const next = await post(g.port, { body: '{"recovered":true}' })
+    expect(next.status).toBe(200)
+  })
+
+  it('times out background queued jobs and forwards chunked requests with Content-Length', async () => {
+    const g = await makeGate({ backgroundWaitTimeoutMs: 100 })
+    upstream.state.held = true
+    const first = post(g.port, { body: '{"first":true}' })
+    await waitFor(() => upstream.state.calls.length === 1)
+    const timedOut = await post(g.port, { headers: { 'x-splash-priority': 'P2' }, body: '{"wait":true}' })
+    expect(timedOut.status).toBe(503)
+    expect(JSON.parse(timedOut.body).error).toBe('queue_wait_timeout')
+    upstream.state.held = false
+    upstream.releaseAll()
+    await first
+
+    // Chunked transfer-encoding body is cleanly forwarded with explicit Content-Length
+    const chunked = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1',
+        port: g.port,
+        path: '/chunked',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' },
+      }, (res) => {
+        const chunks = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }))
+      })
+      req.on('error', reject)
+      req.write('{"chunked":')
+      req.write('true}')
+      req.end()
+    })
+    expect(chunked.status).toBe(200)
+    const lastCall = upstream.state.calls.at(-1)
+    expect(lastCall.body).toBe('{"chunked":true}')
+    expect(lastCall.headers['content-length']).toBe('16')
+    expect(lastCall.headers['transfer-encoding']).toBeUndefined()
+  })
 })

@@ -5,7 +5,7 @@ import type { SubagentTail } from '../lib/background'
 import { formatDuration, subagentDuration } from '../lib/subagents'
 import { isEntryActive, plainPreview, promptPreview, subagentTitle, type SubagentEntry } from '../lib/subagent-history'
 import { toolLabel } from '../lib/work-summary'
-import { DSH_TOOL, runLabel, currentAgentProgress, parseAgentProgress, parseDshProgress } from '../lib/agent-process'
+import { isStructuredStreamTool, runLabel, currentAgentProgress, parseAgentProgress, parseStreamProgress } from '../lib/agent-process'
 import { documentUrl, openableDocument, type MediaRef } from '../lib/media'
 
 /** What is kept of a transcript on screen: its end, where the child is now. */
@@ -125,9 +125,9 @@ export function EntryNow({ entry, progress = [] }: { entry: SubagentEntry; progr
   const { t } = useTranslation()
   if (!isEntryActive(entry)) return null
   const text = currentAgentProgress(progress)
-    || (entry.run?.tool === DSH_TOOL ? progress.at(-1) : '')
+    || (isStructuredStreamTool(entry.run?.tool) ? progress.at(-1) : '')
     || (entry.live?.lastTool ? t('subagents.lastTool', { tool: toolLabel(entry.live.lastTool) }) : '')
-    || (entry.run?.tool !== DSH_TOOL && entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
+    || (!isStructuredStreamTool(entry.run?.tool) && entry.process?.outputTail ? lastLine(entry.process.outputTail) : '')
   if (!text) return null
   return <span className="subagent-now subagent-live-box"><Activity size={12} aria-hidden="true" /><span>{text}</span></span>
 }
@@ -227,7 +227,7 @@ function SubagentItem({ entry, profile, now, open, onOpen, onLoadTail, onOpenDoc
   const { t } = useTranslation()
   const [tail, setTail] = useState<TailState | null>(null)
   const journal = useAgentProgress(entry, profile, open)
-  const stream = entry.run?.tool === DSH_TOOL && entry.process?.outputTail ? parseDshProgress(entry.process.outputTail) : []
+  const stream = isStructuredStreamTool(entry.run?.tool) && entry.process?.outputTail ? parseStreamProgress(entry.run?.tool, entry.process.outputTail) : []
   const progress = journal.length ? journal : stream
   const duration = entryDuration(entry, now)
   const live = entry.live
@@ -304,7 +304,7 @@ export function ProcessOutput({ entry, progress = [], onOpenDocument }: { entry:
   const { t } = useTranslation()
   if (!entry.run) return null
   const rawTail = isEntryActive(entry) ? entry.process?.outputTail : undefined
-  const tail = rawTail && !(entry.run?.tool === DSH_TOOL && progress.length) ? rawTail : undefined
+  const tail = rawTail && !(isStructuredStreamTool(entry.run?.tool) && progress.length) ? rawTail : undefined
   if (!tail && !entry.run.logFile && !progress.length) return null
   return (
     <div className="subagent-tail">

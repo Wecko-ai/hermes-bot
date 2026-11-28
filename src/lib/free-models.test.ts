@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFreeModel, modelCost } from './free-models'
+import { isFreeModel, isPaidOptIn, modelCost } from './free-models'
 
 const free = (provider: string, model: string, providerName = provider, extra: { free?: boolean } = {}) => isFreeModel({ provider, model, providerName, ...extra })
 
@@ -50,5 +50,13 @@ describe('modèles gratuits', () => {
     expect(modelCost({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5', providerName: 'OpenRouter' }, subscriptions)).toBe('paid')
     expect(modelCost({ provider: 'gemini', model: 'gemini-3.5-flash', providerName: 'Google' }, subscriptions)).toBe('free')
     expect(modelCost({ provider: 'anthropic', model: 'claude-opus-5-5', providerName: 'Anthropic' }, [])).toBe('paid')
+  })
+
+  it('Hy4 Flash est un modèle payant à choisir exprès, sur le fournisseur dédié seulement', () => {
+    const hy4 = { provider: 'custom:openrouter-hermesbot', model: 'tencent/hy4-flash', providerName: 'Hy4 Flash (OpenRouter, payant)' }
+    expect(isPaidOptIn(hy4)).toBe(true)
+    expect(modelCost(hy4, ['kimi-coding'])).toBe('paid')
+    expect(isPaidOptIn({ provider: 'openrouter', model: 'tencent/hy4-flash' })).toBe(false)
+    expect(isPaidOptIn({ provider: 'custom:openrouter-hermesbot', model: 'tencent/hy4' })).toBe(false)
   })
 })

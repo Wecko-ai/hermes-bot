@@ -1,6 +1,6 @@
 export { useRosterStore, resetRosterStore, patchBot, publishedWork, DONE_VISIBLE_MS, type RosterState } from './roster'
 export {
-  useChatStore, resetChatStore, latestMessageTime, resolveSyncedMessages, freshNotes, markMessageFailed,
+  useChatStore, resetChatStore, latestMessageTime, resolveSyncedMessages, withoutEchoedRows, freshNotes, markMessageFailed,
   type ChatState, type ChatCacheEntry, type SyncedChat,
 } from './chat'
 export {

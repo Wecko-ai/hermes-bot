@@ -102,6 +102,13 @@ function isDshHeadless(words: string[]) {
 }
 const CLAUDE = 'Claude Code'
 export const DSH_TOOL = 'DeepSeek Harness'
+export const AGY_TOOL = 'Antigravity CLI'
+export const AGY_DELEGATE_TOOL = 'Antigravity CLI · Delegate'
+export const isAgyTool = (tool: string | undefined) => tool === AGY_TOOL || tool === AGY_DELEGATE_TOOL
+export const isStructuredStreamTool = (tool: string | undefined) => tool === DSH_TOOL || isAgyTool(tool)
+
+const isAgyHeadless = (words: string[]) => words.some((word) => word === '-p' || word === '--print' || word === '--prompt')
+
 /** Program name to tool, and what makes it headless (otherwise it would be an interactive session). */
 const AGENTS: Record<string, { tool: string; headless: (words: string[]) => boolean; promptFlags?: string[] }> = {
   claude: { tool: CLAUDE, headless: (words) => words.some((word) => word === '-p' || word === '--print'), promptFlags: ['-p', '--print'] },
@@ -116,8 +123,12 @@ const AGENTS: Record<string, { tool: string; headless: (words: string[]) => bool
   kimi: { tool: 'Kimi CLI', headless: (words) => words.some((word) => word === '-p' || word === '--print' || word === '-c' || word === '--command'), promptFlags: ['-p', '--print', '-c', '--command'] },
   'office-agent': { tool: 'Office agent', headless: () => true },
   dsh: { tool: DSH_TOOL, headless: isDshHeadless },
-  /** `~/bin/dsh-sub`: the owner's headless dsh sub-agent launcher, always headless (`--cwd DIR`, `-p` compat). */
+  /** Headless dsh sub-agent launcher, always headless (`--cwd DIR`, `-p` compat). */
   'dsh-sub': { tool: DSH_TOOL, headless: () => true, promptFlags: ['-p', '--print'] },
+  agy: { tool: AGY_TOOL, headless: isAgyHeadless, promptFlags: ['-p', '--print', '--prompt'] },
+  'agy-delegate': { tool: AGY_DELEGATE_TOOL, headless: isAgyHeadless, promptFlags: ['-p', '--print', '--prompt'] },
+  /** Headless Antigravity CLI sub-agent launcher, always headless (`--cwd DIR`, `--delegate`). */
+  'agy-sub': { tool: AGY_TOOL, headless: () => true, promptFlags: ['-p', '--print', '--prompt'] },
 }
 
 /** Wrappers that run the command after them. `mq run … -- cmd` is the shared queue of the machine. */
@@ -127,6 +138,7 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 const basename = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
 const DSH_FLAGS_WITH_VALUE = new Set(['--profile', '--permission-mode', '--approval-policy', '--session-id', '--add-dir', '--patch'])
+const AGY_SUB_FLAGS_WITH_VALUE = new Set(['--effort', '--model', '-m', '--cwd', '-C', '--add-dir', '--timeout', '--owner', '--resume', '-r', '--conversation', '--output-format'])
 
 /** Bare task words of `dsh headless`, flags and their values skipped. */
 function dshTask(args: Token[]) {
@@ -136,6 +148,21 @@ function dshTask(args: Token[]) {
     if (token.kind !== 'word') continue
     if (token.value === 'headless' || token.value === '--json' || token.value === '-') continue
     if (DSH_FLAGS_WITH_VALUE.has(token.value)) { index += 1; continue }
+    if (token.value.startsWith('-')) continue
+    parts.push(token.value)
+  }
+  const task = parts.join(' ').trim()
+  return task || undefined
+}
+
+/** Bare task words of `agy-sub`, flags and their values skipped. */
+function agySubTask(args: Token[]) {
+  const parts: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]
+    if (token.kind !== 'word') continue
+    if (token.value === '-' || token.value === '--') continue
+    if (AGY_SUB_FLAGS_WITH_VALUE.has(token.value)) { index += 1; continue }
     if (token.value.startsWith('-')) continue
     parts.push(token.value)
   }
@@ -260,9 +287,12 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
     if (!agent.headless(argWords.map((token) => token.value)) && !args.some((token) => token.kind === 'op' && (token.value === '<' || token.value === '<<')) && !pipedFrom) continue
 
     const run: AgentRun = { tool: agent.tool, key: commandKey(command), ...(cwd ? { cwd } : {}) }
-    if (name === 'dsh-sub') {
-      const at = argWords.findIndex((token) => token.value === '--cwd')
+    if (name === 'dsh-sub' || name === 'agy-sub') {
+      const at = argWords.findIndex((token) => token.value === '--cwd' || token.value === '-C')
       if (at >= 0 && argWords[at + 1]) run.cwd = argWords[at + 1].value
+    }
+    if (name === 'agy-sub' && argWords.some((token) => token.value === '--delegate')) {
+      run.tool = AGY_DELEGATE_TOOL
     }
     // Redirections: stdin is the prompt, stdout the log.
     for (let index = 0; index < args.length; index += 1) {
@@ -301,6 +331,12 @@ export function agentRun(command: string, depth = 0): AgentRun | null {
       if (file) run.promptFile = file
       else if (task) run.prompt = task
     }
+    if (name === 'agy-sub' && !run.prompt && !run.promptFile) {
+      const task = agySubTask(args)
+      const file = task ? catFile(task) : undefined
+      if (file) run.promptFile = file
+      else if (task) run.prompt = task
+    }
     return resolveRunFiles(run)
   }
   return null
@@ -334,7 +370,7 @@ export function currentAgentProgress(lines: string[]): string | undefined {
   return [...lines].reverse().find((line) => PROGRESS_CURRENT.test(line))
 }
 
-const DSH_HINT_KEYS = ['command', 'path', 'file', 'query', 'pattern', 'url']
+const DSH_HINT_KEYS = ['command', 'CommandLine', 'path', 'Path', 'file', 'query', 'pattern', 'url', 'goal']
 
 function dshHint(input: unknown) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return ''
@@ -376,25 +412,105 @@ export function parseDshProgress(text: string): string[] {
   return parseAgentProgress(steps.map((step, index) => `${index + 1}. ${step}`).join('\n'))
 }
 
+/** `agy --output-format stream-json` NDJSON events, normalized to the same numbered step format. */
+export function parseAgyProgress(text: string): string[] {
+  const done: string[] = []
+  let pending = ''
+  const pushTool = (name: string, input: unknown) => {
+    const hint = dshHint(input)
+    pending = `[EN COURS] ${name}${hint ? ` — ${hint}` : ''}`
+  }
+  const finishTool = (isError: boolean, fallbackName?: string) => {
+    const mark = isError ? 'BLOQUÉ' : 'FAIT'
+    const tool = pending.replace(/^\[(?:EN COURS|BLOQUÉ)\]\s*/, '').split(' — ')[0] || fallbackName || 'outil'
+    pending = ''
+    done.push(`[${mark}] ${tool}`)
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line.startsWith('{')) continue
+    let event: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(line)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      event = parsed as Record<string, unknown>
+    } catch { continue }
+    const type = event.type
+    if ((type === 'tool_call' || type === 'tool_use') && (typeof event.tool === 'string' || typeof event.name === 'string')) {
+      pushTool(String(event.tool ?? event.name), event.input ?? event.args)
+    } else if (type === 'tool_result') {
+      const isError = event.is_error === true || event.isError === true || event.status === 'error'
+      finishTool(isError, typeof event.tool === 'string' ? event.tool : typeof event.name === 'string' ? event.name : undefined)
+    } else if (type === 'assistant' && event.message && typeof event.message === 'object') {
+      const content = (event.message as Record<string, unknown>).content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue
+          const b = block as Record<string, unknown>
+          if (b.type === 'tool_use' && typeof b.name === 'string') pushTool(b.name, b.input)
+          else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+            done.push(`[FAIT] ${b.text.trim().replace(/\s+/g, ' ').slice(0, 160)}`)
+          }
+        }
+      }
+    } else if (type === 'user' && event.message && typeof event.message === 'object') {
+      const content = (event.message as Record<string, unknown>).content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue
+          const b = block as Record<string, unknown>
+          if (b.type === 'tool_result') finishTool(b.is_error === true)
+        }
+      }
+    } else if ((type === 'result' || type === 'final' || type === 'text')) {
+      const body = typeof event.result === 'string' ? event.result : typeof event.text === 'string' ? event.text : ''
+      if (body.trim()) done.push(`[FAIT] ${body.trim().replace(/\s+/g, ' ').slice(0, 160)}`)
+    }
+  }
+  const steps = pending ? [...done, pending] : done
+  return parseAgentProgress(steps.map((step, index) => `${index + 1}. ${step}`).join('\n'))
+}
+
+/** Structured stream progress parser for supported coding agents. */
+export function parseStreamProgress(tool: string | undefined, text: string): string[] {
+  if (tool === DSH_TOOL) return parseDshProgress(text)
+  if (isAgyTool(tool)) return parseAgyProgress(text)
+  return []
+}
+
 /** A run's printable result: the final answer of a JSON stream, never its raw events. */
 export function agentResult(run: Pick<AgentRun, 'tool'>, output: string | undefined): string | undefined {
   if (!output?.trim()) return undefined
-  if (run.tool !== DSH_TOOL) return output
+  if (!isStructuredStreamTool(run.tool)) return output
   let final = ''
   let text = ''
   let error = ''
+  let jsonLines = 0
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trim()
     if (!line.startsWith('{')) continue
     try {
       const event: unknown = JSON.parse(line)
       if (!event || typeof event !== 'object' || Array.isArray(event)) continue
+      jsonLines += 1
       const record = event as Record<string, unknown>
       if (record.type === 'final' && typeof record.text === 'string' && record.text.trim()) final = record.text
+      else if (record.type === 'result' && typeof record.result === 'string' && record.result.trim()) final = record.result
       else if (record.type === 'text' && typeof record.text === 'string' && record.text.trim()) text = record.text
-      else if (record.type === 'error' && typeof record.message === 'string' && record.message.trim()) error = record.message
+      else if (record.type === 'assistant' && record.message && typeof record.message === 'object') {
+        const content = (record.message as Record<string, unknown>).content
+        if (Array.isArray(content)) {
+          const joined = content
+            .filter((b): b is Record<string, unknown> => Boolean(b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text' && typeof (b as Record<string, unknown>).text === 'string'))
+            .map((b) => String(b.text).trim())
+            .filter(Boolean)
+            .join('\n')
+          if (joined) text = joined
+        }
+      } else if (record.type === 'error' && typeof record.message === 'string' && record.message.trim()) error = record.message
     } catch { continue }
   }
+  if (jsonLines === 0 && isAgyTool(run.tool)) return output
   return final || text || error || undefined
 }
 

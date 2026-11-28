@@ -37,6 +37,54 @@ function textKey(message: ChatMessage) {
   return `${message.role}\u0000${normalizedText(message.content)}`
 }
 
+const TRANSIENT_ID = /^(local|background)-/
+/** How far a persisted row may sit from the optimistic row it replaces (clock skew between machines included). */
+const ECHO_BEFORE_MS = 2 * 60 * 1000
+const ECHO_AFTER_MS = 30 * 60 * 1000
+
+function isPersistedId(id: string) {
+  return /^\d+$/.test(id)
+}
+
+/**
+ * Drops optimistic rows (`local-…` sends, `background-…` replies seen while another bot was open)
+ * once the gateway transcript holds the same turn under a row id.
+ * A delta re-read appends the persisted rows after the cached list, and the optimistic copies
+ * would otherwise stay on screen next to them: the question and its answer showed twice.
+ * Each persisted row absorbs at most one optimistic row, with the same role and text, created
+ * close to it, so a message really sent twice stays twice.
+ */
+export function withoutEchoedRows(messages: ChatMessage[]) {
+  if (!messages.some((row) => TRANSIENT_ID.test(row.id))) return messages
+  const persisted = new Map<string, number[]>()
+  messages.forEach((row, index) => {
+    if (!isPersistedId(row.id)) return
+    const key = textKey(row)
+    const list = persisted.get(key)
+    if (list) list.push(index)
+    else persisted.set(key, [index])
+  })
+  if (!persisted.size) return messages
+  const claimed = new Set<number>()
+  const dropped = new Set<number>()
+  messages.forEach((row, index) => {
+    if (!TRANSIENT_ID.test(row.id) || !normalizedText(row.content)) return
+    const list = persisted.get(textKey(row))
+    if (!list) return
+    const at = row.createdAt ? Date.parse(row.createdAt) : NaN
+    const match = list.find((candidate) => {
+      if (claimed.has(candidate)) return false
+      const when = messages[candidate].createdAt ? Date.parse(messages[candidate].createdAt as string) : NaN
+      if (!Number.isFinite(at) || !Number.isFinite(when)) return false
+      return when >= at - ECHO_BEFORE_MS && when <= at + ECHO_AFTER_MS
+    })
+    if (match === undefined) return
+    claimed.add(match)
+    dropped.add(index)
+  })
+  return dropped.size ? messages.filter((_, index) => !dropped.has(index)) : messages
+}
+
 /**
  * Messages to keep after a server re-read.
  * The server transcript comes first, so tool rows and steps are never dropped.
@@ -49,6 +97,10 @@ function textKey(message: ChatMessage) {
  * and this runs on the interface's thread while the chat opens).
  */
 export function resolveSyncedMessages(cached: ChatCacheEntry | undefined, server: ChatMessage[], preserveLive: boolean) {
+  return withoutEchoedRows(resolveCachedRows(cached, server, preserveLive))
+}
+
+function resolveCachedRows(cached: ChatCacheEntry | undefined, server: ChatMessage[], preserveLive: boolean) {
   if (!cached) return server
   const cacheRows = cached.messages
   const byId = new Map<string, number[]>()

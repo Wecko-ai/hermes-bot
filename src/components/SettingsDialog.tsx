@@ -12,7 +12,7 @@ import { chipModelLabel, modelLabel } from '../lib/model'
 import { formatModelOptionName, localServerLabel } from '../lib/providers'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
 import { ModelScoreMeta, ScoresAttribution } from './ModelScore'
-import { modelCost } from '../lib/free-models'
+import { isPaidOptIn, modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { groupModels, ProviderTile } from './ModelPicker'
 import { hiddenModelKey, updateSettings, useSettings, withModelsVisible, type DictationLanguage, type SendKey, type TextSize, type ThemeChoice } from '../lib/settings'
@@ -458,6 +458,7 @@ function ModelsTab({ models, modelsLoading, modelsError, onLoadModels, demo, dra
                   {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                   {modelCost(option, ui.subscriptionProviders) === 'free' && <span className="model-option-tag is-free">{t('settings.freeTag')}</span>}
                   {modelCost(option, ui.subscriptionProviders) === 'subscription' && <span className="model-option-tag is-plan">{t('settings.subscriptionTag')}</span>}
+                  {isPaidOptIn(option) && <span className="model-option-tag is-paid">{t('settings.paidTag')}</span>}
                   {option.inputPrice && option.outputPrice && <span className="model-option-price">{option.inputPrice} / {option.outputPrice}</span>}
                 </label>
               ))}

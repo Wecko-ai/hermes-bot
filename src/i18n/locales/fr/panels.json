@@ -391,6 +391,7 @@
     "zeroSpendSaveFailed": "Impossible d’enregistrer le réglage zéro frais partagé. Le réglage précédent est conservé ; aucun changement global n’a été appliqué.",
     "freeTag": "Gratuit",
     "subscriptionTag": "Abonnement",
+    "paidTag": "Payant",
     "modelsNote": "Choisis les modèles proposés dans le sélecteur, pour tous les bots et dans toutes tes apps HermesBot (Mac et iPhone), puis Enregistrer. Le modèle actif et celui du profil restent toujours proposés.",
     "searchModel": "Rechercher un modèle",
     "searchInModels": "Rechercher dans les modèles",

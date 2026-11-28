@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentResult, agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseDshProgress, parseProcessEnd, runFilePath, runLabel } from './agent-process'
+import { agentResult, agentRun, commandKey, currentAgentProgress, parseAgentProcesses, parseAgentProgress, parseAgyProgress, parseDshProgress, parseProcessEnd, parseStreamProgress, runFilePath, runLabel } from './agent-process'
 
 // As a bot launched it on 2026-11-13 (paths changed).
 const REAL = 'cd /Users/test/projects/site-affilies && claude -p "$(cat /Users/test/.hermes/profiles/site/cache/scratch/prompt-front-fix.md)" --permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write,Glob,Grep" > /Users/test/.hermes/profiles/site/cache/scratch/front-fix.log 2>&1'
@@ -105,6 +105,38 @@ describe('commande d’un agent de code', () => {
     expect(agentResult(run, JSON.stringify({ type: 'tool_result', status: 'completed' }))).toBeUndefined()
     expect(agentResult(run, JSON.stringify({ type: 'error', message: 'Quota atteint' }))).toBe('Quota atteint')
     expect(agentResult(agentRun('claude -p "Go"')!, 'Sortie brute')).toBe('Sortie brute')
+  })
+
+  it('reconnaît agy, agy-sub et agy-delegate et lit leur flux stream-json', () => {
+    expect(agentRun('agy -p "Corrige le routeur" --output-format stream-json')).toMatchObject({ tool: 'Antigravity CLI', prompt: 'Corrige le routeur' })
+    expect(agentRun('agy')).toBeNull()
+    expect(agentRun('agy models')).toBeNull()
+    expect(agentRun('~/bin/agy-sub --effort high --cwd /tmp/app - < /tmp/brief.md > /tmp/run.log 2>&1')).toMatchObject({
+      tool: 'Antigravity CLI',
+      cwd: '/tmp/app',
+      promptFile: '/tmp/brief.md',
+      logFile: '/tmp/run.log',
+    })
+    const delRun = agentRun('~/bin/agy-sub --delegate --delegate-fallback --json --cwd /tmp/app "Ajoute les tests unitaires"')
+    expect(delRun).toMatchObject({ tool: 'Antigravity CLI · Delegate', cwd: '/tmp/app', prompt: 'Ajoute les tests unitaires' })
+    expect(JSON.stringify(delRun)).not.toContain('--delegate-fallback')
+    expect(agentRun('~/bin/agy-delegate -p "Planifie la migration"')).toMatchObject({ tool: 'Antigravity CLI · Delegate', prompt: 'Planifie la migration' })
+
+    const lines = parseAgyProgress([
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'read_file', input: { Path: 'src/lib/agent-process.ts' } }] } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', is_error: false }] } }),
+      JSON.stringify({ type: 'tool_call', tool: 'run_command', input: { CommandLine: 'npm run check' } }),
+    ].join('\n'))
+    expect(lines).toEqual([
+      '1. [FAIT] read_file',
+      '2. [EN COURS] run_command — npm run check',
+    ])
+    expect(parseStreamProgress('Antigravity CLI · Delegate', JSON.stringify({ type: 'result', result: 'Terminé.' }))).toEqual(['1. [FAIT] Terminé.'])
+    expect(agentResult(delRun!, [
+      JSON.stringify({ type: 'tool_call', tool: 'edit_file', input: { Path: 'src/a.ts' } }),
+      JSON.stringify({ type: 'result', result: 'Migration terminée.\nTests verts.' }),
+    ].join('\n'))).toBe('Migration terminée.\nTests verts.')
+    expect(agentResult(delRun!, 'Sortie texte directe')).toBe('Sortie texte directe')
   })
 
   it('reconnaît les autres agents sans ligne de commande interactive', () => {

@@ -1,6 +1,6 @@
 import type { ModelOption } from '../types'
 import { getAppConfig } from './app-config'
-import { modelCost } from './free-models'
+import { isPaidOptIn, modelCost } from './free-models'
 import { getSettings } from './settings'
 import { isDelegateModel } from './delegate'
 
@@ -174,7 +174,8 @@ export async function decideAutoRoute(input: {
 }): Promise<AutoRouteDecision> {
   const subscriptions = getAppConfig().ui.subscriptionProviders
   const zeroSpend = getSettings().freeMode
-  const models = input.models.map((option) => ({
+  // Paid opt-in models are a deliberate choice: Auto never gets them as a candidate.
+  const models = input.models.filter((option) => !isPaidOptIn(option)).map((option) => ({
     provider: option.provider,
     model: option.model,
     free: modelCost(option, subscriptions) !== 'paid',

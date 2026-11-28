@@ -4499,6 +4499,8 @@ try {
     { session_id: 'proc_dsh', command: 'cd /Users/test/projects/site && dsh headless --json "Corrige le test login"', status: 'running', started_epoch: Date.now() / 1000 - 20, output_tail: '{"type":"tool_call","tool":"read_file","input":{"path":"src/App.tsx"}}\n{"type":"tool_result","status":"completed"}\n{"type":"tool_call","tool":"bash","input":{"command":"npm test"}}' },
     { session_id: 'proc_dsh_between', command: 'dsh headless --json "Relis les tests"', status: 'running', started_epoch: Date.now() / 1000 - 10, output_tail: '{"type":"tool_call","tool":"read_file","input":{"path":"src/App.tsx"}}\n{"type":"tool_result","status":"completed"}' },
     { session_id: 'proc_dsh_done', command: 'dsh headless --json "Vérifie le rendu"', status: 'exited', exit_code: 0, started_epoch: Date.now() / 1000 - 10, output_tail: '{"type":"final","text":"Tests verts."}' },
+    { session_id: 'proc_agy_del', command: '~/bin/agy-sub --delegate --delegate-fallback --json --cwd /Users/test/projects/site "Ajoute les cartes produit"', status: 'running', started_epoch: Date.now() / 1000 - 15, output_tail: '{"type":"tool_call","tool":"read_file","input":{"Path":"src/App.tsx"}}\n{"type":"tool_result","is_error":false}\n{"type":"tool_call","tool":"run_command","input":{"CommandLine":"npm run check"}}' },
+    { session_id: 'proc_agy_done', command: '~/bin/agy-sub --json --cwd /Users/test/projects/site "Nettoie le routeur"', status: 'exited', exit_code: 0, started_epoch: Date.now() / 1000 - 8, output_tail: '{"type":"result","result":"Routeur nettoyé."}' },
   ]
   const claudeRow = panel.locator('.subagent-row.is-running', { hasText: 'Ajoute les tests du formulaire partenaire' })
   await claudeRow.waitFor({ timeout: 8_000 })
@@ -4518,6 +4520,12 @@ try {
   const dshDoneCard = history.locator('.subagent-card.is-completed', { hasText: 'Vérifie le rendu' })
   await dshDoneCard.getByText('Tests verts.', { exact: false }).waitFor({ timeout: 5_000 })
   if (await dshDoneCard.getByText('"type":"final"', { exact: false }).count()) throw new Error('Le flux JSON brut de DSH est affiché comme résultat.')
+  const agyRow = panel.locator('.subagent-row.is-running', { hasText: 'Ajoute les cartes produit' })
+  await agyRow.getByText('Antigravity CLI · Delegate', { exact: false }).waitFor({ timeout: 8_000 })
+  await agyRow.locator('.subagent-now').getByText('2. [EN COURS] run_command — npm run check', { exact: true }).waitFor({ timeout: 5_000 })
+  const agyDoneCard = history.locator('.subagent-card.is-completed', { hasText: 'Nettoie le routeur' })
+  await agyDoneCard.getByText('Routeur nettoyé.', { exact: false }).waitFor({ timeout: 5_000 })
+  if (await agyDoneCard.getByText('"type":"result"', { exact: false }).count()) throw new Error('Le flux JSON brut d’Antigravity CLI est affiché comme résultat.')
   await delay(300)
   await page.screenshot({ path: `${SCREENSHOTS}subagents-agent-run.png` })
   // From the history (terminal call, end of process): its prompt file and its log open in a tab beside the chat.

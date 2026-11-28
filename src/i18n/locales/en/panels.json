@@ -391,6 +391,7 @@
     "zeroSpendSaveFailed": "Could not save the shared zero-spend setting. The previous setting is kept; no global change was applied.",
     "freeTag": "Free",
     "subscriptionTag": "Subscription",
+    "paidTag": "Paid",
     "modelsNote": "Choose which models appear in the picker, for all bots and in every HermesBot app (Mac and iPhone), then Save. The active model and the profile’s model are always offered.",
     "searchModel": "Search for a model",
     "searchInModels": "Search models",

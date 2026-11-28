@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { ModelOption, ModelOverride } from '../types'
 import { LANGUAGES, type LanguageChoice } from '../i18n'
-import { modelCost } from './free-models'
+import { isPaidOptIn, modelCost } from './free-models'
 
 export const THEMES = ['system', 'light', 'dark'] as const
 export const TEXT_SIZES = ['small', 'normal', 'large'] as const
@@ -178,12 +178,12 @@ export const hiddenModelKey = (option: ModelOverride) => `${option.provider}:${o
 /**
  * The active model and the profile's stay offered: the picker must always be able to show them.
  * In free mode (`subscriptions` given), the paid models go too, the kept ones excepted: what stays
- * is free or comes with a subscription already paid.
+ * is free or comes with a subscription already paid (plus the paid opt-in models, tagged Paid, picked on purpose).
  */
 export function selectableModels(options: ModelOption[], hidden: string[], keep: string[], subscriptions?: readonly string[]) {
   const masked = new Set(hidden)
   return options.filter((option) => keep.includes(option.model)
-    || (!masked.has(hiddenModelKey(option)) && (!subscriptions || modelCost(option, subscriptions) !== 'paid')))
+    || (!masked.has(hiddenModelKey(option)) && (!subscriptions || modelCost(option, subscriptions) !== 'paid' || isPaidOptIn(option))))
 }
 
 export function withModelsVisible(hidden: string[], options: ModelOverride[], visible: boolean) {

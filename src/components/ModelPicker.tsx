@@ -4,7 +4,7 @@ import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cpu, Search, X } f
 import type { ModelOption } from '../types'
 import { chipModelLabel, modelLabel } from '../lib/model'
 import { formatModelOptionName, localServerLabel, providerBrand } from '../lib/providers'
-import { modelCost } from '../lib/free-models'
+import { isPaidOptIn, modelCost } from '../lib/free-models'
 import { useAppConfig } from '../lib/app-config'
 import { isImeComposition } from '../lib/keyboard'
 import { ensureScores, scoreModels, useScores } from '../lib/model-scores'
@@ -308,7 +308,7 @@ export function ModelPicker({ options, freeMode = false, current, profileModel, 
                           <span className="model-option-name">{formatModelOptionName(option, chipModelLabel(option.model))}</span>
                           {option.tag && <span className="model-option-tag is-plan">{option.tag}</span>}
                           {issue && <span className="model-option-tag is-unusable">{t('models.noKey')}</span>}
-                          {freeMode && modelCost(option, ui.subscriptionProviders) === 'paid' && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
+                          {(isPaidOptIn(option) || (freeMode && modelCost(option, ui.subscriptionProviders) === 'paid')) && <span className="model-option-tag is-paid">{t('models.paid')}</span>}
                           {option.model === profileModel && <span className="model-option-tag">{t('models.profile')}</span>}
                           {/:free$/i.test(option.model) && <span className="model-option-tag is-free">{t('models.freeTag')}</span>}
                           <ModelScoreMeta info={scored.get(modelKey(option).slice('model:'.length))} />

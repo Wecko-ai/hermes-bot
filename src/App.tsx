@@ -16,7 +16,7 @@ import { ensureAppConfig, getAppConfig, useAppConfig } from './lib/app-config'
 import { touchLibraryPage, type LibraryPage } from './lib/pages-library'
 import { toolLabel, workLine } from './lib/work-summary'
 import { autoCompactionPoint, blocksSending, compactingTokens, evaluateGuard, limitTokens, parseCompressResult, readCompaction, type CompressionValues } from './lib/compaction'
-import { freshNotes, markMessageFailed, resolveSyncedMessages, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband, type RoomSupport } from './store'
+import { freshNotes, markMessageFailed, resolveSyncedMessages, withoutEchoedRows, useChatStore, useRequestsStore, useRosterStore, useSubagentsStore, useRoomStore, roomCancelId, clearRoomCancel, roomRenameEventId, clearRoomRename, roomDisbandCancelId, clearRoomDisband, type RoomSupport } from './store'
 import { createRoom, disbandRoom, listRooms, loadRoomCapabilities, renameRoom, roomActionErrorKey, roomCanDisband, roomCanRename, planRoomSend, readRoom, ROOM_LOG_STALLED, roomMethodMissing, roomPreview, roomSendNotAdmitted, sendRoomMessage, setRoomContext, stopRoom, validateRoomBots, type Room, type RoomCapabilities, type RoomDriverStatus, type RoomEvent } from './lib/rooms'
 import { gatewayContextPatch, roomRoutingMode, roomSendAllowed, setRoomRoutingMode, type RoomRoutingMode } from './lib/room-routing'
 import { teamFeedFromCaches } from './lib/team-feed'
@@ -1572,7 +1572,7 @@ export default function App() {
         model: replica.model || undefined,
         socketGeneration: client.generation,
       },
-      messages: replica.messages,
+      messages: withoutEchoedRows(replica.messages),
       routines: [],
       revision: replica.revision,
       lastId: replica.lastId || maxRowId(replica.messages),

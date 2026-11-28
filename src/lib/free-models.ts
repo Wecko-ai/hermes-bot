@@ -28,6 +28,18 @@ export function isFreeModel(option: CostedOption): boolean {
   return providerBrand(option.provider, option.providerName).local
 }
 
+/**
+ * Paid models that stay available only as a deliberate choice, next to the zero-spend default.
+ * They are never part of Auto, fallbacks or the free-mode filter, and always wear the "Paid" tag.
+ * The zero-spend plugin opens the same single route (OpenRouter `tencent/hy4-flash`, key
+ * `OPENROUTER_HERMESBOT_KEY` on the dedicated provider `custom:openrouter-hermesbot`).
+ */
+const PAID_OPT_IN = new Set(['custom:openrouter-hermesbot|tencent/hy4-flash', 'openrouter-hermesbot|tencent/hy4-flash'])
+
+export function isPaidOptIn(option: Pick<ModelOption, 'provider' | 'model'>): boolean {
+  return PAID_OPT_IN.has(`${option.provider.toLowerCase()}|${option.model.toLowerCase()}`)
+}
+
 export type ModelCost = 'free' | 'subscription' | 'paid'
 
 /**
